@@ -8,11 +8,14 @@ aliases:
 
 The quick start joined a mesh that someone else runs. This page runs one for
 you: a control plane, a router and a web console on your laptop, in one
-process, with two nodes talking through it. `sam-one` runs the same code as a
+process, with two nodes talking through it. One node publishes a model that
+runs on your machine, the other calls it. `sam-one` runs the same code as a
 Kubernetes deployment, so what you learn here applies there too.
 
-You need the `sam-one`, `sam-node` and `mcp-client` binaries. The
-[install script](../quickstart/#1-install) provides all three.
+You need the `sam-one` and `sam-node` binaries. The
+[install script](../quickstart/#1-install) provides both. The model is served
+by [Ollama](https://ollama.com); any OpenAI-compatible server works in its
+place.
 
 ## 1. Start the control plane
 
@@ -50,22 +53,31 @@ about it: any enrolled node may register any service and call any service.
 This is a reasonable default for a laptop and a bad one for anything shared.
 The last section explains how to replace it.
 
-## 2. Publish a service from one node
+## 2. Publish a model from one node
 
-Any HTTP backend can be a mesh service. Start a simple one and declare it in
-a node configuration file:
+A node publishes backends that speak one of three protocols, and the
+service `type` says which: `inference` for an OpenAI-compatible API, `mcp`
+for an MCP server, `a2a` for an A2A agent. The type is a contract, not a
+label. The node speaks that protocol to the backend and to nobody else: an
+`inference` backend is offered for the models it lists on `/v1/models`, an
+`mcp` server is advertised once the node has completed an MCP session with
+it, an `a2a` agent once it has served its agent card. A plain web server
+declared under any of these types is never advertised. The mesh is not a
+generic HTTP tunnel.
+
+Pull a small model and declare Ollama as an `inference` service. The
+`target_url` is the backend's root, without `/v1`; the node adds the prefix:
 
 ```bash
-mkdir -p /tmp/www && echo "hello from node a" > /tmp/www/hello.txt
-python3 -m http.server 9000 --bind 127.0.0.1 --directory /tmp/www &
+ollama pull gemma3:1b
 
 cat > ~/node-a.yaml <<'EOF'
 version: "v1alpha1"
 services:
-  - type: mcp
-    name: hello
-    description: "a static file, served over the mesh"
-    target_url: "http://127.0.0.1:9000"
+  - type: inference
+    name: laptop-llm
+    description: "Ollama on my laptop"
+    target_url: "http://127.0.0.1:11434"
 EOF
 ```
 
@@ -81,10 +93,10 @@ sam-node run --control-plane $URL \
 ```
 
 Three of these flags are only needed because both nodes run on one machine.
-`--bind-addr=` (an empty value) keeps the node's local API on its Unix socket,
-so the two nodes do not compete for port 8080. `--allow-loopback` lets the
-nodes advertise and dial `127.0.0.1`. `--listen .../tcp/0` picks a free
-peer-to-peer port. On separate machines you would not pass any of them.
+`--bind-addr=` (an empty value) keeps the node's local API on its Unix
+socket, so the two nodes do not compete for port 8080. `--allow-loopback`
+lets the nodes advertise and dial `127.0.0.1`. `--listen .../tcp/0` picks a
+free peer-to-peer port. On separate machines you would not pass any of them.
 
 The node enrolls with the join token, connects to the router and prints its
 peer ID:
@@ -94,7 +106,9 @@ SAM Node Online.
 PeerID: 12D3KooWSCnbUoZ8Jv3EKGv17LqEWtnTMfZ3XYJUg2WTm5Gz2hUK
 ```
 
-Keep that value.
+Ollama is never exposed on the network. It listens on loopback, and the only
+way to it from another machine is through this node, which checks the
+caller's credential and the mesh policy on every request.
 
 ## 3. Call it from another node
 
@@ -108,26 +122,37 @@ sam-node run --control-plane $URL \
   --data-dir ~/node-b --bind-addr= --allow-loopback --listen /ip4/127.0.0.1/tcp/0
 ```
 
-Every node's local API includes a proxy at `/sam/<peer-id>/<type>/<name>/`
-that forwards to a service on another node. Ask node B for node A's file:
+Every node's local API includes an OpenAI-compatible endpoint. `/v1/models`
+lists the models that every reachable `inference` provider serves, and a
+completion request is routed to a provider of the model it names. Ask node
+B:
 
 ```bash
-PEER_A=12D3KooWSCnbUoZ8Jv3EKGv17LqEWtnTMfZ3XYJUg2WTm5Gz2hUK
+SOCK=~/node-b/sam.sock
 
-curl --unix-socket ~/node-b/sam.sock "http://localhost/sam/$PEER_A/mcp/hello/hello.txt"
-# hello from node a
+curl -s --unix-socket $SOCK http://localhost/v1/models
+
+curl -s --unix-socket $SOCK http://localhost/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gemma3:1b","messages":[{"role":"user","content":"Say hello in five words."}]}'
 ```
 
-The request went from B's socket to B, then over an authenticated connection
-to A, through A's policy check, to the Python server, and back. If A and B
-cannot reach each other directly, the connection is relayed through the
-router inside `sam-one`. Allow a few seconds after A starts for B to learn
-about it. Nodes announce their services in a discovery table that the router
-hosts, and the announcement takes a moment to arrive.
+The model list shows `gemma3:1b` with node A's peer ID as `owned_by`. Allow
+a few seconds after A starts for B to learn about it. Nodes announce their
+services in a discovery table that the router hosts, and the announcement
+takes a moment to arrive.
 
-An MCP backend works the same way. The difference is that the node
-understands the protocol: the service appears in `discover_remote_services`
-and its tools in `find_remote_tools`, as on the testnet.
+The request went from B's socket to B, then over an authenticated connection
+to A, through A's policy check, to Ollama, and back. Both nodes verified the
+other's credential before any data moved. If A and B cannot reach each other
+directly, the connection is relayed through the router inside `sam-one`,
+which carries ciphertext and learns only that the two are talking.
+
+The socket needs no token: only your user can open it. To point an OpenAI
+SDK at the mesh instead, give node B a TCP port with
+`--bind-addr 127.0.0.1:8081` and a token as in the
+[quick start](../quickstart/#3-run-the-node), then use
+`http://127.0.0.1:8081/v1` as `base_url` and the token as `api_key`.
 
 ## 4. Look at it in the console
 
@@ -147,6 +172,35 @@ sam-one token create --server $URL --data-dir ~/sam-one --description "node c" -
 sam-one token revoke <token-id> --server $URL --data-dir ~/sam-one
 sam-one admin ban <peer-id>      --server $URL --data-dir ~/sam-one
 ```
+
+## MCP servers and A2A agents
+
+The other two service types are declared the same way and reached through
+the same node. An MCP server gives agents tools; the quick start
+[calls one](../quickstart/#4-call-a-tool-on-the-mesh) on the testnet through
+the node's MCP endpoint. A stdio server is declared with `command` and the
+node runs it; a Streamable HTTP server with `target_url`:
+
+```yaml
+  - type: mcp
+    name: filesystem
+    command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/srv/docs"]
+```
+
+An A2A agent is another agent, spoken to with the A2A protocol. It is
+reached at `/sam/<peer-id>/a2a/<name>/` on the caller's node, which
+regenerates the agent card so that a stock A2A client works unchanged:
+
+```yaml
+  - type: a2a
+    name: triage
+    target_url: "http://127.0.0.1:9999"
+```
+
+[Exposing services](../../guides/exposing-services/) covers all three types
+and what the policy must grant. The [A2A chat](../../use-cases/chat-a2a/)
+and [Gemini Buddy](../../use-cases/gemini-buddy/) use cases run a complete
+agent behind each of the other two types.
 
 ## Reaching it from other machines
 

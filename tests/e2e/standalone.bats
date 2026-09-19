@@ -2,8 +2,9 @@
 
 # Black-box CUJ for the sam-one all-in-one binary: boot on a random port
 # published in the banner, join real sam-nodes through it, drive the admin CLI
-# against the live server, and push a request across the dataplane from node B
-# to a smoke HTTP service declared in node A's configuration (egress proxy -> router -> A).
+# against the live server, and serve a model across the dataplane from an
+# inference service declared in node A's configuration to node B's /v1
+# endpoint (B -> router -> A). Mirrors docs/getting-started/your-own-mesh.
 # In-process coverage lives in tests/integration/standalone_test.go; this file
 # only exercises what needs the real binaries.
 
@@ -90,24 +91,27 @@ start_node() {
   JOIN_TOKEN="$(cat "$SAM_ONE_DATA/join-token")"
   [[ "$JOIN_TOKEN" == sam_tok_* ]]
 
-  # Smoke HTTP backend on node A's host, declared as a URL-backed service in
-  # node A's configuration: services only exist by declaration at startup,
-  # there is no runtime registration endpoint.
-  # -u: unbuffered, or the "Serving HTTP" banner never flushes to the log.
-  mkdir -p "$TEST_TMPDIR/www"
-  echo "sam-one dataplane ok" > "$TEST_TMPDIR/www/hello.txt"
-  python3 -u -m http.server 0 --bind 127.0.0.1 --directory "$TEST_TMPDIR/www" \
+  # An OpenAI-compatible backend on node A's host, declared as an inference
+  # service in node A's configuration, as in docs/getting-started/your-own-mesh.
+  # Services only exist by declaration at startup, there is no runtime
+  # registration endpoint. The same server is also declared as `mcp`: the
+  # type is a contract the node verifies, so that one must never be advertised.
+  python3 -u "$BATS_TEST_DIRNAME/fixtures/fake_openai.py" \
     > "$TEST_TMPDIR/backend.log" 2>&1 &
   BACKEND_PID=$!
-  wait_for_log "$TEST_TMPDIR/backend.log" "Serving HTTP"
+  wait_for_log "$TEST_TMPDIR/backend.log" "listening on port"
   backend_port="$(grep -oE 'port [0-9]+' "$TEST_TMPDIR/backend.log" | grep -oE '[0-9]+')"
 
   cat > "$TEST_TMPDIR/node-a-services.yaml" <<EOF
 version: "v1alpha1"
 services:
-  - type: "mcp"
-    name: "smoke"
-    description: "e2e smoke backend"
+  - type: inference
+    name: laptop-llm
+    description: "e2e inference backend"
+    target_url: "http://127.0.0.1:${backend_port}"
+  - type: mcp
+    name: not-an-mcp-server
+    description: "a plain HTTP server mislabelled as mcp"
     target_url: "http://127.0.0.1:${backend_port}"
 EOF
 
@@ -122,15 +126,33 @@ EOF
   sock_b="$TEST_TMPDIR/node-b/sam.sock"
   [[ -S "$sock_a" && -S "$sock_b" ]]
 
-  # Node B reaches the service on node A through its egress proxy: the request
-  # crosses B -> router -> A over the mesh, exercising the full dataplane.
-  body=""
+  # The mislabelled service is registered but withheld from discovery.
+  wait_for_log "$TEST_TMPDIR/node-a.log" "not-an-mcp-server but not advertising it"
+
+  # Node B's OpenAI-compatible endpoint lists the model with A as its owner:
+  # the announcement crosses A -> router -> B over the mesh.
+  models=""
   for _ in $(seq 1 30); do
-    body="$(curl -sf --unix-socket "$sock_b" "http://localhost/sam/${peer_a}/mcp/smoke/hello.txt" || true)"
-    [[ "$body" == *"sam-one dataplane ok"* ]] && break
+    models="$(curl -sf --unix-socket "$sock_b" "http://localhost/v1/models" || true)"
+    [[ "$models" == *'"e2e-model"'* ]] && break
     sleep 1
   done
-  [[ "$body" == *"sam-one dataplane ok"* ]]
+  [[ "$models" == *'"e2e-model"'* ]]
+  [[ "$models" == *"$peer_a"* ]]
+
+  # A completion is routed B -> router -> A -> backend, exercising the full
+  # dataplane, and comes back as the OpenAI response the backend produced.
+  run curl -sf --unix-socket "$sock_b" "http://localhost/v1/chat/completions" \
+    -H 'Content-Type: application/json' \
+    -d '{"model":"e2e-model","messages":[{"role":"user","content":"hi"}]}'
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *"hello from the mesh"* ]]
+
+  # The plain HTTP server never shows up as an MCP provider.
+  run curl -sf --unix-socket "$sock_b" \
+    "http://localhost/sam/service/discover?type=mcp&name=not-an-mcp-server&timeout=3s"
+  [[ "$status" -eq 0 ]]
+  [[ "$output" != *"$peer_a"* ]]
 
   # The admin CLI works against the live server using the persisted admin token.
   run "$SAM_ONE_BINARY" token create --server "$SAM_ONE_URL" \

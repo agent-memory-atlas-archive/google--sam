@@ -63,7 +63,7 @@ classifies the name and decides:
 | Name | Decision |
 |---|---|
 | `mesh.sam.alt` | The mesh surface: `/v1/models`, `/v1/chat/completions`, `/v1/completions`, `/mcp`. Any other path is `403`. |
-| `<service>.mcp.sam.alt` | One specific mesh service. Discovery chooses the provider. |
+| `<service>.<type>.sam.alt` | One specific mesh service, `<type>` being `mcp`, `inference` or `a2a`: `code-reviewer.mcp.sam.alt`, `openrouter.inference.sam.alt`. Discovery chooses the provider. |
 | anything else | Matched against the agent's egress allowance. A name that is not in the allowance is refused. |
 
 A refusal fails the `CONNECT` with `403` and a `Boundary-Reason` header. The
