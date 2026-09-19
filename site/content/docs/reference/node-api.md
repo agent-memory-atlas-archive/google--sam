@@ -171,6 +171,17 @@ curl -s --unix-socket $SOCK $URL \
 Over TCP, add `-H "X-Sam-Authentication: Bearer $TOKEN"` and use
 `http://127.0.0.1:8080` as the base URL.
 
+### Talking A2A through the proxy
+
+An A2A client starts from the agent card. Fetched through the proxy path,
+the card comes back regenerated: its interface URL is the proxy path
+itself, so a stock client sends `message/send` there without changes:
+
+```bash
+curl -s --unix-socket $SOCK \
+  http://localhost/sam/<peer-id>/a2a/triage/.well-known/agent-card.json
+```
+
 ## Inference
 
 `/v1/models` collects the model list of every reachable `inference` provider
@@ -180,10 +191,19 @@ node picks a provider that serves it. It prefers a local provider, and ranks
 remote providers by the labels the caller required, the operator's floor,
 and load. A model that no provider lists answers `404`.
 
+```bash
+curl -s --unix-socket $SOCK http://localhost/v1/models
+
+curl -s --unix-socket $SOCK http://localhost/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"<model-id>","messages":[{"role":"user","content":"hi"}]}'
+```
+
 Any OpenAI SDK works with `base_url` set to `http://127.0.0.1:8080/v1` and
 the API token as `api_key`. The node accepts the token in `Authorization`
 here because nothing on this path forwards that header. Streaming responses
-are passed through.
+are passed through. One provider can also be addressed directly, at
+`/sam/<peer-id>/inference/<name>/v1/chat/completions`.
 
 ## Identity evidence
 

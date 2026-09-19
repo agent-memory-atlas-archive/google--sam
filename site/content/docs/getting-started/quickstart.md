@@ -119,6 +119,19 @@ The call left your machine over an authenticated peer-to-peer connection.
 The node that hosts the service checked the mesh policy, ran the tool, and
 returned the result the same way. Any MCP client can make the same calls.
 
+MCP is one of three service types. The testnet also publishes `inference`
+services, and the same node offers their models on an OpenAI-compatible
+endpoint. The Unix socket needs no token:
+
+```bash
+curl -s --unix-socket ~/.config/sam-mesh/sam.sock http://localhost/v1/models
+```
+
+A completion request to `/v1/chat/completions` for one of those models is
+routed to the node that serves it. The third type, `a2a`, is an agent that
+speaks the A2A protocol; [Your own mesh](../your-own-mesh/) publishes a
+model from your laptop and shows where each type fits.
+
 ## 5. Give your agent the skill
 
 The MCP tools tell an agent what it can do. The SAM skill tells it when and
