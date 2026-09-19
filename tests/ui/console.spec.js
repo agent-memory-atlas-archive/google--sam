@@ -148,8 +148,12 @@ test('the search box filters rendered rows', async ({ page }) => {
   await login(page);
   await page.click('.nav-item[data-target="bootstrap"]');
 
-  // Guarantee at least one row to filter, independent of test ordering.
+  // Guarantee at least one row to filter, independent of test ordering. Wait
+  // for the result panel before typing anywhere else: showing it moves focus
+  // to the token field, and a fill() that races that focus change inserts
+  // its text there instead of into the search box.
   await page.click('#form-generate-token button[type="submit"]');
+  await expect(page.locator('#token-result')).toBeVisible();
   await expect(page.locator('#table-bootstrap')).toContainText('root-admin');
 
   await page.fill('#resource-search', 'root-admin');
