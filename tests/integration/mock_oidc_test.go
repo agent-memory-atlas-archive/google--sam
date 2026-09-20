@@ -17,17 +17,31 @@ package integration_test
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// mockOIDCUser is the subject the mock provider signs in as whoever
+// completes its browser authorization flow.
+const mockOIDCUser = "browser-user"
+
+// startCustomMockOIDC is the identity provider the mesh trusts in these
+// tests: discovery, a JWKS, and the authorization code grant with PKCE that
+// an interactive join drives. The tokens it issues are real RS256 JWTs a
+// control plane verifies against the JWKS. mintToken issues one directly,
+// for components that are configured with a token instead of logging in.
 func startCustomMockOIDC(t *testing.T) (string, func(claims map[string]interface{}) string) {
 	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -42,8 +56,10 @@ func startCustomMockOIDC(t *testing.T) (string, func(claims map[string]interface
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"issuer":   issuer,
-			"jwks_uri": issuer + "/keys",
+			"issuer":                 issuer,
+			"jwks_uri":               issuer + "/keys",
+			"authorization_endpoint": issuer + "/auth",
+			"token_endpoint":         issuer + "/token",
 		})
 	})
 
@@ -80,6 +96,92 @@ func startCustomMockOIDC(t *testing.T) (string, func(claims map[string]interface
 		}
 		return jwtStr
 	}
+
+	// Authorization codes handed out by /auth, redeemed once at /token.
+	type authCode struct {
+		challenge   string
+		redirectURI string
+		offline     bool
+	}
+	var mu sync.Mutex
+	codes := map[string]authCode{}
+	newCode := func() string {
+		b := make([]byte, 16)
+		if _, err := rand.Read(b); err != nil {
+			t.Fatalf("random code: %v", err)
+		}
+		return hex.EncodeToString(b)
+	}
+
+	// The user opens this URL; the provider signs them in as mockOIDCUser
+	// and sends them back to the client with a code bound to its PKCE
+	// challenge.
+	mux.HandleFunc("/auth", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("response_type") != "code" || q.Get("client_id") == "" || q.Get("redirect_uri") == "" || q.Get("code_challenge_method") != "S256" {
+			http.Error(w, "unsupported authorization request", http.StatusBadRequest)
+			return
+		}
+		code := newCode()
+		mu.Lock()
+		codes[code] = authCode{
+			challenge:   q.Get("code_challenge"),
+			redirectURI: q.Get("redirect_uri"),
+			offline:     strings.Contains(q.Get("scope"), "offline_access"),
+		}
+		mu.Unlock()
+		back, err := url.Parse(q.Get("redirect_uri"))
+		if err != nil {
+			http.Error(w, "bad redirect_uri", http.StatusBadRequest)
+			return
+		}
+		bq := back.Query()
+		bq.Set("code", code)
+		bq.Set("state", q.Get("state"))
+		back.RawQuery = bq.Encode()
+		http.Redirect(w, r, back.String(), http.StatusFound)
+	})
+
+	oauthError := func(w http.ResponseWriter, code string) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": code})
+	}
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			oauthError(w, "invalid_request")
+			return
+		}
+		if r.PostForm.Get("grant_type") != "authorization_code" {
+			oauthError(w, "unsupported_grant_type")
+			return
+		}
+		mu.Lock()
+		granted, ok := codes[r.PostForm.Get("code")]
+		delete(codes, r.PostForm.Get("code"))
+		mu.Unlock()
+		verifier := sha256.Sum256([]byte(r.PostForm.Get("code_verifier")))
+		if !ok || granted.redirectURI != r.PostForm.Get("redirect_uri") ||
+			base64.RawURLEncoding.EncodeToString(verifier[:]) != granted.challenge {
+			oauthError(w, "invalid_grant")
+			return
+		}
+		idToken := mintToken(map[string]interface{}{
+			"sub":   mockOIDCUser,
+			"email": mockOIDCUser + "@example.com",
+		})
+		resp := map[string]interface{}{
+			"access_token": idToken,
+			"id_token":     idToken,
+			"token_type":   "Bearer",
+			"expires_in":   3600,
+		}
+		if granted.offline {
+			resp["refresh_token"] = newCode()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	})
 
 	return issuer, mintToken
 }

@@ -15,6 +15,7 @@
 package integration_test
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/google/sam/internal/node"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // A node under test is observed through what it does, never through what it
@@ -238,6 +240,58 @@ func (n *backgroundNode) staysUp(t *testing.T, d time.Duration) {
 		t.Fatalf("sam-node exited (%v) within %s.\n--- node.log ---\n%s", err, d, n.log())
 	case <-time.After(d):
 	}
+}
+
+// waitForEnrollmentSidecar returns once the node serves the enrollment-only
+// MCP surface: a session opened without a token that offers
+// get_login_instructions. A node holding an identity refuses token-less
+// sessions, so this also tells which of the two sidecars came up.
+func (n *backgroundNode) waitForEnrollmentSidecar(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var last error
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-n.exited:
+			n.exited <- err
+			t.Fatalf("sam-node exited (%v) before serving its enrollment sidecar.\n--- node.log ---\n%s", err, n.log())
+		default:
+		}
+		tools, err := listMCPTools(n.apiAddr)
+		if err == nil {
+			for _, name := range tools {
+				if name == "get_login_instructions" {
+					return
+				}
+			}
+			err = fmt.Errorf("tools %v do not include get_login_instructions", tools)
+		}
+		last = err
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("sam-node at %s did not serve the enrollment sidecar in time: %v\n--- node.log ---\n%s", n.apiAddr, last, n.log())
+}
+
+// listMCPTools opens a token-less MCP session against apiAddr and returns the
+// names of the tools it offers.
+func listMCPTools(apiAddr string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: "http://" + apiAddr + "/mcp"}, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = session.Close() }()
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(res.Tools))
+	for _, tool := range res.Tools {
+		names = append(names, tool.Name)
+	}
+	return names, nil
 }
 
 // waitForAPI polls addr's /healthz for a node the test started itself.

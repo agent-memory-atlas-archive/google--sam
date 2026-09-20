@@ -25,7 +25,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -150,6 +149,7 @@ roles: []
 		"--keys-path", filepath.Join(tmpDir, "router_keysA.db"),
 		"--allow-loopback",
 		"--oidc-token", routerJWT,
+		"--lease-renew-interval", "1s",
 	)
 	if err := cmdRouterA.Start(); err != nil {
 		t.Fatalf("failed to start Router A: %v", err)
@@ -182,6 +182,7 @@ roles: []
 		"--keys-path", filepath.Join(tmpDir, "router_keysB.db"),
 		"--allow-loopback",
 		"--oidc-token", routerJWT,
+		"--lease-renew-interval", "1s",
 	)
 	if err := cmdRouterB.Start(); err != nil {
 		t.Fatalf("failed to start Router B: %v", err)
@@ -202,10 +203,8 @@ roles: []
 		"HOME="+nodeHome,
 		"XDG_CONFIG_HOME="+filepath.Join(nodeHome, ".config"),
 	)
-	cmdNode := exec.Command(nodeBin, "run", "--control-plane", lb.URL,
-		"--listen", "/ip4/127.0.0.1/tcp/0",
+	samNode := launchNode(t, nodeBin, env, nodeHome, "run", "--control-plane", lb.URL,
 		"--jwt-path", jwtPath,
-		"--bind-addr", "127.0.0.1:0",
 		"--api-token-path", tokenPath(t, "dummy-token"),
 		"--allow-loopback",
 		"--monitor-bootstrap", "1s",
@@ -214,37 +213,11 @@ roles: []
 		"--autorelay-backoff", "1s",
 		"--autorelay-boot-delay", "0s",
 	)
-	cmdNode.Dir = repoRoot(t)
-	cmdNode.Env = env
-	var stdoutNode, stderrNode safeBuffer
-	cmdNode.Stdout = &stdoutNode
-	cmdNode.Stderr = &stderrNode
+	samNode.waitForAPI(t)
+	nodePeerID := samNode.peerID.String()
 
-	if err := cmdNode.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = cmdNode.Process.Kill(); _ = cmdNode.Wait() }()
-
-	// Wait for Node to get a reservation on Router A
-	var nodePeerID string
-	var out string
-	for i := 0; i < 100; i++ {
-		out = stdoutNode.String() + stderrNode.String()
-		if strings.Contains(out, "PeerID:") {
-			idx := strings.Index(out, "PeerID:")
-			parts := strings.Split(strings.TrimSpace(out[idx+len("PeerID:"):]), "\n")
-			if len(parts) > 0 {
-				nodePeerID = strings.TrimSpace(parts[0])
-			}
-		}
-		if nodePeerID != "" && strings.Contains(out, "Yielding static relays to AutoRelay") {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if nodePeerID == "" {
-		t.Fatalf("Node failed to get PeerID in time.\nOutput:\n%s", out)
-	}
+	// The node is on the mesh once Router A reports it connected to CP A.
+	waitForPeerOnRouter(t, httpPortCP_A, testAdminToken, nodePeerID, 15*time.Second)
 	t.Logf("Node started. Node PeerID: %s", nodePeerID)
 
 	// Now FAILOVER: Switch LB to CP B and KILL CP A and Router A
@@ -255,18 +228,9 @@ roles: []
 	_ = cmdCP_A.Process.Kill()
 	_ = cmdRouterA.Process.Kill()
 
-	// Wait for Node's AutoRelay to get updated
-	for i := 0; i < 150; i++ {
-		out = stdoutNode.String() + stderrNode.String()
-		if strings.Contains(out, "Successfully reconnected to router via HTTP fallback") {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if !strings.Contains(out, "Successfully reconnected to router via HTTP fallback") {
-		t.Fatalf("Node failed to detect failover and reconnect.\nOutput:\n%s", out)
-	}
-	t.Log("Node successfully reconnected to router B!")
+	// The node has failed over once Router B reports it connected to CP B.
+	waitForPeerOnRouter(t, httpPortCP_B, testAdminToken, nodePeerID, 20*time.Second)
+	t.Log("Node reconnected to router B")
 
 	// Final verification: Ensure we can actually reach Node B via the Router B relay
 	relayAddrStr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/p2p/%s/p2p-circuit/p2p/%s", routerPortB, peerIDB, nodePeerID)
@@ -311,7 +275,7 @@ roles: []
 	}
 
 	if connectErr != nil {
-		t.Fatalf("Failed to connect to Node B via router B relay: %v\nOutput: %s", connectErr, stdoutNode.String()+stderrNode.String())
+		t.Fatalf("Failed to connect to Node B via router B relay: %v\n--- node.log ---\n%s", connectErr, samNode.log())
 	}
 	t.Log("Successfully connected to Node B via router B relay circuit!")
 

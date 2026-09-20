@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,10 +37,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/google/sam/api"
+	"github.com/google/sam/internal/storage"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -57,16 +58,50 @@ func repoRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
 }
 
+func TestMain(m *testing.M) {
+	code := m.Run()
+	builtBinaries.Range(func(_, entry any) bool {
+		if b := entry.(*binaryBuild); b.path != "" {
+			_ = os.RemoveAll(filepath.Dir(b.path))
+		}
+		return true
+	})
+	os.Exit(code)
+}
+
+// builtBinaries holds one build per package for the whole test process:
+// Go caches compilation, but every `go build -o` links again, and fifty
+// tests each linking three binaries is a minute of nothing.
+var builtBinaries sync.Map // pkgPath -> *binaryBuild
+
+type binaryBuild struct {
+	once sync.Once
+	path string
+	err  error
+}
+
 func buildBinary(t *testing.T, pkgPath string) string {
 	t.Helper()
-	root := repoRoot(t)
-	out := filepath.Join(t.TempDir(), filepath.Base(pkgPath))
-	cmd := exec.Command("go", "build", "-o", out, ".")
-	cmd.Dir = filepath.Join(root, pkgPath)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("building %s failed: %v\n%s", pkgPath, err, string(output))
+	entry, _ := builtBinaries.LoadOrStore(pkgPath, &binaryBuild{})
+	b := entry.(*binaryBuild)
+	b.once.Do(func() {
+		root := repoRoot(t)
+		dir, err := os.MkdirTemp("", "sam-integration-bin-")
+		if err != nil {
+			b.err = err
+			return
+		}
+		b.path = filepath.Join(dir, filepath.Base(pkgPath))
+		cmd := exec.Command("go", "build", "-o", b.path, ".")
+		cmd.Dir = filepath.Join(root, pkgPath)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			b.err = fmt.Errorf("%v\n%s", err, output)
+		}
+	})
+	if b.err != nil {
+		t.Fatalf("building %s failed: %v", pkgPath, b.err)
 	}
-	return out
+	return b.path
 }
 
 func runCommand(
@@ -133,23 +168,18 @@ func (iw *interceptorWriter) Write(p []byte) (n int, err error) {
 		if strings.Contains(s, "redirect_uri=") && strings.Contains(s, "state=") {
 			iw.handled = true
 			go func() {
-				// Parse URL from the buffer to extract state and redirect_uri
-				// The URL is printed like: "  http://...redirect_uri=...&state=..."
-				lines := strings.Split(s, "\n")
-				for _, line := range lines {
-					if strings.Contains(line, "redirect_uri=") {
-						parts := strings.Split(strings.TrimSpace(line), " ")
-						for _, p := range parts {
-							if strings.HasPrefix(p, "http") {
-								u, err := url.Parse(p)
-								if err == nil {
-									redirectURI := u.Query().Get("redirect_uri")
-									state := u.Query().Get("state")
-									if redirectURI != "" && state != "" {
-										time.Sleep(100 * time.Millisecond)
-										_, _ = http.Get(redirectURI + "?code=dev_code_123&state=" + state)
-									}
-								}
+				// Play the user: open the authorization URL the CLI printed. The
+				// provider signs the user in and redirects to the CLI's loopback
+				// callback, which the client follows.
+				for _, line := range strings.Split(s, "\n") {
+					if !strings.Contains(line, "redirect_uri=") {
+						continue
+					}
+					for _, p := range strings.Split(strings.TrimSpace(line), " ") {
+						if strings.HasPrefix(p, "http") {
+							time.Sleep(100 * time.Millisecond)
+							if resp, err := http.Get(p); err == nil {
+								_ = resp.Body.Close()
 							}
 						}
 					}
@@ -296,106 +326,6 @@ func startMockRouterWithControlPlaneKey(t *testing.T) (peer.ID, string, ed25519.
 	return h.ID(), httpServer.URL, pub
 }
 
-func startMockRouterWithOIDC(t *testing.T, oidcIssuerURL string) (peer.ID, string) {
-	t.Helper()
-
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("Failed to generate control plane key: %v", err)
-	}
-
-	h, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
-	if err != nil {
-		t.Fatalf("failed to create mock libp2p host: %v", err)
-	}
-
-	h.SetStreamHandler(api.AuthProtocolID, func(s network.Stream) {
-		defer func() { _ = s.Close() }()
-		reader := msgio.NewVarintReaderSize(s, 1024*64)
-		msg, err := reader.ReadMsg()
-		if err != nil {
-			return
-		}
-		defer reader.ReleaseMsg(msg)
-
-		writer := msgio.NewVarintWriter(s)
-		resp := &api.AuthResponse{
-			Success: true,
-			Biscuit: createMockBiscuitToken(t, h.ID().String(), priv, api.RoleRouter, nil),
-		}
-		respBytes, _ := proto.Marshal(resp)
-		_ = writer.WriteMsg(respBytes)
-	})
-
-	kdht, err := dht.New(h, dht.Mode(dht.ModeServer), dht.ProtocolPrefix("/sam"))
-	if err != nil {
-		t.Fatalf("failed to create DHT on mock router: %v", err)
-	}
-
-	// Start HTTP server for enrollment and info
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		resp := &api.ControlPlaneInfoResponse{
-			OidcIssuer: oidcIssuerURL,
-			ClientId:   "sam-mesh-audience",
-			Audience:   "sam-mesh-audience",
-		}
-		data, err := proto.Marshal(resp)
-		if err != nil {
-			http.Error(w, "Failed to marshal response", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/x-protobuf")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(data)
-	})
-	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "Failed to read body", http.StatusBadRequest)
-			return
-		}
-		var req api.EnrollRequest
-		if err := proto.Unmarshal(body, &req); err != nil {
-			http.Error(w, "Invalid request format", http.StatusBadRequest)
-			return
-		}
-
-		resp := &api.EnrollResponse{
-			BiscuitToken:          createMockBiscuitToken(t, req.PeerId, priv, api.RoleNode, req.Labels),
-			ControlPlanePublicKey: pub,
-			RouterAddresses:       []string{h.Addrs()[0].String() + "/p2p/" + h.ID().String()},
-		}
-		data, err := proto.Marshal(resp)
-		if err != nil {
-			http.Error(w, "Failed to marshal response", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/x-protobuf")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(data)
-	})
-
-	httpServer := httptest.NewServer(mux)
-
-	t.Cleanup(func() {
-		httpServer.Close()
-		_ = kdht.Close()
-		_ = h.Close()
-	})
-
-	return h.ID(), httpServer.URL
-}
-
 func createMockBiscuitToken(t *testing.T, peerID string, priv ed25519.PrivateKey, role string, labels map[string]string) []byte {
 	builder := biscuit.NewBuilder(priv)
 	err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{Name: "target_unrestricted"}})
@@ -472,11 +402,27 @@ func createMockBiscuitToken(t *testing.T, peerID string, priv ed25519.PrivateKey
 }
 
 func startControlPlaneAndRouter(t *testing.T, tmpDir string, oidcURL string, mintToken func(map[string]interface{}) string, policyFile string) (int, func()) {
-	cpBin := buildBinary(t, "./cmd/sam-control-plane")
-	routerBin := buildBinary(t, "./cmd/sam-router")
+	cpPort, stopCP := startControlPlane(t, tmpDir, oidcURL, policyFile)
+	_, stopRouter := startRouter(t, tmpDir, cpPort, mintToken, "router")
 
+	// Wait for router lease to be active and registered
+	fetchPeerID(t, cpPort)
+
+	cleanup := func() {
+		stopRouter()
+		stopCP()
+	}
+
+	return cpPort, cleanup
+}
+
+// startControlPlane starts a sam-control-plane under tmpDir, trusting oidcURL
+// and holding the policy in policyFile with the router role added, plus any
+// extra flags. It returns the port and a stop function.
+func startControlPlane(t *testing.T, tmpDir string, oidcURL string, policyFile string, extra ...string) (int, func()) {
+	t.Helper()
+	cpBin := buildBinary(t, "./cmd/sam-control-plane")
 	cpPort := getFreePort(t)
-	routerPort := getFreePort(t)
 
 	// Automatically adjust the policy file to grant the "router" role to group "routers"
 	originalPolicy, err := os.ReadFile(policyFile)
@@ -484,29 +430,40 @@ func startControlPlaneAndRouter(t *testing.T, tmpDir string, oidcURL string, min
 		writePolicyWithRouter(t, policyFile, string(originalPolicy))
 	}
 
-	// 1. Start Control Plane
-	cpCmd := exec.Command(cpBin,
+	cpCmd := exec.Command(cpBin, append([]string{
 		"--bind-address", fmt.Sprintf("127.0.0.1:%d", cpPort),
 		"--db-dsn", filepath.Join(tmpDir, "cp-keys.db"),
 		"--issuer", oidcURL,
 		"--insecure-skip-tls-verify",
 		"--admin-token-path", tokenPath(t, "test-admin-token"),
-	)
+	}, extra...)...)
 	cpCmd.Stdout = os.Stdout
 	cpCmd.Stderr = os.Stderr
 	if err := cpCmd.Start(); err != nil {
 		t.Fatalf("failed to start control plane: %v", err)
 	}
+	stop := func() {
+		_ = cpCmd.Process.Kill()
+		_ = cpCmd.Wait()
+	}
+	t.Cleanup(stop)
 
-	// Wait for CP to be up
 	waitForControlPlane(t, cpPort)
-
-	// Inject policy into CP database via API
 	injectPolicyYAML(t, cpPort, "test-admin-token", policyFile)
+	return cpPort, stop
+}
 
-	// 2. Start Router
+// startRouter starts a sam-router named name against the control plane on
+// cpPort, renewing its lease every second so the control plane's view of the
+// router's peers is current. It returns the router's p2p address and a stop
+// function.
+func startRouter(t *testing.T, tmpDir string, cpPort int, mintToken func(map[string]interface{}) string, name string) (string, func()) {
+	t.Helper()
+	routerBin := buildBinary(t, "./cmd/sam-router")
+	routerPort := getFreePort(t)
+
 	routerJWT := mintToken(map[string]interface{}{
-		"sub":    "router-integration-1",
+		"sub":    name,
 		"groups": []string{"routers"},
 		"roles":  []string{api.RoleRouter},
 	})
@@ -514,29 +471,40 @@ func startControlPlaneAndRouter(t *testing.T, tmpDir string, oidcURL string, min
 	routerCmd := exec.Command(routerBin,
 		"--control-plane", fmt.Sprintf("http://127.0.0.1:%d", cpPort),
 		"--listen", fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", routerPort),
-		"--keys-path", filepath.Join(tmpDir, "router-keys.db"),
+		"--keys-path", filepath.Join(tmpDir, name+"-keys.db"),
 		"--allow-loopback",
 		"--oidc-token", routerJWT,
+		// Each renewal carries the router's connected peers, which is how
+		// tests see a node reach the mesh through the control plane.
+		"--lease-renew-interval", "1s",
 	)
 	routerCmd.Stdout = os.Stdout
 	routerCmd.Stderr = os.Stderr
 	if err := routerCmd.Start(); err != nil {
-		_ = cpCmd.Process.Kill()
-		_ = cpCmd.Wait()
 		t.Fatalf("failed to start router: %v", err)
 	}
-
-	// Wait for router lease to be active and registered
-	fetchPeerID(t, cpPort)
-
-	cleanup := func() {
+	stop := func() {
 		_ = routerCmd.Process.Kill()
 		_ = routerCmd.Wait()
-		_ = cpCmd.Process.Kill()
-		_ = cpCmd.Wait()
 	}
+	t.Cleanup(stop)
 
-	return cpPort, cleanup
+	// The router's peer ID is its own; the control plane learns it from the
+	// first lease, which is also when the router is ready for nodes.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		for _, lease := range fetchAdminStatus(t, cpPort, "test-admin-token").ActiveRouters {
+			for _, addr := range lease.Addresses {
+				if strings.HasPrefix(addr, fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/", routerPort)) {
+					return addr, stop
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("router %s never leased with control plane :%d", name, cpPort)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func getFreePort(t *testing.T) int {
@@ -548,6 +516,74 @@ func getFreePort(t *testing.T) int {
 	port := l.Addr().(*net.TCPAddr).Port
 	_ = l.Close()
 	return port
+}
+
+// adminStatus is the control plane's view of the mesh, in the types it
+// serializes on /admin/status.
+type adminStatus struct {
+	EnrolledNodes []storage.EnrolledNode `json:"enrolled_nodes"`
+	ActiveRouters []storage.RouterLease  `json:"active_routers"`
+}
+
+func fetchAdminStatus(t *testing.T, cpPort int, adminToken string) adminStatus {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/admin/status", cpPort), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /admin/status: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /admin/status: %s", resp.Status)
+	}
+	var status adminStatus
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		t.Fatalf("decode /admin/status: %v", err)
+	}
+	return status
+}
+
+// enrolledNode is the control plane's record of peerID, or nil.
+func (s adminStatus) enrolledNode(peerID string) *storage.EnrolledNode {
+	for i := range s.EnrolledNodes {
+		if s.EnrolledNodes[i].PeerID == peerID {
+			return &s.EnrolledNodes[i]
+		}
+	}
+	return nil
+}
+
+// routerWith is the lease of a router that reports peerID connected, or nil.
+func (s adminStatus) routerWith(peerID string) *storage.RouterLease {
+	for i := range s.ActiveRouters {
+		for _, p := range s.ActiveRouters[i].ConnectedPeers {
+			if p == peerID {
+				return &s.ActiveRouters[i]
+			}
+		}
+	}
+	return nil
+}
+
+// waitForPeerOnRouter returns the lease of the router peerID is connected
+// to, as the control plane learns it from the router's lease renewals.
+func waitForPeerOnRouter(t *testing.T, cpPort int, adminToken string, peerID string, timeout time.Duration) *storage.RouterLease {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if lease := fetchAdminStatus(t, cpPort, adminToken).routerWith(peerID); lease != nil {
+			return lease
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no router on control plane :%d reported %s connected within %v", cpPort, peerID, timeout)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 func fetchPeerID(t *testing.T, port int) string {
