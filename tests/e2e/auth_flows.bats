@@ -85,7 +85,8 @@ assert_enrolled() {
   docker rm -f "${node_name}-join" >/dev/null 2>&1 || true
 
   # Now run the node with the stored identity, on the same control plane it
-  # enrolled against: a mismatch is fatal, as is a tokenless TCP sidecar.
+  # enrolled against: a mismatch is fatal, as is a tokenless TCP sidecar. The
+  # API binds all interfaces so the checks below can reach it from the network.
   docker run -d \
     --name "${node_name}" \
     --network "${MESH_NETWORK}" \
@@ -95,6 +96,7 @@ assert_enrolled() {
     "sam-node:local" \
     run \
     --data-dir /data \
+    --bind-addr "0.0.0.0:8080" \
     --control-plane "http://sam-control-plane:8080" \
     --insecure-control-plane
   MESH_CONTAINERS+=("${node_name}")
@@ -170,6 +172,7 @@ sys.exit(0 if b'\x05label' in raw and b'\x06region' in raw and b'\x02eu' in raw 
     -e SAM_API_TOKEN="secret-token" \
     "sam-node:local" \
     run \
+    --bind-addr "0.0.0.0:8080" \
     --control-plane "http://sam-control-plane:8080" \
     --insecure-control-plane \
     --jwt-path "/var/run/secrets/tokens/sa-token"
@@ -243,6 +246,7 @@ sys.exit(0 if b'\x05label' in raw and b'\x06region' in raw and b'\x02eu' in raw 
     "sam-node:local" \
     run \
     --data-dir /data \
+    --bind-addr "0.0.0.0:8080" \
     --control-plane "http://sam-control-plane:8080" \
     --insecure-control-plane
   MESH_CONTAINERS+=("${node_name}")
