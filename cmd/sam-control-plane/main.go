@@ -46,6 +46,7 @@ var (
 	biscuitTTL            time.Duration
 	oidcSessionTTL        time.Duration
 	nodeRetention         time.Duration
+	meshReconnectInterval time.Duration
 	adminTokenPath        string
 	insecureSkipTLSVerify bool
 	logLevel              string
@@ -142,6 +143,19 @@ func main() {
 				}
 			}()
 
+			// Bans, key rotations and policy updates reach the mesh as they
+			// happen; every consumer also pulls, so this is speed, not truth.
+			mesh, err := controlplane.NewMeshPublisher(cmd.Context(), store, meshReconnectInterval)
+			if err != nil {
+				logger.Fatalf("Failed to start mesh event publisher: %v", err)
+			}
+			defer func() {
+				if err := mesh.Close(); err != nil {
+					logger.Errorf("Failed to stop mesh event publisher: %v", err)
+				}
+			}()
+			srv.SetMeshAdapter(mesh)
+
 			if err := srv.Start(); err != nil {
 				logger.Fatalf("Failed to start control plane: %v", err)
 			}
@@ -164,6 +178,7 @@ func main() {
 	rootCmd.Flags().DurationVar(&biscuitTTL, "biscuit-ttl", api.BiscuitTokenTTL, "Lifespan minted into every issued Biscuit's expiration fact. Capped to the OIDC token's own expiry when shorter.")
 	rootCmd.Flags().DurationVar(&oidcSessionTTL, "oidc-session-ttl", api.OIDCSessionTTL, "How long an OIDC enrollment stays refreshable before the identity must re-authenticate with the OIDC provider. Shorter values keep the provider authoritative for offboarding at the cost of more frequent interactive re-enrollment.")
 	rootCmd.Flags().DurationVar(&nodeRetention, "node-retention", controlplane.DefaultNodeRetention, "How long an enrolled node's record is kept after its session expired before it is deleted. Banned nodes are always kept. 0 keeps every record forever.")
+	rootCmd.Flags().DurationVar(&meshReconnectInterval, "mesh-reconnect-interval", controlplane.DefaultMeshReconnectInterval, "How often the event publisher re-reads the router leases and dials any router it is not connected to.")
 	rootCmd.Flags().StringVar(&adminTokenPath, "admin-token-path", "", "Path to file containing the token for authenticating policy REST API requests (or env SAM_ADMIN_TOKEN)")
 	rootCmd.Flags().BoolVar(&insecureSkipTLSVerify, "insecure-skip-tls-verify", false, "Skip TLS verification for OIDC providers")
 	rootCmd.Flags().StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")

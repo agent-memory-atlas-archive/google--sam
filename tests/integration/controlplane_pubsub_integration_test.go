@@ -77,8 +77,12 @@ func TestControlPlanePubSubEventIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create cp pubsub: %v", err)
 	}
+	cpTopic, err := cpPS.Join(api.GossipEvents)
+	if err != nil {
+		t.Fatalf("failed to join cp topic: %v", err)
+	}
 
-	meshAdapter, err := controlplane.NewP2PMeshAdapter(cpHost, cpPS, store)
+	meshAdapter, err := controlplane.NewP2PMeshAdapter(cpHost, cpTopic, store)
 	if err != nil {
 		t.Fatalf("failed to create P2PMeshAdapter: %v", err)
 	}
