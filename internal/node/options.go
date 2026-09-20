@@ -74,10 +74,16 @@ type Options struct {
 	DiscoveryConcurrency int
 	// RequiredRole restricts enrollment and startup to only accept tokens containing this role.
 	RequiredRole string
-	// PolicySyncInterval specifies how often the node syncs the mesh policy from the control plane.
-	PolicySyncInterval time.Duration
-	// PolicySyncJitter specifies the maximum jitter delay when scheduling policy syncs on event broadcasts.
-	PolicySyncJitter time.Duration
+	// ControlPlaneSyncInterval is how often the node pulls what it reads from
+	// the control plane: signing keys, ban set and router addresses, mesh
+	// policy. Zero uses the default; negative disables the loop.
+	ControlPlaneSyncInterval time.Duration
+	// ControlPlaneSyncJitter is the maximum random delay before a sync that a
+	// gossip event asked for, so a fleet told at once does not pull at once.
+	// Zero uses a tenth of ControlPlaneSyncInterval: the spread has to grow
+	// with the fleet's cadence, or a policy update on a large mesh is a
+	// stampede.
+	ControlPlaneSyncJitter time.Duration
 	// BackendProbeTimeout bounds how long a command-spawned service backend
 	// (sam-node.yaml's `command`, spawned as a local subprocess) is given to
 	// answer before the service is registered but withheld from
@@ -143,8 +149,8 @@ func (o *Options) Default() {
 	if o.RequiredRole == "" {
 		o.RequiredRole = api.RoleNode
 	}
-	if o.PolicySyncInterval == 0 {
-		o.PolicySyncInterval = 1 * time.Hour
+	if o.ControlPlaneSyncInterval == 0 {
+		o.ControlPlaneSyncInterval = DefaultControlPlaneSyncInterval
 	}
 	if o.CatalogReportInterval <= 0 {
 		o.CatalogReportInterval = 1 * time.Minute
@@ -152,8 +158,8 @@ func (o *Options) Default() {
 	if o.CatalogReportInitialDelay <= 0 {
 		o.CatalogReportInitialDelay = 5 * time.Second
 	}
-	if o.PolicySyncJitter <= 0 {
-		o.PolicySyncJitter = 10 * time.Second
+	if o.ControlPlaneSyncJitter <= 0 && o.ControlPlaneSyncInterval > 0 {
+		o.ControlPlaneSyncJitter = o.ControlPlaneSyncInterval / 10
 	}
 	if o.NodeConfig == nil {
 		o.NodeConfig = &NodeConfigComplete{}

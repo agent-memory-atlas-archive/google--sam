@@ -111,7 +111,7 @@ enroll.
 | `--discovery-concurrency` | `10` | Concurrent catalog fetches during discovery. |
 | `--dht-provider-addr-ttl`, `--dht-max-record-age` | library defaults | DHT record lifetimes. |
 | `--backend-probe-timeout` | `2s` | How long a service backend may take to answer before the node declines to advertise it. Raise it for subprocesses that start slowly. |
-| `--policy-sync-interval` | `1h` | How often the mesh policy is fetched again from the control plane. |
+| `--control-plane-sync-interval` | `15m` | How often signing keys, the ban set, router addresses and the mesh policy are pulled from the control plane. Keep it well below the control plane's `--key-grace-period`; raise it on large meshes. |
 | `--key-grace-period` | `24h` | How long a rotated-out control plane key is still accepted for verifying peers. |
 | `--monitor-bootstrap` | `2m` | Delay before the router-connection monitor starts. |
 | `--monitor-interval` | `1m` | How often the monitor checks that a router is connected. |
