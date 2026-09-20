@@ -91,6 +91,27 @@ class Handler(BaseHTTPRequestHandler):
             params = urllib.parse.parse_qs(body) if body else {}
 
             client_id = params.get('client_id', [''])[0]
+            grant_type = params.get('grant_type', [''])[0]
+
+            # Only the grants a SAM component drives are served, so a token
+            # is proof of which flow obtained it: client credentials for a
+            # configured node, the device grant, with the code handed out
+            # above, for an interactive join that has no browser.
+            if grant_type == 'urn:ietf:params:oauth:grant-type:device_code':
+                granted = params.get('device_code', [''])[0] == 'dev_code_123'
+            elif grant_type == 'client_credentials':
+                granted = True
+            else:
+                granted = False
+            if not granted:
+                error = 'invalid_grant' if grant_type else 'invalid_request'
+                data = json.dumps({'error': error}).encode('utf-8')
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
 
             # Assign groups and roles based on client_id
             groups = ['data-scientist']

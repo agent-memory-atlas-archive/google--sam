@@ -77,18 +77,27 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
     hexdump -vn 32 -e '1/1 "%02x"' /dev/urandom
   }
 
-  mesh_wait_for_log() {
-    local container="$1"
-    local needle="$2"
-    local timeout_s="${3:-20}"
+  # mesh_wait_for_http waits until something answers HTTP at url on the test
+  # network. The status does not matter, a listener does.
+  mesh_wait_for_http() {
+    local url="$1"
+    local timeout_s="${2:-20}"
     local i
-    for ((i=0; i<timeout_s*10; i++)); do
-      if docker logs "${container}" 2>&1 | grep -Fq "${needle}"; then
+    for ((i=0; i<timeout_s; i++)); do
+      if docker run --rm --network "${MESH_NETWORK}" "${MESH_RUNTIME_IMAGE}" \
+          curl -s -o /dev/null --max-time 5 "${url}"; then
         return 0
       fi
-      sleep 0.1
+      sleep 1
     done
+    echo "nothing answered at ${url} within ${timeout_s}s" >&2
     return 1
+  }
+
+  # mesh_container_log prints a container's output, for failure messages only.
+  mesh_container_log() {
+    echo "--- ${1} ---" >&2
+    docker logs --tail "${2:-80}" "$1" >&2 2>&1 || true
   }
 
   # Pods matching a selector that will never become ready on their own.
@@ -183,17 +192,61 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
     done
   }
 
+  # mesh_wait_for_mcp_ready returns once node <idx> answers on its
+  # authenticated API, which the node serves only after it enrolled and a
+  # router admitted it. A node that exited first fails at once.
   mesh_wait_for_mcp_ready() {
     local idx="$1"
     local timeout_s="${2:-20}"
+    local name="${MESH_PREFIX}-node-${idx}"
     local i
     for ((i=0; i<timeout_s; i++)); do
-      if docker run --rm --network "${MESH_NETWORK}" python:3.12 curl -s -X POST -H "Content-Type: application/json" -H "X-Sam-Authentication: Bearer secret-token" -d '{"jsonrpc":"2.0","method":"ping","id":1}' --max-time 5 -D - http://${MESH_PREFIX}-node-${idx}:8080/mcp | grep -q "200 OK"; then
+      if [[ "$(docker inspect -f '{{.State.Running}}' "${name}" 2>/dev/null)" != "true" ]]; then
+        echo "${name} exited before serving its API" >&2
+        mesh_container_log "${name}"
+        return 1
+      fi
+      if docker run --rm --network "${MESH_NETWORK}" python:3.12 curl -s -X POST -H "Content-Type: application/json" -H "X-Sam-Authentication: Bearer secret-token" -d '{"jsonrpc":"2.0","method":"ping","id":1}' --max-time 5 -D - http://${name}:8080/mcp | grep -q "200 OK"; then
         return 0
       fi
       sleep 1
     done
+    echo "${name} did not serve its API within ${timeout_s}s" >&2
+    mesh_container_log "${name}"
     return 1
+  }
+
+  # mesh_node_peer_id is node <idx>'s peer ID, as the node reports it.
+  mesh_node_peer_id() {
+    local idx="$1"
+    timeout 15s docker run --rm --network "${MESH_NETWORK}" "${MESH_RUNTIME_IMAGE}" \
+      mcp-client -url "http://${MESH_PREFIX}-node-${idx}:8080/mcp" -tool "get_mesh_info" 2>/dev/null |
+      jq -r '.peer_id // empty'
+  }
+
+  # mesh_node_addr is the address a peer dials node <idx> on within the test
+  # network.
+  mesh_node_addr() {
+    local idx="$1"
+    local peer_id
+    peer_id="$(mesh_node_peer_id "${idx}")"
+    [[ -n "${peer_id}" ]] || return 1
+    echo "/dns4/${MESH_PREFIX}-node-${idx}/tcp/5002/p2p/${peer_id}"
+  }
+
+  # mesh_admin_status is the control plane's view of the mesh, as it
+  # serialises it on /admin/status.
+  mesh_admin_status() {
+    docker run --rm --network "${MESH_NETWORK}" $(mesh_get_add_hosts) "${MESH_RUNTIME_IMAGE}" \
+      curl -sf --max-time 10 -H "Authorization: Bearer super-secret-admin-token" \
+      "http://sam-control-plane:8080/admin/status"
+  }
+
+  # mesh_enrolled_node prints the control plane's enrollment record for a
+  # peer, or nothing.
+  mesh_enrolled_node() {
+    local peer_id="$1"
+    mesh_admin_status | jq -c --arg id "${peer_id}" '.enrolled_nodes // [] | .[] | select(.PeerID == $id)'
   }
 
   # POST /debug/connect-peer on node <idx>; the REST endpoint that replaced
@@ -420,31 +473,27 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
     fi
     mesh_wait_for_rollout statefulset/sam-router
 
-    local i
-    for ((i=0; i<200; i++)); do
-      if kubectl --context="${KUBECONTEXT}" logs "sam-router-0" 2>&1 | grep -q "PeerID:"; then
-        break
-      fi
-      sleep 0.1
-    done
-    local router_peer_id
-    router_peer_id=$(kubectl --context="${KUBECONTEXT}" logs "sam-router-0" | grep -oE '12D3Koo[a-zA-Z0-9]+' | head -n 1 || true)
-    [[ -n "${router_peer_id}" ]]
-
-    # The router pod reports Ready before its lease reaches the control plane, and
-    # a node's /register serves router addresses from that lease, so a node
-    # started in between enrolls against an empty list and exits.
+    # The router pod reports Ready before its lease reaches the control plane,
+    # and a node's /register serves router addresses from that lease, so a
+    # node started in between enrolls against an empty list and exits. The
+    # lease is also where the router's peer ID comes from; on a reused
+    # cluster the freshest renewal is the router that is running now.
     local router_node_ip
     router_node_ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"${MESH_NETWORK:-kind}\").IPAddress}}" \
       "$(kubectl --context="${KUBECONTEXT}" get pod sam-router-0 -o jsonpath='{.spec.nodeName}')")
+    local router_peer_id=""
     local lease_deadline=$((SECONDS + 60))
-    until docker run --rm --network "${MESH_NETWORK:-kind}" python:3.12 \
-        curl -sf --max-time 5 "http://${router_node_ip}:8080/info" 2>/dev/null | grep -qaF "${router_peer_id}"; do
-      if ((SECONDS >= lease_deadline)); then
+    while [[ -z "${router_peer_id}" ]]; do
+      # active_routers is null, not [], until the first lease lands.
+      router_peer_id=$(docker run --rm --network "${MESH_NETWORK:-kind}" "${MESH_RUNTIME_IMAGE}" \
+          curl -sf --max-time 5 -H "Authorization: Bearer super-secret-admin-token" \
+          "http://${router_node_ip}:8080/admin/status" 2>/dev/null |
+        jq -r '.active_routers // [] | sort_by(.LastRenewal) | last | .PeerID // empty')
+      if [[ -z "${router_peer_id}" ]] && ((SECONDS >= lease_deadline)); then
         echo "router lease did not reach the control plane within 60s" >&2
         return 1
       fi
-      sleep 1
+      [[ -n "${router_peer_id}" ]] || sleep 1
     done
 
     echo "${router_peer_id}" > "/tmp/sam-wi-test-router-peer-id"

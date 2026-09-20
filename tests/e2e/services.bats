@@ -20,7 +20,7 @@ start_calc_mcp() {
     --network-alias calc-mcp \
     "${CALC_MCP_IMAGE}" >/dev/null
   MESH_CONTAINERS+=("${name}")
-  mesh_wait_for_log "${name}" "Uvicorn running on" 20
+  mesh_wait_for_http "http://calc-mcp:7777/mcp" 20
 }
 
 setup() {
@@ -41,8 +41,7 @@ teardown() {
   echo "[$(date +%T)] Starting Node 1"
   mesh_start_node 1 "--log-level debug"
   local node1_name="${MESH_PREFIX}-node-1"
-  mesh_wait_for_log "${node1_name}" "SAM Node Online" 60
-  mesh_wait_for_mcp_ready 1 20
+  mesh_wait_for_mcp_ready 1 60
 
   echo "[$(date +%T)] Starting calc-mcp backend"
   start_calc_mcp
@@ -52,15 +51,14 @@ teardown() {
     "--log-level debug" \
     "tests/e2e/docker/calc-mcp/sam-node-config.yaml"
   local node2_name="${MESH_PREFIX}-node-2"
-  mesh_wait_for_log "${node2_name}" "SAM Node Online" 20
-  mesh_wait_for_mcp_ready 2 20
+  mesh_wait_for_mcp_ready 2 30
 
   local node2_peer_id
-  node2_peer_id=$(docker logs "${node2_name}" 2>&1 | grep "PeerID:" | head -n 1 | awk '{print $2}' | tr -d '\r')
+  node2_peer_id=$(mesh_node_peer_id 2)
+  [[ -n "${node2_peer_id}" ]]
 
   echo "[$(date +%T)] Connecting Node 1 to Node 2"
-  local node2_addr="/dns4/${node2_name}/tcp/5002/p2p/${node2_peer_id}"
-  run mesh_connect_peer 1 "${node2_addr}"
+  run mesh_connect_peer 1 "$(mesh_node_addr 2)"
   [[ "$status" -eq 0 ]]
   mesh_wait_for_peer_connection 1 "${node2_peer_id}" 20
 

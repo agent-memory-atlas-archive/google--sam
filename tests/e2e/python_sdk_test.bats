@@ -25,8 +25,7 @@ teardown() {
   [[ "$status" -eq 0 ]]
   
   local node1_name="${MESH_PREFIX}-node-1"
-  mesh_wait_for_log "${node1_name}" "SAM Node Online" 20
-  mesh_wait_for_mcp_ready 1 20
+  mesh_wait_for_mcp_ready 1 30
 
   # Use the Python SDK to interact with the node
   run docker run --rm \

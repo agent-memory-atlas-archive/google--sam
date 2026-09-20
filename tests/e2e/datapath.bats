@@ -76,26 +76,25 @@ EOF
   echo "[$(date +%T)] Starting Node 1"
   mesh_start_node 1 "--log-level debug" "${node1_cfg}"
   local node1_name="${MESH_PREFIX}-node-1"
-  mesh_wait_for_log "${node1_name}" "SAM Node Online" 20
-  mesh_wait_for_mcp_ready 1 20
-  
+  mesh_wait_for_mcp_ready 1 30
+
   local node1_peer_id
-  node1_peer_id=$(docker logs "${node1_name}" 2>&1 | grep "PeerID:" | head -n 1 | awk '{print $2}' | tr -d '\r')
+  node1_peer_id=$(mesh_node_peer_id 1)
+  [[ -n "${node1_peer_id}" ]]
 
   # Start Node 2
   echo "[$(date +%T)] Starting Node 2"
   mesh_start_node 2 "--log-level debug" "${node2_cfg}"
   local node2_name="${MESH_PREFIX}-node-2"
-  mesh_wait_for_log "${node2_name}" "SAM Node Online" 20
-  mesh_wait_for_mcp_ready 2 20
+  mesh_wait_for_mcp_ready 2 30
 
   local node2_peer_id
-  node2_peer_id=$(docker logs "${node2_name}" 2>&1 | grep "PeerID:" | head -n 1 | awk '{print $2}' | tr -d '\r')
+  node2_peer_id=$(mesh_node_peer_id 2)
+  [[ -n "${node2_peer_id}" ]]
 
   # Explicitly connect Node 1 to Node 2 (DHT auto-discovery is slow/unreliable in this E2E setup)
   echo "[$(date +%T)] Explicitly connecting Node 1 to Node 2"
-  local node2_addr="/dns4/${node2_name}/tcp/5002/p2p/${node2_peer_id}"
-  run mesh_connect_peer 1 "${node2_addr}"
+  run mesh_connect_peer 1 "$(mesh_node_addr 2)"
   [[ "$status" -eq 0 ]]
 
   # Verify connection
