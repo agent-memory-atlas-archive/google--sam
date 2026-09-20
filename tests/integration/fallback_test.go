@@ -19,6 +19,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"io"
 
 	"os"
@@ -26,6 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -65,22 +67,33 @@ func (s *safeBuffer) String() string {
 	return s.buf.String()
 }
 
+// TestSelfHealingHTTPFallback: the routers a node stored can be gone by its
+// next start (a redeploy moves every router's address); the node must ask the
+// control plane for the current ones and reach one. The assertions are the two
+// ends of that path: the control plane saw the request, and the router that
+// only exists since the address change completed an auth handshake with the
+// node. Neither depends on what the node logs.
 func TestSelfHealingHTTPFallback(t *testing.T) {
 	nodeBin := buildBinary(t, "./cmd/sam-node")
 
 	var mu sync.Mutex
 	var currentP2PAddr string
+	var infoRequests atomic.Int32
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("Failed to generate control plane key: %v", err)
 	}
 
-	createNewHost := func() host.Host {
+	// createNewHost is a router as the node sees it: the auth handshake, and a
+	// channel closed once a node has completed it.
+	createNewHost := func() (host.Host, <-chan struct{}) {
 		newH, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
 		if err != nil {
 			t.Fatal(err)
 		}
+		authenticated := make(chan struct{})
+		var once sync.Once
 		newH.SetStreamHandler(api.AuthProtocolID, func(s network.Stream) {
 			defer func() { _ = s.Close() }()
 			reader := msgio.NewVarintReaderSize(s, 1024*64)
@@ -95,13 +108,21 @@ func TestSelfHealingHTTPFallback(t *testing.T) {
 				Success: true,
 				Biscuit: createMockBiscuitToken(t, newH.ID().String(), priv, api.RoleRouter, nil),
 			}
-			respBytes, _ := proto.Marshal(resp)
-			_ = writer.WriteMsg(respBytes)
+			respBytes, err := proto.Marshal(resp)
+			if err != nil {
+				t.Errorf("marshal auth response: %v", err)
+				return
+			}
+			if err := writer.WriteMsg(respBytes); err != nil {
+				t.Errorf("write auth response: %v", err)
+				return
+			}
+			once.Do(func() { close(authenticated) })
 		})
-		return newH
+		return newH, authenticated
 	}
 
-	h := createNewHost()
+	h, _ := createNewHost()
 	defer func() { _ = h.Close() }()
 
 	mu.Lock()
@@ -159,11 +180,19 @@ func TestSelfHealingHTTPFallback(t *testing.T) {
 			ControlPlanePublicKey: pub,
 			RouterAddresses:       []string{addr},
 		}
-		data, _ := proto.Marshal(resp)
+		data, err := proto.Marshal(resp)
+		if err != nil {
+			t.Errorf("marshal /register: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/x-protobuf")
-		_, _ = w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			t.Errorf("write /register: %v", err)
+		}
 	})
 	mux.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
+		infoRequests.Add(1)
 		mu.Lock()
 		addr := currentP2PAddr
 		mu.Unlock()
@@ -173,9 +202,16 @@ func TestSelfHealingHTTPFallback(t *testing.T) {
 			Audience:        "sam-mesh-audience",
 			RouterAddresses: []string{addr},
 		}
-		data, _ := proto.Marshal(resp)
+		data, err := proto.Marshal(resp)
+		if err != nil {
+			t.Errorf("marshal /info: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/x-protobuf")
-		_, _ = w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			t.Errorf("write /info: %v", err)
+		}
 	})
 
 	httpServer := httptest.NewServer(mux)
@@ -208,43 +244,54 @@ func TestSelfHealingHTTPFallback(t *testing.T) {
 		t.Fatalf("Join did not succeed:\n%s", out)
 	}
 
-	// Step 2: Simulate router changing its P2P port (HTTP URL stays the same)
+	// Step 2: Simulate router changing its P2P port (HTTP URL stays the same).
+	// The stored address now points at nothing; only /info knows the new one.
 	_ = h.Close()
-	h = createNewHost()
-	defer func() { _ = h.Close() }()
+	newRouter, authenticated := createNewHost()
+	defer func() { _ = newRouter.Close() }()
 
 	mu.Lock()
-	currentP2PAddr = h.Addrs()[0].String() + "/p2p/" + h.ID().String()
+	currentP2PAddr = newRouter.Addrs()[0].String() + "/p2p/" + newRouter.ID().String()
 	mu.Unlock()
+	infoRequests.Store(0)
 
-	// Step 3: Start sam-node run
-	runCmd := exec.Command(nodeBin, "run", "--listen", "/ip4/127.0.0.1/tcp/0", "--bind-addr", "127.0.0.1:0")
+	// Step 3: Start sam-node run, with everything it needs to stay up: a
+	// node that reaches the router and then exits has not healed.
+	runCmd := exec.Command(nodeBin, "run",
+		"--listen", "/ip4/127.0.0.1/tcp/0",
+		"--bind-addr", fmt.Sprintf("127.0.0.1:%d", getFreePort(t)),
+		"--api-token-path", tokenPath(t, "fallback-test-token"),
+	)
 	runCmd.Env = env
-	var stdout safeBuffer
-	runCmd.Stdout = &stdout
-	runCmd.Stderr = &stdout
+	var output safeBuffer
+	runCmd.Stdout = &output
+	runCmd.Stderr = &output
 
 	if err := runCmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	exited := make(chan error, 1)
+	go func() { exited <- runCmd.Wait() }()
 	defer func() {
 		_ = runCmd.Process.Kill()
-		_ = runCmd.Wait()
+		<-exited
 	}()
 
-	// Wait for successful fallback
-	success := false
-	for i := 0; i < 50; i++ {
-		out = stdout.String()
-		if strings.Contains(out, "Fetching latest router addresses via HTTP") &&
-			strings.Contains(out, "Successfully authenticated with router via libp2p") {
-			success = true
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+	select {
+	case <-authenticated:
+	case err := <-exited:
+		t.Fatalf("sam-node run exited (%v) before authenticating with the moved router.\nOutput:\n%s", err, output.String())
+	case <-time.After(5 * time.Second):
+		t.Fatalf("sam-node run never authenticated with the moved router.\nOutput:\n%s", output.String())
+	}
+	if infoRequests.Load() == 0 {
+		t.Fatal("the node reached the moved router without asking the control plane for its address")
 	}
 
-	if !success {
-		t.Fatalf("Failed to detect self-healing HTTP fallback in output.\nOutput:\n%s", out)
+	// Reaching the router is not the end: the node must stay up on it.
+	select {
+	case err := <-exited:
+		t.Fatalf("sam-node run exited (%v) right after authenticating.\nOutput:\n%s", err, output.String())
+	case <-time.After(500 * time.Millisecond):
 	}
 }
