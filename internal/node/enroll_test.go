@@ -532,6 +532,90 @@ func TestEnroll_InvalidControlPlanePublicKeySize(t *testing.T) {
 	}
 }
 
+// TestEnrollTrustsRouterSignedByGraceKey is the hub testnet outage of
+// 2026-09-20: the control plane had rotated its signing key, the routers
+// still presented biscuits signed by the retiring key (legitimately in its
+// grace period), and the enroll response carries only the newest key. A
+// fresh node must fetch the full set from /keys before the router handshake
+// or it refuses every router and enrollment fails.
+func TestEnrollTrustsRouterSignedByGraceKey(t *testing.T) {
+	retiredPub, retiredPriv := mustGenerateKey(t)
+	currentPub, currentPriv := mustGenerateKey(t)
+
+	routerAddr := startMockRouterWithKey(t, retiredPriv, api.RoleRouter)
+
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	privKey := GetOrGenerateKey(store)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read /register body: %v", err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var req api.EnrollRequest
+		if err := proto.Unmarshal(body, &req); err != nil {
+			t.Errorf("decode /register body: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		peerID, err := peer.Decode(req.PeerId)
+		if err != nil {
+			t.Errorf("decode enrolling peer id %q: %v", req.PeerId, err)
+			http.Error(w, "bad peer id", http.StatusBadRequest)
+			return
+		}
+		protoHandler(t, &api.EnrollResponse{
+			BiscuitToken:          mintRoleBiscuit(t, currentPriv, peerID, api.RoleNode),
+			ControlPlanePublicKey: currentPub,
+			RouterAddresses:       []string{routerAddr},
+			Expiration:            time.Now().Add(24 * time.Hour).Unix(),
+		})(w, r)
+	})
+	mux.HandleFunc("/keys", keysHandler(t, []ed25519.PublicKey{retiredPub, currentPub}, []ed25519.PrivateKey{retiredPriv, currentPriv}))
+	cpSrv := httptest.NewServer(mux)
+	defer cpSrv.Close()
+
+	node, err := NewSamNode(Options{
+		PrivKey:       privKey,
+		Store:         store,
+		ListenAddrs:   []string{"/ip4/127.0.0.1/tcp/0"},
+		AllowLoopback: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := node.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = node.Host.Close() }()
+
+	if err := node.Enroll(ctx, cpSrv.URL, "dummy-jwt"); err != nil {
+		t.Fatalf("Enroll must accept a router signed by the key still in grace: %v", err)
+	}
+
+	for _, want := range []ed25519.PublicKey{retiredPub, currentPub} {
+		if !containsTrustedKey(node.trustedKeys, want) {
+			t.Errorf("trust set %d keys, missing %x", len(node.trustedKeys), want)
+		}
+	}
+	stored, err := store.LoadTrustedKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 2 {
+		t.Errorf("persisted trust set has %d keys, want both", len(stored))
+	}
+}
+
 func TestProcessEnrollResponse_Errors(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewStore(dir)

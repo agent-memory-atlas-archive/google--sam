@@ -72,6 +72,19 @@ func (n *SamNode) Enroll(ctx context.Context, controlPlaneURL string, jwt string
 	return n.connectToRouters(ctx, enrollResp.RouterAddresses)
 }
 
+// adoptEnrolledKeys widens the trust set from the single key an enrollment
+// response carries to every key the control plane currently signs with.
+// The router handshake that follows verifies the router's own biscuit, and
+// right after a rotation that is still signed by the retiring key; with only
+// the newest key loaded the node would refuse every router. Best effort: a
+// control plane too old to serve /keys still enrolls with one key.
+func (n *SamNode) adoptEnrolledKeys(ctx context.Context, controlPlaneURL string, newest []byte) {
+	n.addTrustedKey(ed25519.PublicKey(newest))
+	if err := n.syncTrustedKeys(ctx, controlPlaneURL); err != nil {
+		logger.Warnf("Could not fetch the control plane's full key set after enrollment (continuing with the enrollment key only): %v", err)
+	}
+}
+
 // enrollHTTP performs the HTTP half of enrollment for an explicit peer
 // identity, so it can run before the libp2p host exists (startup recovery).
 // privKey signs the proof-of-possession challenge; peerID must be its own.
@@ -123,7 +136,12 @@ func (n *SamNode) enrollHTTP(ctx context.Context, controlPlaneURL, jwt string, p
 		}
 	}()
 
-	return n.processEnrollResponse(resp)
+	enrollResp, err := n.processEnrollResponse(resp)
+	if err != nil {
+		return nil, err
+	}
+	n.adoptEnrolledKeys(ctx, controlPlaneURL, enrollResp.ControlPlanePublicKey)
+	return enrollResp, nil
 }
 
 // ReEnrollWithRefreshToken re-enrolls over HTTP with a JWT from the stored
@@ -190,8 +208,6 @@ func (n *SamNode) processEnrollResponse(resp *http.Response) (*api.EnrollRespons
 	if err := n.Store.SaveMeshConfig(enrollResp.ControlPlanePublicKey, enrollResp.RouterAddresses); err != nil {
 		return nil, fmt.Errorf("failed to save mesh config: %v", err)
 	}
-
-	n.addTrustedKey(ed25519.PublicKey(enrollResp.ControlPlanePublicKey))
 
 	return &enrollResp, nil
 }
@@ -387,7 +403,7 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, b
 		return fmt.Errorf("failed to save mesh config: %v", err)
 	}
 
-	n.addTrustedKey(ed25519.PublicKey(enrollResp.ControlPlanePublicKey))
+	n.adoptEnrolledKeys(ctx, controlPlaneURL, enrollResp.ControlPlanePublicKey)
 
 	// Connect and Auth to router after enrollment to join the mesh
 	if len(enrollResp.RouterAddresses) == 0 {

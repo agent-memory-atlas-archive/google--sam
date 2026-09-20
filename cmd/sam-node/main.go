@@ -53,56 +53,56 @@ func init() {
 }
 
 var (
-	controlPlaneAddr          string
-	joinFlag                  bool
-	jwtFlag                   string
-	jwtPathFlag               string
-	bootstrapTokenFlag        string
-	clientIDFlag              string
-	clientSecretFlag          string
-	controlPlanePublicKeyFlag string
-	bindAddrFlag              string
-	metricsAddrFlag           string
-	socketPathFlag            string
-	meshFlag                  string
-	discoveryIntervalFlag     string
-	listenAddrs               []string
-	enableRelayFlag           bool
-	configFile                string
-	oidcIssuerFlag            string
-	deviceAuthURLFlag         string
-	audienceFlag              string
-	dataDirFlag               string
-	headlessFlag              bool
-	authModeFlag              string
-	insecureControlPlaneFlag  bool
-	daemonizeFlag             bool
-	resetAllFlag              bool
-	assumeYesFlag             bool
-	offlineAccessFlag         bool
-	logLevelFlag              string
-	keyGracePeriodFlag        time.Duration
-	allowLoopbackFlag         bool
-	announcePrivateFlag       bool
-	monitorBootstrapFlag      time.Duration
-	monitorCheckIntervalFlag  time.Duration
-	autoRelayMinIntervalFlag  time.Duration
-	autoRelayBootDelayFlag    time.Duration
-	autoRelayBackoffFlag      time.Duration
-	routerConnectTimeoutFlag  time.Duration
-	apiTokenFlag              string
-	apiTokenPathFlag          string
-	bootstrapTokenPathFlag    string
-	clientSecretPathFlag      string
-	tlsCertFlag               string
-	tlsKeyFlag                string
-	tlsCAFlag                 string
-	dhtProviderAddrTTLFlag    time.Duration
-	dhtMaxRecordAgeFlag       time.Duration
-	dhtLookupLimitFlag        int
-	discoveryConcurrencyFlag  int
-	backendProbeTimeoutFlag   time.Duration
-	policySyncIntervalFlag    time.Duration
+	controlPlaneAddr             string
+	joinFlag                     bool
+	jwtFlag                      string
+	jwtPathFlag                  string
+	bootstrapTokenFlag           string
+	clientIDFlag                 string
+	clientSecretFlag             string
+	controlPlanePublicKeyFlag    string
+	bindAddrFlag                 string
+	metricsAddrFlag              string
+	socketPathFlag               string
+	meshFlag                     string
+	discoveryIntervalFlag        string
+	listenAddrs                  []string
+	enableRelayFlag              bool
+	configFile                   string
+	oidcIssuerFlag               string
+	deviceAuthURLFlag            string
+	audienceFlag                 string
+	dataDirFlag                  string
+	headlessFlag                 bool
+	authModeFlag                 string
+	insecureControlPlaneFlag     bool
+	daemonizeFlag                bool
+	resetAllFlag                 bool
+	assumeYesFlag                bool
+	offlineAccessFlag            bool
+	logLevelFlag                 string
+	keyGracePeriodFlag           time.Duration
+	allowLoopbackFlag            bool
+	announcePrivateFlag          bool
+	monitorBootstrapFlag         time.Duration
+	monitorCheckIntervalFlag     time.Duration
+	autoRelayMinIntervalFlag     time.Duration
+	autoRelayBootDelayFlag       time.Duration
+	autoRelayBackoffFlag         time.Duration
+	routerConnectTimeoutFlag     time.Duration
+	apiTokenFlag                 string
+	apiTokenPathFlag             string
+	bootstrapTokenPathFlag       string
+	clientSecretPathFlag         string
+	tlsCertFlag                  string
+	tlsKeyFlag                   string
+	tlsCAFlag                    string
+	dhtProviderAddrTTLFlag       time.Duration
+	dhtMaxRecordAgeFlag          time.Duration
+	dhtLookupLimitFlag           int
+	discoveryConcurrencyFlag     int
+	backendProbeTimeoutFlag      time.Duration
+	controlPlaneSyncIntervalFlag time.Duration
 )
 
 var logger = golog.Logger("sam-node-cli")
@@ -453,32 +453,32 @@ func main() {
 				}
 				priv := node.GetOrGenerateKey(store)
 				meshNode, err = node.NewSamNode(node.Options{
-					PrivKey:              priv,
-					ControlPlanePubKey:   controlPlanePubKey,
-					RouterAddrs:          routerAddrs,
-					Store:                store,
-					BannedPeerIDs:        bannedPeerIDs,
-					MeshID:               meshFlag,
-					DiscoveryInterval:    discoveryIntervalFlag,
-					ListenAddrs:          listenAddrs,
-					EnableRelay:          enableRelayFlag,
-					NodeConfig:           nodeConfig,
-					KeyGracePeriod:       keyGracePeriodFlag,
-					AllowLoopback:        allowLoopbackFlag,
-					AnnouncePrivateAddrs: &announcePrivateFlag,
-					MonitorBootstrap:     monitorBootstrapFlag,
-					MonitorInterval:      monitorCheckIntervalFlag,
-					AutoRelayMinInterval: autoRelayMinIntervalFlag,
-					AutoRelayBootDelay:   autoRelayBootDelayFlag,
-					AutoRelayBackoff:     autoRelayBackoffFlag,
-					RouterConnectTimeout: routerConnectTimeoutFlag,
-					RequiredRole:         api.RoleNode,
-					PolicySyncInterval:   policySyncIntervalFlag,
-					DHTProviderAddrTTL:   dhtProviderAddrTTLFlag,
-					DHTMaxRecordAge:      dhtMaxRecordAgeFlag,
-					DHTLookupLimit:       dhtLookupLimitFlag,
-					DiscoveryConcurrency: discoveryConcurrencyFlag,
-					BackendProbeTimeout:  backendProbeTimeoutFlag,
+					PrivKey:                  priv,
+					ControlPlanePubKey:       controlPlanePubKey,
+					RouterAddrs:              routerAddrs,
+					Store:                    store,
+					BannedPeerIDs:            bannedPeerIDs,
+					MeshID:                   meshFlag,
+					DiscoveryInterval:        discoveryIntervalFlag,
+					ListenAddrs:              listenAddrs,
+					EnableRelay:              enableRelayFlag,
+					NodeConfig:               nodeConfig,
+					KeyGracePeriod:           keyGracePeriodFlag,
+					AllowLoopback:            allowLoopbackFlag,
+					AnnouncePrivateAddrs:     &announcePrivateFlag,
+					MonitorBootstrap:         monitorBootstrapFlag,
+					MonitorInterval:          monitorCheckIntervalFlag,
+					AutoRelayMinInterval:     autoRelayMinIntervalFlag,
+					AutoRelayBootDelay:       autoRelayBootDelayFlag,
+					AutoRelayBackoff:         autoRelayBackoffFlag,
+					RouterConnectTimeout:     routerConnectTimeoutFlag,
+					RequiredRole:             api.RoleNode,
+					ControlPlaneSyncInterval: controlPlaneSyncIntervalFlag,
+					DHTProviderAddrTTL:       dhtProviderAddrTTLFlag,
+					DHTMaxRecordAge:          dhtMaxRecordAgeFlag,
+					DHTLookupLimit:           dhtLookupLimitFlag,
+					DiscoveryConcurrency:     discoveryConcurrencyFlag,
+					BackendProbeTimeout:      backendProbeTimeoutFlag,
 				})
 				if err != nil {
 					logger.Fatalf("Failed to initialize mesh node: %v", err)
@@ -522,31 +522,31 @@ func main() {
 				priv := node.GetOrGenerateKey(store)
 				enrollCtx, enrollCancel := context.WithCancel(context.Background())
 				meshNode, err = node.NewSamNode(node.Options{
-					PrivKey:              priv,
-					RouterAddrs:          initRouterAddrs,
-					Store:                store,
-					BannedPeerIDs:        bannedPeerIDs,
-					MeshID:               meshFlag,
-					DiscoveryInterval:    discoveryIntervalFlag,
-					ListenAddrs:          listenAddrs,
-					EnableRelay:          enableRelayFlag,
-					NodeConfig:           nodeConfig,
-					KeyGracePeriod:       keyGracePeriodFlag,
-					AllowLoopback:        allowLoopbackFlag,
-					AnnouncePrivateAddrs: &announcePrivateFlag,
-					MonitorBootstrap:     monitorBootstrapFlag,
-					MonitorInterval:      monitorCheckIntervalFlag,
-					AutoRelayMinInterval: autoRelayMinIntervalFlag,
-					AutoRelayBootDelay:   autoRelayBootDelayFlag,
-					AutoRelayBackoff:     autoRelayBackoffFlag,
-					RouterConnectTimeout: routerConnectTimeoutFlag,
-					RequiredRole:         api.RoleNode,
-					PolicySyncInterval:   policySyncIntervalFlag,
-					DHTProviderAddrTTL:   dhtProviderAddrTTLFlag,
-					DHTMaxRecordAge:      dhtMaxRecordAgeFlag,
-					DHTLookupLimit:       dhtLookupLimitFlag,
-					DiscoveryConcurrency: discoveryConcurrencyFlag,
-					BackendProbeTimeout:  backendProbeTimeoutFlag,
+					PrivKey:                  priv,
+					RouterAddrs:              initRouterAddrs,
+					Store:                    store,
+					BannedPeerIDs:            bannedPeerIDs,
+					MeshID:                   meshFlag,
+					DiscoveryInterval:        discoveryIntervalFlag,
+					ListenAddrs:              listenAddrs,
+					EnableRelay:              enableRelayFlag,
+					NodeConfig:               nodeConfig,
+					KeyGracePeriod:           keyGracePeriodFlag,
+					AllowLoopback:            allowLoopbackFlag,
+					AnnouncePrivateAddrs:     &announcePrivateFlag,
+					MonitorBootstrap:         monitorBootstrapFlag,
+					MonitorInterval:          monitorCheckIntervalFlag,
+					AutoRelayMinInterval:     autoRelayMinIntervalFlag,
+					AutoRelayBootDelay:       autoRelayBootDelayFlag,
+					AutoRelayBackoff:         autoRelayBackoffFlag,
+					RouterConnectTimeout:     routerConnectTimeoutFlag,
+					RequiredRole:             api.RoleNode,
+					ControlPlaneSyncInterval: controlPlaneSyncIntervalFlag,
+					DHTProviderAddrTTL:       dhtProviderAddrTTLFlag,
+					DHTMaxRecordAge:          dhtMaxRecordAgeFlag,
+					DHTLookupLimit:           dhtLookupLimitFlag,
+					DiscoveryConcurrency:     discoveryConcurrencyFlag,
+					BackendProbeTimeout:      backendProbeTimeoutFlag,
 				})
 				if err != nil {
 					enrollCancel()
@@ -592,28 +592,28 @@ func main() {
 
 				logger.Debugf("listenAddrs: %v, allowLoopback: %v", listenAddrs, allowLoopbackFlag)
 				meshNode, err = node.NewSamNode(node.Options{
-					PrivKey:              priv,
-					ControlPlanePubKey:   controlPlanePubKey,
-					RouterAddrs:          newRouterAddrs,
-					Store:                store,
-					BannedPeerIDs:        bannedPeerIDs,
-					MeshID:               meshFlag,
-					DiscoveryInterval:    discoveryIntervalFlag,
-					ListenAddrs:          listenAddrs,
-					EnableRelay:          enableRelayFlag,
-					NodeConfig:           nodeConfig,
-					KeyGracePeriod:       keyGracePeriodFlag,
-					AllowLoopback:        allowLoopbackFlag,
-					AnnouncePrivateAddrs: &announcePrivateFlag,
-					MonitorBootstrap:     monitorBootstrapFlag,
-					MonitorInterval:      monitorCheckIntervalFlag,
-					AutoRelayMinInterval: autoRelayMinIntervalFlag,
-					AutoRelayBootDelay:   autoRelayBootDelayFlag,
-					AutoRelayBackoff:     autoRelayBackoffFlag,
-					RouterConnectTimeout: routerConnectTimeoutFlag,
-					RequiredRole:         api.RoleNode,
-					PolicySyncInterval:   policySyncIntervalFlag,
-					BackendProbeTimeout:  backendProbeTimeoutFlag,
+					PrivKey:                  priv,
+					ControlPlanePubKey:       controlPlanePubKey,
+					RouterAddrs:              newRouterAddrs,
+					Store:                    store,
+					BannedPeerIDs:            bannedPeerIDs,
+					MeshID:                   meshFlag,
+					DiscoveryInterval:        discoveryIntervalFlag,
+					ListenAddrs:              listenAddrs,
+					EnableRelay:              enableRelayFlag,
+					NodeConfig:               nodeConfig,
+					KeyGracePeriod:           keyGracePeriodFlag,
+					AllowLoopback:            allowLoopbackFlag,
+					AnnouncePrivateAddrs:     &announcePrivateFlag,
+					MonitorBootstrap:         monitorBootstrapFlag,
+					MonitorInterval:          monitorCheckIntervalFlag,
+					AutoRelayMinInterval:     autoRelayMinIntervalFlag,
+					AutoRelayBootDelay:       autoRelayBootDelayFlag,
+					AutoRelayBackoff:         autoRelayBackoffFlag,
+					RouterConnectTimeout:     routerConnectTimeoutFlag,
+					RequiredRole:             api.RoleNode,
+					ControlPlaneSyncInterval: controlPlaneSyncIntervalFlag,
+					BackendProbeTimeout:      backendProbeTimeoutFlag,
 				})
 				if err != nil {
 					logger.Fatalf("Failed to initialize node after enrollment: %v", err)
@@ -736,25 +736,25 @@ func main() {
 
 			priv := node.GetOrGenerateKey(store)
 			meshNode, err := node.NewSamNode(node.Options{
-				PrivKey:              priv,
-				RouterAddrs:          initRouterAddrs,
-				Store:                store,
-				MeshID:               meshFlag,
-				DiscoveryInterval:    discoveryIntervalFlag,
-				ListenAddrs:          []string{"/ip4/0.0.0.0/udp/0/quic-v1", "/ip4/0.0.0.0/tcp/0"},
-				EnableRelay:          enableRelayFlag,
-				NodeConfig:           nodeConfig,
-				KeyGracePeriod:       keyGracePeriodFlag,
-				AllowLoopback:        allowLoopbackFlag,
-				AnnouncePrivateAddrs: &announcePrivateFlag,
-				MonitorBootstrap:     2 * time.Minute,
-				MonitorInterval:      1 * time.Minute,
-				AutoRelayMinInterval: 30 * time.Second,
-				AutoRelayBootDelay:   0 * time.Second,
-				AutoRelayBackoff:     3 * time.Second,
-				RouterConnectTimeout: routerConnectTimeoutFlag,
-				RequiredRole:         api.RoleNode,
-				PolicySyncInterval:   policySyncIntervalFlag,
+				PrivKey:                  priv,
+				RouterAddrs:              initRouterAddrs,
+				Store:                    store,
+				MeshID:                   meshFlag,
+				DiscoveryInterval:        discoveryIntervalFlag,
+				ListenAddrs:              []string{"/ip4/0.0.0.0/udp/0/quic-v1", "/ip4/0.0.0.0/tcp/0"},
+				EnableRelay:              enableRelayFlag,
+				NodeConfig:               nodeConfig,
+				KeyGracePeriod:           keyGracePeriodFlag,
+				AllowLoopback:            allowLoopbackFlag,
+				AnnouncePrivateAddrs:     &announcePrivateFlag,
+				MonitorBootstrap:         2 * time.Minute,
+				MonitorInterval:          1 * time.Minute,
+				AutoRelayMinInterval:     30 * time.Second,
+				AutoRelayBootDelay:       0 * time.Second,
+				AutoRelayBackoff:         3 * time.Second,
+				RouterConnectTimeout:     routerConnectTimeoutFlag,
+				RequiredRole:             api.RoleNode,
+				ControlPlaneSyncInterval: controlPlaneSyncIntervalFlag,
 			})
 			if err != nil {
 				logger.Fatalf("Failed to initialize node for enrollment: %v", err)
@@ -875,7 +875,7 @@ func main() {
 	runCmd.Flags().DurationVar(&dhtMaxRecordAgeFlag, "dht-max-record-age", 0, "Maximum age for DHT records (0s uses library default)")
 	runCmd.Flags().IntVar(&dhtLookupLimitFlag, "dht-lookup-limit", 0, "Maximum number of providers to query from the DHT (0 uses default 20)")
 	runCmd.Flags().IntVar(&discoveryConcurrencyFlag, "discovery-concurrency", 0, "Max concurrent catalog fetches during discovery (0 uses default 10)")
-	runCmd.Flags().DurationVar(&policySyncIntervalFlag, "policy-sync-interval", 1*time.Hour, "Interval for syncing mesh policy from the control plane")
+	runCmd.Flags().DurationVar(&controlPlaneSyncIntervalFlag, "control-plane-sync-interval", node.DefaultControlPlaneSyncInterval, "How often signing keys, bans, router addresses and mesh policy are pulled from the control plane")
 	runCmd.Flags().DurationVar(&backendProbeTimeoutFlag, "backend-probe-timeout", 0, "Timeout for probing a command-spawned service backend before advertising it (0 uses default 2s); raise this for backends with slower cold-start times")
 	rootCmd.PersistentFlags().StringVar(&controlPlaneAddr, "control-plane", "", "Control plane URL")
 	rootCmd.PersistentFlags().BoolVar(&insecureControlPlaneFlag, "insecure-control-plane", false, "Accept a plaintext http:// control plane URL to a non-loopback host (whoever answers it becomes this node's trust root; only for networks you already trust)")

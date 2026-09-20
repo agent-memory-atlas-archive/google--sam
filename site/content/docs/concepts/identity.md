@@ -129,10 +129,12 @@ The control plane rotates its signing key every `--key-rotation-interval`
 (24 hours by default). The previous key stays valid for `--key-grace-period`
 (1 hour by default) and is then retired. `GET /keys` returns the current set
 of keys, signed by each key in the set. Routers poll it every
-`--keys-sync-interval`. Nodes fetch it at start and when they receive a
-rotation event. Both accept a new set only if one of its signatures verifies
-under a key they already trust. The first key comes from enrollment, and
-each later key is vouched for by the key it replaces.
+`--keys-sync-interval`; nodes fetch it at enrollment and then every
+`--control-plane-sync-interval`, together with the ban set and the mesh
+policy. A rotation event only brings the next pull forward. Both accept a
+new set only if one of its signatures verifies under a key they already
+trust. The first key comes from enrollment, and each later key is vouched
+for by the key it replaces.
 
 Nobody can verify a credential signed by a retired key, including the
 control plane. A node that was offline for a whole grace period therefore

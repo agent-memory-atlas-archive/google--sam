@@ -28,6 +28,8 @@ import (
 	"time"
 
 	"github.com/google/sam/api"
+	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -58,6 +60,263 @@ func TestMergeTrustedKeys(t *testing.T) {
 			t.Error("key expired at the control plane must be dropped")
 		}
 	}
+}
+
+// mustGenerateKey is an ed25519 key pair or a failed test.
+func mustGenerateKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("ed25519.GenerateKey: %v", err)
+	}
+	return pub, priv
+}
+
+// keysServer serves /keys with the given set, signed by the matching private
+// keys; a nil signer leaves the answer unsigned.
+func keysServer(t *testing.T, pubs []ed25519.PublicKey, privs []ed25519.PrivateKey) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(keysHandler(t, pubs, privs))
+}
+
+func keysHandler(t *testing.T, pubs []ed25519.PublicKey, privs []ed25519.PrivateKey) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		resp := &api.KeysResponse{}
+		for _, p := range pubs {
+			resp.PublicKeys = append(resp.PublicKeys, p)
+		}
+		if privs != nil {
+			if err := api.SignKeysResponse(resp, privs, time.Now()); err != nil {
+				t.Errorf("SignKeysResponse: %v", err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		protoHandler(t, resp)(w, r)
+	}
+}
+
+// protoHandler answers with msg; a marshal failure fails the test rather
+// than handing the client an empty body it might accept.
+func protoHandler(t *testing.T, msg proto.Message) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		data, err := proto.Marshal(msg)
+		if err != nil {
+			t.Errorf("proto.Marshal(%T): %v", msg, err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		if _, err := w.Write(data); err != nil {
+			t.Errorf("write %T: %v", msg, err)
+		}
+	}
+}
+
+func TestSyncTrustedKeys(t *testing.T) {
+	retiredPub, retiredPriv := mustGenerateKey(t)
+	currentPub, currentPriv := mustGenerateKey(t)
+	strangerPub, strangerPriv := mustGenerateKey(t)
+
+	newNode := func(t *testing.T) *SamNode {
+		store, err := NewStore(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = store.Close() })
+		return &SamNode{Store: store, trustedKeys: []TrustedKey{{Key: currentPub, ReceivedAt: time.Now()}}}
+	}
+
+	t.Run("adopts the set a trusted key vouches for", func(t *testing.T) {
+		srv := keysServer(t, []ed25519.PublicKey{retiredPub, currentPub}, []ed25519.PrivateKey{retiredPriv, currentPriv})
+		defer srv.Close()
+		n := newNode(t)
+		if err := n.syncTrustedKeys(context.Background(), srv.URL); err != nil {
+			t.Fatalf("syncTrustedKeys: %v", err)
+		}
+		if len(n.trustedKeys) != 2 || !containsTrustedKey(n.trustedKeys, retiredPub) || !containsTrustedKey(n.trustedKeys, currentPub) {
+			t.Errorf("trust set = %d keys, want retired and current", len(n.trustedKeys))
+		}
+		stored, err := n.Store.LoadTrustedKeys()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(stored) != 2 {
+			t.Errorf("persisted %d keys, want 2", len(stored))
+		}
+	})
+
+	t.Run("rejects a set no trusted key signed", func(t *testing.T) {
+		srv := keysServer(t, []ed25519.PublicKey{strangerPub}, []ed25519.PrivateKey{strangerPriv})
+		defer srv.Close()
+		n := newNode(t)
+		if err := n.syncTrustedKeys(context.Background(), srv.URL); err == nil {
+			t.Fatal("a /keys answer signed only by an unknown key must not be adopted")
+		}
+		if len(n.trustedKeys) != 1 || !n.trustedKeys[0].Key.Equal(currentPub) {
+			t.Errorf("trust set changed on a rejected answer: %d keys", len(n.trustedKeys))
+		}
+	})
+
+	t.Run("rejects an unsigned set", func(t *testing.T) {
+		srv := keysServer(t, []ed25519.PublicKey{currentPub, strangerPub}, nil)
+		defer srv.Close()
+		n := newNode(t)
+		if err := n.syncTrustedKeys(context.Background(), srv.URL); err == nil {
+			t.Fatal("an unsigned /keys answer must not be adopted")
+		}
+		if containsTrustedKey(n.trustedKeys, strangerPub) {
+			t.Error("unsigned answer widened the trust set")
+		}
+	})
+
+	t.Run("nothing trusted yet is an error, not a wipe", func(t *testing.T) {
+		srv := keysServer(t, []ed25519.PublicKey{currentPub}, []ed25519.PrivateKey{currentPriv})
+		defer srv.Close()
+		n := newNode(t)
+		n.trustedKeys = nil
+		if err := n.syncTrustedKeys(context.Background(), srv.URL); err == nil {
+			t.Fatal("with no trusted key there is nothing to verify /keys against")
+		}
+	})
+}
+
+// A ban the control plane holds is applied, one it no longer holds is lifted,
+// and one recorded after the answer was requested is left alone: the answer
+// predates it and cannot speak to it.
+func TestReconcileBannedPeers(t *testing.T) {
+	stillBanned := randomPeerID(t)
+	unbanned := randomPeerID(t)
+	newlyBanned := randomPeerID(t)
+	bannedAfterFetch := randomPeerID(t)
+
+	cache, err := lru.New[string, int64](10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := &SamNode{revokedPeers: cache}
+	fetchedAt := time.Now()
+	n.revokedPeers.Add(stillBanned.String(), fetchedAt.Add(-time.Hour).UnixMilli())
+	n.revokedPeers.Add(unbanned.String(), fetchedAt.Add(-time.Hour).UnixMilli())
+	n.revokedPeers.Add(bannedAfterFetch.String(), fetchedAt.UnixMilli())
+
+	n.reconcileBannedPeers([]string{stillBanned.String(), newlyBanned.String(), "not-a-peer-id"}, fetchedAt)
+
+	for _, want := range []peer.ID{stillBanned, newlyBanned, bannedAfterFetch} {
+		if !n.revokedPeers.Contains(want.String()) {
+			t.Errorf("%s must be banned after reconciliation", want)
+		}
+	}
+	if n.revokedPeers.Contains(unbanned.String()) {
+		t.Error("a peer absent from the control plane's ban set must be unbanned")
+	}
+}
+
+// One pull brings keys, bans and policy together, and a failing part does
+// not stop the others from landing.
+func TestSyncControlPlane(t *testing.T) {
+	oldPub, oldPriv := mustGenerateKey(t)
+	newPub, newPriv := mustGenerateKey(t)
+	banned := randomPeerID(t)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/keys", keysHandler(t, []ed25519.PublicKey{oldPub, newPub}, []ed25519.PrivateKey{oldPriv, newPriv}))
+	mux.HandleFunc("/info", protoHandler(t, &api.ControlPlaneInfoResponse{
+		RouterAddresses: []string{"/ip4/10.0.0.1/tcp/4501/p2p/" + randomPeerID(t).String()},
+		BannedPeerIds:   []string{banned.String()},
+	}))
+	mux.HandleFunc("/policies", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "policy store down", http.StatusInternalServerError)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.SaveControlPlaneURL(srv.URL); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveMeshConfig(oldPub, nil); err != nil {
+		t.Fatal(err)
+	}
+	cache, err := lru.New[string, int64](10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := &SamNode{Store: store, revokedPeers: cache, trustedKeys: []TrustedKey{{Key: oldPub, ReceivedAt: time.Now()}}}
+	n.SetIdentityCache([]byte("identity"))
+
+	err = n.syncControlPlane(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "policy") {
+		t.Fatalf("syncControlPlane = %v, want the policy failure reported", err)
+	}
+	if !containsTrustedKey(n.trustedKeys, newPub) {
+		t.Error("rotated key not learned although /keys answered")
+	}
+	if !n.revokedPeers.Contains(banned.String()) {
+		t.Error("ban not applied although /info answered")
+	}
+	_, addrs, err := store.LoadMeshConfig()
+	if err != nil {
+		t.Fatalf("LoadMeshConfig: %v", err)
+	}
+	if len(addrs) != 1 {
+		t.Errorf("router addresses not persisted: got %v, want 1", addrs)
+	}
+}
+
+// The loop is what turns a missed gossip event into a delay rather than a
+// permanent split: a running node picks the successor key up on its own, and
+// a trigger brings the next pull forward.
+func TestControlPlaneSyncLoop(t *testing.T) {
+	oldPub, oldPriv := mustGenerateKey(t)
+	newPub, newPriv := mustGenerateKey(t)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/keys", keysHandler(t, []ed25519.PublicKey{oldPub, newPub}, []ed25519.PrivateKey{oldPriv, newPriv}))
+	mux.HandleFunc("/info", protoHandler(t, &api.ControlPlaneInfoResponse{}))
+	mux.HandleFunc("/policies", protoHandler(t, &api.PolicyConfigGetResponse{}))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.SaveControlPlaneURL(srv.URL); err != nil {
+		t.Fatal(err)
+	}
+
+	n := &SamNode{
+		Store:                   store,
+		trustedKeys:             []TrustedKey{{Key: oldPub, ReceivedAt: time.Now()}},
+		controlPlaneSyncTrigger: make(chan struct{}, 1),
+		config:                  Options{ControlPlaneSyncJitter: time.Millisecond},
+	}
+	n.SetIdentityCache([]byte("identity"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// A long interval: only the trigger can make the first pull happen in time.
+	n.startControlPlaneSyncLoop(ctx, time.Hour)
+	n.triggerControlPlaneSync()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		n.keysMu.RLock()
+		learned := containsTrustedKey(n.trustedKeys, newPub)
+		n.keysMu.RUnlock()
+		if learned {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("triggered control plane sync never picked up the rotated key")
 }
 
 func TestFetchControlPlaneInfo(t *testing.T) {

@@ -89,6 +89,11 @@ const (
 
 	// Key pruning
 	KeyPruningInterval = 1 * time.Hour
+	// DefaultControlPlaneSyncInterval matches the router's --keys-sync-interval:
+	// well inside the control plane's default 1h key grace period, so a node
+	// has several chances to learn a successor key while its predecessor can
+	// still vouch for it.
+	DefaultControlPlaneSyncInterval = 5 * time.Minute
 
 	// Reprovide interval
 	ReprovideInterval = 5 * time.Minute
@@ -172,13 +177,14 @@ type SamNode struct {
 	BoundSocketPath  string
 	AllowLoopback    bool
 
-	authSuccess      chan struct{}
-	authOnce         sync.Once
-	currentRelays    []peer.AddrInfo
-	reprovideTrigger chan struct{}
-	BiscuitTimeout   time.Duration
-	cachedIdentity   atomic.Value
-	logger           *golog.ZapEventLogger
+	authSuccess             chan struct{}
+	authOnce                sync.Once
+	currentRelays           []peer.AddrInfo
+	reprovideTrigger        chan struct{}
+	controlPlaneSyncTrigger chan struct{}
+	BiscuitTimeout          time.Duration
+	cachedIdentity          atomic.Value
+	logger                  *golog.ZapEventLogger
 
 	// metricsRegistry holds this node's state collector; see metricsHandler.
 	metricsOnce     sync.Once
@@ -285,17 +291,18 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 	}
 
 	node := &SamNode{
-		config:               cfg,
-		Store:                cfg.Store,
-		trustedKeys:          trustedKeys,
-		peerLastEventTime:    make(map[string]int64),
-		authenticatedRouters: make(map[peer.ID]bool),
-		nodeConfig:           cfg.NodeConfig,
-		AllowLoopback:        cfg.AllowLoopback,
-		authSuccess:          make(chan struct{}),
-		reprovideTrigger:     make(chan struct{}, 1),
-		BiscuitTimeout:       cfg.BiscuitTimeout,
-		logger:               golog.Logger("sam-node"),
+		config:                  cfg,
+		Store:                   cfg.Store,
+		trustedKeys:             trustedKeys,
+		peerLastEventTime:       make(map[string]int64),
+		authenticatedRouters:    make(map[peer.ID]bool),
+		nodeConfig:              cfg.NodeConfig,
+		AllowLoopback:           cfg.AllowLoopback,
+		authSuccess:             make(chan struct{}),
+		reprovideTrigger:        make(chan struct{}, 1),
+		controlPlaneSyncTrigger: make(chan struct{}, 1),
+		BiscuitTimeout:          cfg.BiscuitTimeout,
+		logger:                  golog.Logger("sam-node"),
 	}
 
 	var err error
@@ -660,8 +667,9 @@ func (n *SamNode) Start(ctx context.Context) error {
 	// Periodically and on-demand reprovide registered services to the DHT
 	n.startReprovideLoop(ctx, ReprovideInterval)
 
-	// Periodically sync mesh policy
-	n.startPolicySyncLoop(ctx, n.config.PolicySyncInterval)
+	// Everything read from the control plane (keys, bans, router addresses,
+	// policy) in one loop; gossip events only bring the next pull forward.
+	n.startControlPlaneSyncLoop(ctx, n.config.ControlPlaneSyncInterval)
 
 	// Periodically self-report local services to the control plane, so an
 	// admin can see mesh-wide service topology.
@@ -1337,23 +1345,7 @@ func (n *SamNode) listenForControlPlaneEvents(ctx context.Context) {
 			n.handleKeyRotationEvent(&event)
 		case api.MeshEvent_POLICY_UPDATE:
 			logger.Infow("[Mesh Event] policy update received, triggering sync", "event", meshEventPolicyUpdate, "peer", msg.ReceivedFrom.String())
-			go func() {
-				maxJitter := n.config.PolicySyncJitter
-				if maxJitter <= 0 {
-					maxJitter = 10 * time.Second
-				}
-				jitter := time.Duration(rand.Int63n(int64(maxJitter)))
-				timer := time.NewTimer(jitter)
-				defer timer.Stop()
-				select {
-				case <-timer.C:
-				case <-ctx.Done():
-					return
-				}
-				if err := n.syncMeshPolicy(ctx); err != nil {
-					logger.Warnf("Failed to sync mesh policy after event: %v", err)
-				}
-			}()
+			n.triggerControlPlaneSync()
 		}
 	}
 }
@@ -1379,18 +1371,9 @@ func (n *SamNode) handleBannedEvent(event *api.MeshEvent) {
 	n.mu.Unlock()
 
 	logger.Infow("[Mesh Event] peer banned", "event", meshEventBanned, "peer", canonicalID)
-
-	if n.revokedPeers != nil {
-		n.revokedPeers.Add(canonicalID, event.Timestamp)
-	}
-	// Drop any prior admission, otherwise the relay ACL keeps honouring it.
-	// The cache entry above is not written to disk: a restarted node picks the
-	// ban back up from the control plane's ban set in /info (see
-	// SyncMeshConfig), which is also how an unban reaches it.
-	n.authPeers.Delete(p)
-	if n.Host != nil {
-		_ = n.Host.Network().ClosePeer(p)
-	}
+	// Not written to disk: a restarted node picks the ban back up from the
+	// control plane's ban set in /info, which is also how an unban reaches it.
+	n.banPeer(p, event.Timestamp)
 }
 
 func containsTrustedKey(keys []TrustedKey, key ed25519.PublicKey) bool {
@@ -2364,38 +2347,6 @@ func (n *SamNode) startCatalogReportLoop(ctx context.Context, initialDelay, inte
 				failures++
 			} else {
 				failures = 0
-			}
-		}
-	}()
-}
-
-func (n *SamNode) startPolicySyncLoop(ctx context.Context, interval time.Duration) {
-	if interval <= 0 {
-		interval = 1 * time.Hour
-	}
-
-	go func() {
-		// Run initial sync after a short delay
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(2 * time.Second):
-			if err := n.syncMeshPolicy(ctx); err != nil {
-				logger.Warnf("Initial mesh policy sync failed: %v", err)
-			}
-		}
-
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if err := n.syncMeshPolicy(ctx); err != nil {
-					logger.Warnf("Periodic mesh policy sync failed: %v", err)
-				}
 			}
 		}
 	}()
