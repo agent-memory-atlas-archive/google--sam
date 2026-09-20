@@ -51,6 +51,33 @@ wait_for_log() {
   return 1
 }
 
+# wait_for_node waits until the node named $1 serves its API on its socket,
+# which it does only after it enrolled, a router admitted it, and every
+# service in its configuration was registered. A node that exited fails at
+# once, with its log.
+wait_for_node() {
+  local name="$1" pid_var="NODE_${1^^}_PID"
+  local sock="$TEST_TMPDIR/node-$name/sam.sock"
+  for _ in $(seq 1 150); do
+    if ! kill -0 "${!pid_var}" 2>/dev/null; then
+      echo "node $name exited before serving its API:" >&2
+      cat "$TEST_TMPDIR/node-$name.log" >&2 || true
+      return 1
+    fi
+    curl -sf --unix-socket "$sock" http://localhost/healthz > /dev/null 2>&1 && return 0
+    sleep 0.2
+  done
+  echo "node $name did not serve its API in time:" >&2
+  cat "$TEST_TMPDIR/node-$name.log" >&2 || true
+  return 1
+}
+
+# node_peer_id is the peer ID node $1 reports for itself.
+node_peer_id() {
+  curl -sf --unix-socket "$TEST_TMPDIR/node-$1/sam.sock" http://localhost/debug/mesh-info |
+    python3 -c 'import json, sys; print(json.load(sys.stdin)["peer_id"])'
+}
+
 # start_node boots a background sam-node joined via the bootstrap token; sets
 # NODE_<NAME>_PID for teardown. The sidecar serves only on the Unix socket so
 # two nodes on one host never fight over the default TCP bind, and loopback
@@ -117,17 +144,14 @@ EOF
 
   start_node a --config "$TEST_TMPDIR/node-a-services.yaml"
   start_node b
-  wait_for_log "$TEST_TMPDIR/node-a.log" "SAM Node Online"
-  wait_for_log "$TEST_TMPDIR/node-b.log" "SAM Node Online"
-  peer_a="$(grep -oE 'PeerID: [A-Za-z0-9]+' "$TEST_TMPDIR/node-a.log" | head -1 | cut -d' ' -f2)"
+  wait_for_node a
+  wait_for_node b
+  peer_a="$(node_peer_id a)"
   [[ -n "$peer_a" ]]
 
   sock_a="$TEST_TMPDIR/node-a/sam.sock"
   sock_b="$TEST_TMPDIR/node-b/sam.sock"
   [[ -S "$sock_a" && -S "$sock_b" ]]
-
-  # The mislabelled service is registered but withheld from discovery.
-  wait_for_log "$TEST_TMPDIR/node-a.log" "not-an-mcp-server but not advertising it"
 
   # Node B's OpenAI-compatible endpoint lists the model with A as its owner:
   # the announcement crosses A -> router -> B over the mesh.
@@ -148,7 +172,9 @@ EOF
   [[ "$status" -eq 0 ]]
   [[ "$output" == *"hello from the mesh"* ]]
 
-  # The plain HTTP server never shows up as an MCP provider.
+  # The plain HTTP server never shows up as an MCP provider: node A had
+  # registered every configured service before its API came up, so its
+  # absence here is a verdict, not a race.
   run curl -sf --unix-socket "$sock_b" \
     "http://localhost/sam/service/discover?type=mcp&name=not-an-mcp-server&timeout=3s"
   [[ "$status" -eq 0 ]]

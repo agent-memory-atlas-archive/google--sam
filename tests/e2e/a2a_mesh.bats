@@ -20,7 +20,7 @@ start_a2a_echo() {
     --network-alias a2a-echo \
     "${A2A_ECHO_IMAGE}" >/dev/null
   MESH_CONTAINERS+=("${name}")
-  mesh_wait_for_log "${name}" "Uvicorn running on" 30
+  mesh_wait_for_http "http://a2a-echo:7777/" 30
 }
 
 setup() {
@@ -43,8 +43,7 @@ teardown() {
 
   echo "[$(date +%T)] Starting Node 1 (consumer)"
   mesh_start_node 1 "--log-level debug"
-  mesh_wait_for_log "${MESH_PREFIX}-node-1" "SAM Node Online" 60
-  mesh_wait_for_mcp_ready 1 20
+  mesh_wait_for_mcp_ready 1 60
 
   echo "[$(date +%T)] Starting a2a echo agent backend"
   start_a2a_echo
@@ -53,15 +52,14 @@ teardown() {
   mesh_start_node 2 \
     "--log-level debug" \
     "tests/e2e/docker/a2a-echo/sam-node-config.yaml"
-  mesh_wait_for_log "${MESH_PREFIX}-node-2" "SAM Node Online" 20
-  mesh_wait_for_mcp_ready 2 20
+  mesh_wait_for_mcp_ready 2 30
 
   local node2_peer_id
-  node2_peer_id=$(docker logs "${MESH_PREFIX}-node-2" 2>&1 | grep "PeerID:" | head -n 1 | awk '{print $2}' | tr -d '\r')
+  node2_peer_id=$(mesh_node_peer_id 2)
+  [[ -n "${node2_peer_id}" ]]
 
   echo "[$(date +%T)] Connecting Node 1 to Node 2"
-  local node2_addr="/dns4/${MESH_PREFIX}-node-2/tcp/5002/p2p/${node2_peer_id}"
-  run mesh_connect_peer 1 "${node2_addr}"
+  run mesh_connect_peer 1 "$(mesh_node_addr 2)"
   [[ "$status" -eq 0 ]]
   mesh_wait_for_peer_connection 1 "${node2_peer_id}" 20
 

@@ -37,8 +37,7 @@ agent_curl() {
   # HOME is unwritable and the default location cannot be created.
   mesh_start_node 1 "--socket-path /sockets/node.sock --data-dir /sockets/node-data" "" \
     "-v ${MESH_SOCKET_DIR}:/sockets --user $(id -u):$(id -g) -e HOME=/sockets"
-  mesh_wait_for_log "${MESH_PREFIX}-node-1" "SAM Node Online" 60
-  mesh_wait_for_mcp_ready 1 20
+  mesh_wait_for_mcp_ready 1 60
 
   # The gateway consumes the node. It has no network either: the node's socket
   # is the only thing it needs.

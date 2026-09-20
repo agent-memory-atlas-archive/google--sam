@@ -24,8 +24,7 @@ teardown() {
   mesh_start_node 1 "--log-level debug"
 
   local node1_name="${MESH_PREFIX}-node-1"
-  mesh_wait_for_log "${node1_name}" "SAM Node Online" 20
-  mesh_wait_for_mcp_ready 1 20
+  mesh_wait_for_mcp_ready 1 30
 
   # Run the agent_demo.py snippet inside a container
   run docker run --rm \
