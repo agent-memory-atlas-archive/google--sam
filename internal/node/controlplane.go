@@ -26,94 +26,35 @@ import (
 	"time"
 
 	"github.com/google/sam/api"
-	"github.com/multiformats/go-multiaddr"
+	cpclient "github.com/google/sam/internal/controlplane/client"
 	"google.golang.org/protobuf/proto"
 )
 
 // maxControlPlaneBodyBytes caps every response body read from the control
 // plane or an IdP: a misbehaving or impersonated server must not be able to
-// make the node buffer arbitrary amounts of memory.
-const maxControlPlaneBodyBytes = 1 << 20
+// make the node buffer arbitrary amounts of memory. Bodies that carry a
+// message go through cpclient.ReadBody, which turns an oversized answer into
+// an error rather than a truncated message.
+const maxControlPlaneBodyBytes = cpclient.MaxBodyBytes
+
+// controlPlaneClient speaks the pull endpoints of controlPlaneURL through the
+// node's transport policy.
+func controlPlaneClient(controlPlaneURL string) *cpclient.Client {
+	return cpclient.New(controlPlaneURL, controlPlaneHTTPClient(10*time.Second))
+}
 
 // FetchControlPlaneInfo retrieves the latest configuration from the control plane's /info endpoint.
 func FetchControlPlaneInfo(ctx context.Context, controlPlaneURL string) (*api.ControlPlaneInfoResponse, error) {
-	if !strings.HasPrefix(controlPlaneURL, "http://") && !strings.HasPrefix(controlPlaneURL, "https://") {
-		controlPlaneURL = "https://" + controlPlaneURL
-	}
-	controlPlaneURL = strings.TrimSuffix(controlPlaneURL, "/")
-
-	urlStr := controlPlaneURL + "/info"
-	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
-	}
-
-	client := controlPlaneHTTPClient(10 * time.Second)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP request failed: %w", err)
-	}
-	defer resp.Body.Close() //nolint:errcheck
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("control plane returned status %s: %s", resp.Status, string(body))
-	}
-
-	var info api.ControlPlaneInfoResponse
-	if err := proto.Unmarshal(body, &info); err != nil {
-		return nil, fmt.Errorf("failed to decode /info response: %w", err)
-	}
-
-	return &info, nil
+	return controlPlaneClient(controlPlaneURL).FetchInfo(ctx)
 }
 
 // FetchControlPlaneKeys retrieves the full set of currently valid control
-// plane public keys from the /keys endpoint — the same catch-up path routers
-// use. Enrollment only hands out the newest key, so this is how a node
-// learns keys still in their rotation grace period, or rotations it missed
-// while offline. The set is accepted only if signed by a key in trusted:
-// whoever answers /keys must already be the control plane, not become it.
+// plane public keys from /keys, the same catch-up path routers use.
+// Enrollment only hands out the newest key, so this is how a node learns
+// keys still in their rotation grace period, or rotations it missed while
+// offline. The set is accepted only if signed by a key in trusted.
 func FetchControlPlaneKeys(ctx context.Context, controlPlaneURL string, trusted []ed25519.PublicKey) ([]ed25519.PublicKey, error) {
-	if !strings.HasPrefix(controlPlaneURL, "http://") && !strings.HasPrefix(controlPlaneURL, "https://") {
-		controlPlaneURL = "https://" + controlPlaneURL
-	}
-	controlPlaneURL = strings.TrimSuffix(controlPlaneURL, "/")
-
-	req, err := http.NewRequestWithContext(ctx, "GET", controlPlaneURL+"/keys", nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
-	}
-
-	client := controlPlaneHTTPClient(10 * time.Second)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP request failed: %w", err)
-	}
-	defer resp.Body.Close() //nolint:errcheck
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("control plane returned status %s: %s", resp.Status, string(body))
-	}
-
-	var keysResp api.KeysResponse
-	if err := proto.Unmarshal(body, &keysResp); err != nil {
-		return nil, fmt.Errorf("failed to decode /keys response: %w", err)
-	}
-
-	keys, err := api.VerifyKeysResponse(&keysResp, trusted, time.Now())
-	if err != nil {
-		return nil, fmt.Errorf("/keys response rejected: %w", err)
-	}
-	return keys, nil
+	return controlPlaneClient(controlPlaneURL).FetchKeys(ctx, trusted)
 }
 
 // mergeTrustedKeys replaces the stored trust set with the authoritative set
@@ -134,88 +75,6 @@ func mergeTrustedKeys(existing []TrustedKey, fetched []ed25519.PublicKey, now ti
 	return merged
 }
 
-// SyncMeshConfig loads the mesh configuration from the store, attempts to refresh it
-// via HTTP from the control plane, and updates the store if successful.
-// It returns the control plane public key, the latest multiaddresses, and the
-// control plane's current ban set.
-//
-// The ban set is deliberately not persisted. MeshEvent_BANNED is published once
-// and gossip has no replay, so a node that restarted or was offline has to be
-// told again; /info is that catch-up, and reading it fresh each start is also
-// what makes an unban take effect. Nil means the control plane was not reached,
-// which is not the same as "nothing is banned": callers must not treat it as an
-// instruction to clear anything.
-func SyncMeshConfig(ctx context.Context, s *Store) ([]byte, []multiaddr.Multiaddr, []string, error) {
-	pubKey, storedAddrsStr, err := s.LoadMeshConfig()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to load mesh config from store: %w", err)
-	}
-
-	controlPlaneURL, err := s.LoadControlPlaneURL()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to load control plane URL from store: %w", err)
-	}
-	var bannedPeerIDs []string
-	var routerAddrs []multiaddr.Multiaddr
-
-	// Parse stored addresses
-	for _, addrStr := range storedAddrsStr {
-		ma, err := multiaddr.NewMultiaddr(addrStr)
-		if err != nil {
-			logger.Warnf("Failed to parse stored router address %q: %v", addrStr, err)
-			continue
-		}
-		routerAddrs = append(routerAddrs, ma)
-	}
-
-	// If we have a URL, fetch the latest info
-	if controlPlaneURL != "" {
-		logger.Infof("Fetching latest router addresses via HTTP from %s...", controlPlaneURL)
-		info, err := FetchControlPlaneInfo(ctx, controlPlaneURL)
-		if err != nil {
-			logger.Warnf("Failed to fetch updated addresses via HTTP (using cached): %v", err)
-		} else if bannedPeerIDs = info.GetBannedPeerIds(); len(info.RouterAddresses) > 0 {
-			logger.Infof("Discovered latest router addresses: %v", info.RouterAddresses)
-			var newRouterAddrs []multiaddr.Multiaddr
-			for _, addrStr := range info.RouterAddresses {
-				ma, parseErr := multiaddr.NewMultiaddr(addrStr)
-				if parseErr != nil {
-					logger.Warnf("Failed to parse discovered router address %q: %v", addrStr, parseErr)
-					continue
-				}
-				newRouterAddrs = append(newRouterAddrs, ma)
-			}
-			if len(newRouterAddrs) > 0 {
-				routerAddrs = newRouterAddrs
-				if len(pubKey) > 0 {
-					if saveErr := s.SaveMeshConfig(pubKey, info.RouterAddresses); saveErr != nil {
-						logger.Errorf("Failed to save updated mesh config to store: %v", saveErr)
-					}
-				}
-			}
-		}
-
-		// Catch up on the valid key set. Verified against what is already
-		// trusted, so with nothing stored yet there is nothing to do: the
-		// first key comes from enrollment. An empty result would wipe the
-		// trust set, so it is ignored like any fetch failure.
-		existing, loadErr := s.LoadTrustedKeys()
-		if loadErr != nil {
-			logger.Warnf("Failed to load stored trusted keys, skipping key sync: %v", loadErr)
-		} else if len(existing) == 0 {
-			logger.Debugf("No trusted control plane keys stored yet; skipping /keys sync until enrolled")
-		} else if keys, keysErr := FetchControlPlaneKeys(ctx, controlPlaneURL, publicKeysOf(existing)); keysErr != nil {
-			logger.Warnf("Failed to fetch control plane keys via HTTP (using cached): %v", keysErr)
-		} else if len(keys) > 0 {
-			if saveErr := s.SaveTrustedKeys(mergeTrustedKeys(existing, keys, time.Now())); saveErr != nil {
-				logger.Errorf("Failed to save trusted keys to store: %v", saveErr)
-			}
-		}
-	}
-
-	return pubKey, routerAddrs, bannedPeerIDs, nil
-}
-
 func publicKeysOf(keys []TrustedKey) []ed25519.PublicKey {
 	out := make([]ed25519.PublicKey, 0, len(keys))
 	for _, tk := range keys {
@@ -226,41 +85,7 @@ func publicKeysOf(keys []TrustedKey) []ed25519.PublicKey {
 
 // FetchMeshPolicy retrieves the latest mesh policy from the control plane's /policies endpoint using a biscuit token.
 func FetchMeshPolicy(ctx context.Context, controlPlaneURL string, biscuitToken []byte) (*api.PolicyConfigGetResponse, error) {
-	if !strings.HasPrefix(controlPlaneURL, "http://") && !strings.HasPrefix(controlPlaneURL, "https://") {
-		controlPlaneURL = "https://" + controlPlaneURL
-	}
-	controlPlaneURL = strings.TrimSuffix(controlPlaneURL, "/")
-
-	urlStr := controlPlaneURL + "/policies"
-	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+base64.StdEncoding.EncodeToString(biscuitToken))
-
-	client := controlPlaneHTTPClient(10 * time.Second)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP request failed: %w", err)
-	}
-	defer resp.Body.Close() //nolint:errcheck
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("control plane returned status %s: %s", resp.Status, string(body))
-	}
-
-	var policyResp api.PolicyConfigGetResponse
-	if err := proto.Unmarshal(body, &policyResp); err != nil {
-		return nil, fmt.Errorf("failed to decode /policies response: %w", err)
-	}
-
-	return &policyResp, nil
+	return controlPlaneClient(controlPlaneURL).FetchPolicy(ctx, biscuitToken)
 }
 
 // ReportNodeCatalog self-reports this node's locally registered services to

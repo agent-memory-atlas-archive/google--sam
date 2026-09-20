@@ -307,5 +307,6 @@ func (s *Store) Close() error {
 // Peer bans are deliberately not kept here. A ban on disk cannot be undone by
 // the control plane -- there is no unban event -- and it says nothing about a
 // node that was offline when the ban was published. Both are handled instead by
-// reconciling against the ban set in /info on every start (see SyncMeshConfig),
-// with MeshEvent_BANNED as the sub-second path for nodes that are already up.
+// reconciling against the ban set in /info before start and on every sync
+// (see SyncControlPlane), with MeshEvent_BANNED as the sub-second path for
+// nodes that are already up.

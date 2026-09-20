@@ -15,6 +15,7 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
@@ -29,7 +30,9 @@ import (
 
 	"github.com/google/sam/api"
 	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multiaddr"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -185,7 +188,8 @@ func TestSyncTrustedKeys(t *testing.T) {
 
 // A ban the control plane holds is applied, one it no longer holds is lifted,
 // and one recorded after the answer was requested is left alone: the answer
-// predates it and cannot speak to it.
+// predates it and cannot speak to it. The wire form may be any encoding of
+// the peer ID; the cache is keyed on the canonical one.
 func TestReconcileBannedPeers(t *testing.T) {
 	stillBanned := randomPeerID(t)
 	unbanned := randomPeerID(t)
@@ -202,12 +206,15 @@ func TestReconcileBannedPeers(t *testing.T) {
 	n.revokedPeers.Add(unbanned.String(), fetchedAt.Add(-time.Hour).UnixMilli())
 	n.revokedPeers.Add(bannedAfterFetch.String(), fetchedAt.UnixMilli())
 
-	n.reconcileBannedPeers([]string{stillBanned.String(), newlyBanned.String(), "not-a-peer-id"}, fetchedAt)
+	n.reconcileBannedPeers([]string{stillBanned.String(), peer.ToCid(newlyBanned).String(), "not-a-peer-id"}, fetchedAt)
 
 	for _, want := range []peer.ID{stillBanned, newlyBanned, bannedAfterFetch} {
 		if !n.revokedPeers.Contains(want.String()) {
 			t.Errorf("%s must be banned after reconciliation", want)
 		}
+	}
+	if n.revokedPeers.Contains(peer.ToCid(newlyBanned).String()) {
+		t.Error("the cache must be keyed on the canonical peer ID, not the wire encoding")
 	}
 	if n.revokedPeers.Contains(unbanned.String()) {
 		t.Error("a peer absent from the control plane's ban set must be unbanned")
@@ -251,9 +258,9 @@ func TestSyncControlPlane(t *testing.T) {
 	n := &SamNode{Store: store, revokedPeers: cache, trustedKeys: []TrustedKey{{Key: oldPub, ReceivedAt: time.Now()}}}
 	n.SetIdentityCache([]byte("identity"))
 
-	err = n.syncControlPlane(context.Background())
+	err = n.SyncControlPlane(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "policy") {
-		t.Fatalf("syncControlPlane = %v, want the policy failure reported", err)
+		t.Fatalf("SyncControlPlane = %v, want the policy failure reported", err)
 	}
 	if !containsTrustedKey(n.trustedKeys, newPub) {
 		t.Error("rotated key not learned although /keys answered")
@@ -267,6 +274,10 @@ func TestSyncControlPlane(t *testing.T) {
 	}
 	if len(addrs) != 1 {
 		t.Errorf("router addresses not persisted: got %v, want 1", addrs)
+	}
+	// Before Start the answer also becomes the static relays Start will dial.
+	if len(n.config.RouterAddrs) != 1 || n.config.RouterAddrs[0].String() != addrs[0] {
+		t.Errorf("router addresses not adopted before start: got %v, want %v", n.config.RouterAddrs, addrs)
 	}
 }
 
@@ -387,121 +398,103 @@ func TestFetchControlPlaneInfo_InvalidProto(t *testing.T) {
 	}
 }
 
-func TestSyncMeshConfig(t *testing.T) {
-	expectedInfo := &api.ControlPlaneInfoResponse{
-		RouterAddresses: []string{"/ip4/127.0.0.1/tcp/4001"},
-		OidcIssuer:      "https://issuer.example.com",
-		ClientId:        "client-id",
-	}
+// A node built from stored config, as sam-node run does, must come out of
+// its pre-start pull with the control plane's current router addresses and
+// the full key set, both in memory and on disk; and an unreachable control
+// plane must leave the stored config in place rather than blank it.
+func TestSyncControlPlaneBeforeStart(t *testing.T) {
+	cpPub, cpPriv := mustGenerateKey(t)
+	gracePub, gracePriv := mustGenerateKey(t)
+	freshRouter := "/ip4/10.0.0.9/tcp/4501/p2p/" + randomPeerID(t).String()
 
-	body, err := proto.Marshal(expectedInfo)
-	if err != nil {
-		t.Fatalf("Failed to marshal info: %v", err)
-	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/keys", keysHandler(t, []ed25519.PublicKey{cpPub, gracePub}, []ed25519.PrivateKey{cpPriv, gracePriv}))
+	mux.HandleFunc("/info", protoHandler(t, &api.ControlPlaneInfoResponse{RouterAddresses: []string{freshRouter}}))
+	mux.HandleFunc("/policies", protoHandler(t, &api.PolicyConfigGetResponse{}))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
 
-	cpPub, cpPriv, _ := ed25519.GenerateKey(nil)
-	gracePub, gracePriv, _ := ed25519.GenerateKey(nil)
-	keysResp := &api.KeysResponse{PublicKeys: [][]byte{cpPub, gracePub}}
-	if err := api.SignKeysResponse(keysResp, []ed25519.PrivateKey{cpPriv, gracePriv}, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	keysBody, err := proto.Marshal(keysResp)
-	if err != nil {
-		t.Fatalf("Failed to marshal keys: %v", err)
-	}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		if r.URL.Path == "/keys" {
-			_, _ = w.Write(keysBody)
-			return
+	newStoredNode := func(t *testing.T, controlPlaneURL string) *SamNode {
+		t.Helper()
+		store, err := NewStore(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
 		}
-		_, _ = w.Write(body)
-	}))
-	defer server.Close()
-
-	tempDir := t.TempDir()
-	store, err := NewStore(tempDir)
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close() //nolint:errcheck
-
-	// Initial store is empty, so SyncMeshConfig should just return empty
-	pubKey, addrs, bannedPeerIDs, err := SyncMeshConfig(context.Background(), store)
-	if err != nil {
-		t.Fatalf("SyncMeshConfig failed: %v", err)
-	}
-	if len(bannedPeerIDs) != 0 {
-		t.Errorf("Expected no banned peers for empty store, got %v", bannedPeerIDs)
-	}
-	if len(pubKey) != 0 || len(addrs) != 0 {
-		t.Errorf("Expected empty result for empty store, got pubKey=%v, addrs=%v", pubKey, addrs)
-	}
-
-	// Save initial config with explicit control plane URL. The node trusts
-	// only cpPub, as after enrollment; the grace key must be learned through
-	// cpPub's signature on the set.
-	testPubKey := []byte("test-pub-key")
-	if err := store.SaveMeshConfig(testPubKey, []string{"/ip4/1.2.3.4/tcp/1234"}); err != nil {
-		t.Fatalf("Failed to save mesh config: %v", err)
-	}
-	if err := store.SaveControlPlaneURL(server.URL); err != nil {
-		t.Fatalf("Failed to save control plane URL: %v", err)
-	}
-	if err := store.SaveTrustedKeys([]TrustedKey{{Key: cpPub, ReceivedAt: time.Now()}}); err != nil {
-		t.Fatalf("SaveTrustedKeys: %v", err)
+		t.Cleanup(func() { _ = store.Close() })
+		if err := store.SaveMeshConfig(cpPub, []string{"/ip4/1.2.3.4/tcp/1234"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SaveControlPlaneURL(controlPlaneURL); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SaveTrustedKeys([]TrustedKey{{Key: cpPub, ReceivedAt: time.Now()}}); err != nil {
+			t.Fatal(err)
+		}
+		stale, err := multiaddr.NewMultiaddr("/ip4/1.2.3.4/tcp/1234")
+		if err != nil {
+			t.Fatal(err)
+		}
+		priv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n, err := NewSamNode(Options{PrivKey: priv, Store: store, ControlPlanePubKey: cpPub, RouterAddrs: []multiaddr.Multiaddr{stale}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		n.SetIdentityCache([]byte("identity"))
+		return n
 	}
 
-	// Call SyncMeshConfig, it should fetch new addrs from server
-	pubKey, addrs, _, err = SyncMeshConfig(context.Background(), store)
-	if err != nil {
-		t.Fatalf("SyncMeshConfig failed: %v", err)
-	}
+	t.Run("reachable control plane", func(t *testing.T) {
+		n := newStoredNode(t, srv.URL)
+		if err := n.SyncControlPlane(context.Background()); err != nil {
+			t.Fatalf("SyncControlPlane: %v", err)
+		}
+		if len(n.config.RouterAddrs) != 1 || n.config.RouterAddrs[0].String() != freshRouter {
+			t.Errorf("RouterAddrs = %v, want the control plane's %s", n.config.RouterAddrs, freshRouter)
+		}
+		if len(n.trustedKeys) != 2 || !containsTrustedKey(n.trustedKeys, gracePub) {
+			t.Errorf("trust set = %d keys, want the enrollment key and the grace key", len(n.trustedKeys))
+		}
+		savedPub, savedAddrs, err := n.Store.LoadMeshConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(savedPub, cpPub) || len(savedAddrs) != 1 || savedAddrs[0] != freshRouter {
+			t.Errorf("persisted mesh config = (%x, %v), want (%x, [%s])", savedPub, savedAddrs, cpPub, freshRouter)
+		}
+		stored, err := n.Store.LoadTrustedKeys()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(stored) != 2 {
+			t.Errorf("persisted %d trusted keys, want 2", len(stored))
+		}
+	})
 
-	if string(pubKey) != string(testPubKey) {
-		t.Errorf("Expected pubKey %s, got %s", testPubKey, pubKey)
-	}
-
-	if len(addrs) != 1 || addrs[0].String() != expectedInfo.RouterAddresses[0] {
-		t.Errorf("Expected addrs %v, got %v", expectedInfo.RouterAddresses, addrs)
-	}
-
-	// Verify the new addrs were saved to the store
-	savedPubKey, savedAddrsStr, err := store.LoadMeshConfig()
-	if err != nil {
-		t.Fatalf("Failed to load mesh config: %v", err)
-	}
-	if string(savedPubKey) != string(testPubKey) {
-		t.Errorf("Expected saved pubKey %s, got %s", testPubKey, savedPubKey)
-	}
-
-	// The full valid key set from /keys must have been persisted
-	trusted, err := store.LoadTrustedKeys()
-	if err != nil {
-		t.Fatalf("LoadTrustedKeys: %v", err)
-	}
-	if len(trusted) != 2 {
-		t.Fatalf("expected 2 trusted keys from /keys, got %d", len(trusted))
-	}
-	if !trusted[0].Key.Equal(cpPub) || !trusted[1].Key.Equal(gracePub) {
-		t.Errorf("persisted keys do not match /keys response")
-	}
-	if len(savedAddrsStr) != 1 || savedAddrsStr[0] != expectedInfo.RouterAddresses[0] {
-		t.Errorf("Expected saved addrs %v, got %v", expectedInfo.RouterAddresses, savedAddrsStr)
-	}
+	t.Run("unreachable control plane keeps the stored config", func(t *testing.T) {
+		down := httptest.NewServer(http.NotFoundHandler())
+		down.Close()
+		n := newStoredNode(t, down.URL)
+		if err := n.SyncControlPlane(context.Background()); err == nil {
+			t.Fatal("SyncControlPlane against a closed server must report the failure")
+		}
+		if len(n.config.RouterAddrs) != 1 || n.config.RouterAddrs[0].String() != "/ip4/1.2.3.4/tcp/1234" {
+			t.Errorf("RouterAddrs = %v, want the stored address kept", n.config.RouterAddrs)
+		}
+		if len(n.trustedKeys) != 1 || !n.trustedKeys[0].Key.Equal(cpPub) {
+			t.Errorf("trust set = %d keys, want the stored key kept", len(n.trustedKeys))
+		}
+	})
 }
 
 // Whoever answers /keys must already be the control plane: a set that is not
-// signed by a key the node trusts leaves the trust set untouched.
-func TestSyncMeshConfigRefusesUntrustedKeySet(t *testing.T) {
-	cpPub, _, _ := ed25519.GenerateKey(nil)
-	attackerPub, attackerPriv, _ := ed25519.GenerateKey(nil)
-
-	infoBody, err := proto.Marshal(&api.ControlPlaneInfoResponse{RouterAddresses: []string{"/ip4/127.0.0.1/tcp/4001"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+// signed by a key the node trusts leaves the trust set untouched, in memory
+// and on disk, while the rest of the pull still lands.
+func TestSyncControlPlaneRefusesUntrustedKeySet(t *testing.T) {
+	cpPub, _ := mustGenerateKey(t)
+	attackerPub, attackerPriv := mustGenerateKey(t)
 
 	for name, keysResp := range map[string]*api.KeysResponse{
 		"unsigned set": {PublicKeys: [][]byte{cpPub, attackerPub}},
@@ -514,44 +507,46 @@ func TestSyncMeshConfigRefusesUntrustedKeySet(t *testing.T) {
 		}(),
 	} {
 		t.Run(name, func(t *testing.T) {
-			keysBody, err := proto.Marshal(keysResp)
-			if err != nil {
-				t.Fatal(err)
-			}
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/keys" {
-					_, _ = w.Write(keysBody)
-					return
-				}
-				_, _ = w.Write(infoBody)
-			}))
-			defer server.Close()
+			mux := http.NewServeMux()
+			mux.HandleFunc("/keys", protoHandler(t, keysResp))
+			mux.HandleFunc("/info", protoHandler(t, &api.ControlPlaneInfoResponse{RouterAddresses: []string{"/ip4/127.0.0.1/tcp/4001"}}))
+			mux.HandleFunc("/policies", protoHandler(t, &api.PolicyConfigGetResponse{}))
+			srv := httptest.NewServer(mux)
+			defer srv.Close()
 
 			store, err := NewStore(t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer store.Close() //nolint:errcheck
+			defer func() { _ = store.Close() }()
 			if err := store.SaveMeshConfig(cpPub, nil); err != nil {
 				t.Fatal(err)
 			}
-			if err := store.SaveControlPlaneURL(server.URL); err != nil {
+			if err := store.SaveControlPlaneURL(srv.URL); err != nil {
 				t.Fatal(err)
 			}
 			if err := store.SaveTrustedKeys([]TrustedKey{{Key: cpPub, ReceivedAt: time.Now()}}); err != nil {
 				t.Fatal(err)
 			}
+			n := &SamNode{Store: store, trustedKeys: []TrustedKey{{Key: cpPub, ReceivedAt: time.Now()}}}
+			n.SetIdentityCache([]byte("identity"))
 
-			if _, _, _, err := SyncMeshConfig(context.Background(), store); err != nil {
-				t.Fatalf("SyncMeshConfig: %v", err)
+			err = n.SyncControlPlane(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "keys") {
+				t.Fatalf("SyncControlPlane = %v, want the /keys rejection reported", err)
 			}
-
+			if len(n.trustedKeys) != 1 || !n.trustedKeys[0].Key.Equal(cpPub) {
+				t.Fatalf("in-memory trust set was replaced by an unverified /keys answer: %d keys", len(n.trustedKeys))
+			}
 			trusted, err := store.LoadTrustedKeys()
 			if err != nil {
 				t.Fatal(err)
 			}
 			if len(trusted) != 1 || !trusted[0].Key.Equal(cpPub) {
-				t.Fatalf("trust set was replaced by an unverified /keys answer: %d keys", len(trusted))
+				t.Fatalf("persisted trust set was replaced by an unverified /keys answer: %d keys", len(trusted))
+			}
+			if len(n.config.RouterAddrs) != 1 {
+				t.Errorf("a rejected /keys must not stop /info from landing: RouterAddrs = %v", n.config.RouterAddrs)
 			}
 		})
 	}

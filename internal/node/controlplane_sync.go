@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multiaddr"
 )
 
 // The node reads three things from the control plane while it runs: the
@@ -32,10 +33,12 @@ import (
 // arrives, because a once-published event with no replay is missed by any
 // node that was down, partitioned, or simply enrolled later.
 
-// syncControlPlane is the node's single pull from the control plane. Each
+// SyncControlPlane is the node's single pull from the control plane. Each
 // part is attempted even when another fails, so a policy outage does not
-// stop a key rotation from landing; the errors are reported together.
-func (n *SamNode) syncControlPlane(ctx context.Context) error {
+// stop a key rotation from landing; the errors are reported together. Called
+// once before Start, so the node dials the routers the control plane knows
+// now and enforces the bans it holds now, and then by the sync loop.
+func (n *SamNode) SyncControlPlane(ctx context.Context) error {
 	if n.Store == nil {
 		return errors.New("node has no store")
 	}
@@ -87,9 +90,11 @@ func (n *SamNode) syncTrustedKeys(ctx context.Context, controlPlaneURL string) e
 	return nil
 }
 
-// syncMeshInfo reads /info: the router addresses are persisted for the next
-// start, and the ban set is reconciled against the revocation cache, which is
-// how a running node learns a ban or an unban it got no event for.
+// syncMeshInfo reads /info. The router addresses are persisted for the next
+// start and, until the host exists, adopted as the static relays Start will
+// dial; once it is running they only matter to the next start. The ban set
+// is reconciled against the revocation cache, which is how a running node
+// learns a ban or an unban it got no event for.
 func (n *SamNode) syncMeshInfo(ctx context.Context, controlPlaneURL string) error {
 	// Taken before the request: a ban recorded after this instant cannot be
 	// in the answer, so its absence must not be read as an unban.
@@ -108,9 +113,28 @@ func (n *SamNode) syncMeshInfo(ctx context.Context, controlPlaneURL string) erro
 				logger.Warnf("Failed to persist router addresses: %v", saveErr)
 			}
 		}
+		if n.Host == nil {
+			if addrs := parseMultiaddrs(info.RouterAddresses); len(addrs) > 0 {
+				n.config.RouterAddrs = addrs
+			}
+		}
 	}
 	n.reconcileBannedPeers(info.GetBannedPeerIds(), fetchedAt)
 	return nil
+}
+
+// parseMultiaddrs keeps the addresses that parse and logs the rest.
+func parseMultiaddrs(addrs []string) []multiaddr.Multiaddr {
+	out := make([]multiaddr.Multiaddr, 0, len(addrs))
+	for _, s := range addrs {
+		ma, err := multiaddr.NewMultiaddr(s)
+		if err != nil {
+			logger.Warnf("Ignoring router address %q from the control plane: %v", s, err)
+			continue
+		}
+		out = append(out, ma)
+	}
+	return out
 }
 
 // reconcileBannedPeers makes the revocation cache match the control plane's
@@ -209,7 +233,7 @@ func (n *SamNode) startControlPlaneSyncLoop(ctx context.Context, interval time.D
 			}
 			timer.Reset(interval + time.Duration(rand.Int63n(int64(interval/10)+1)))
 
-			err := n.syncControlPlane(ctx)
+			err := n.SyncControlPlane(ctx)
 			switch {
 			case err != nil && failures == 0:
 				logger.Warnf("Control plane sync failed: %v", err)

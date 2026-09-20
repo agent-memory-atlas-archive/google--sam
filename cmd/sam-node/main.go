@@ -223,6 +223,20 @@ func normalizeControlPlaneURL(url string) string {
 	return strings.TrimSuffix(url, "/")
 }
 
+// parseRouterAddrs keeps the stored router addresses that still parse.
+func parseRouterAddrs(addrs []string) []multiaddr.Multiaddr {
+	out := make([]multiaddr.Multiaddr, 0, len(addrs))
+	for _, s := range addrs {
+		ma, err := multiaddr.NewMultiaddr(s)
+		if err != nil {
+			logger.Warnf("Ignoring stored router address %q: %v", s, err)
+			continue
+		}
+		out = append(out, ma)
+	}
+	return out
+}
+
 // interactiveJoin discovers a control plane's OIDC settings and completes an
 // interactive browser/device-code login against it. Shared by "join" and
 // "run --join"; targetControlPlane must already be a normalized URL. store is
@@ -332,13 +346,15 @@ func main() {
 			var controlPlanePubKey ed25519.PublicKey
 			var routerAddrs []multiaddr.Multiaddr
 
-			storedPubKey, syncedAddrs, bannedPeerIDs, err := node.SyncMeshConfig(context.Background(), store)
+			// What the last run left behind; the node itself pulls what the
+			// control plane knows now before it starts (SyncControlPlane).
+			storedPubKey, storedAddrs, err := store.LoadMeshConfig()
 			if err != nil {
-				logger.Warnf("Failed to sync mesh config: %v", err)
+				logger.Warnf("Failed to load stored mesh config: %v", err)
 			}
 			if len(storedPubKey) > 0 {
 				controlPlanePubKey = storedPubKey
-				routerAddrs = syncedAddrs
+				routerAddrs = parseRouterAddrs(storedAddrs)
 			}
 
 			if controlPlanePublicKeyFlag != "" {
@@ -457,7 +473,6 @@ func main() {
 					ControlPlanePubKey:       controlPlanePubKey,
 					RouterAddrs:              routerAddrs,
 					Store:                    store,
-					BannedPeerIDs:            bannedPeerIDs,
 					MeshID:                   meshFlag,
 					DiscoveryInterval:        discoveryIntervalFlag,
 					ListenAddrs:              listenAddrs,
@@ -482,6 +497,9 @@ func main() {
 				})
 				if err != nil {
 					logger.Fatalf("Failed to initialize mesh node: %v", err)
+				}
+				if err := meshNode.SyncControlPlane(ctx); err != nil {
+					logger.Warnf("Control plane sync before start failed (using stored config): %v", err)
 				}
 				if err := meshNode.Start(ctx); err != nil {
 					logger.Fatalf("Failed to start mesh node: %v", err)
@@ -525,7 +543,6 @@ func main() {
 					PrivKey:                  priv,
 					RouterAddrs:              initRouterAddrs,
 					Store:                    store,
-					BannedPeerIDs:            bannedPeerIDs,
 					MeshID:                   meshFlag,
 					DiscoveryInterval:        discoveryIntervalFlag,
 					ListenAddrs:              listenAddrs,
@@ -583,20 +600,20 @@ func main() {
 				}
 				enrollCancel()
 
-				storedPubKey, newRouterAddrs, postEnrollBannedPeerIDs, err := node.SyncMeshConfig(context.Background(), store)
+				// Enrollment stored the control plane key and the router
+				// addresses it answered with; the node built from them pulls
+				// the rest before it starts.
+				controlPlanePubKey, storedAddrs, err = store.LoadMeshConfig()
 				if err != nil {
-					logger.Warnf("Failed to sync mesh config post-enrollment: %v", err)
+					logger.Fatalf("Failed to load mesh config after enrollment: %v", err)
 				}
-				controlPlanePubKey = storedPubKey
-				bannedPeerIDs = postEnrollBannedPeerIDs
 
 				logger.Debugf("listenAddrs: %v, allowLoopback: %v", listenAddrs, allowLoopbackFlag)
 				meshNode, err = node.NewSamNode(node.Options{
 					PrivKey:                  priv,
 					ControlPlanePubKey:       controlPlanePubKey,
-					RouterAddrs:              newRouterAddrs,
+					RouterAddrs:              parseRouterAddrs(storedAddrs),
 					Store:                    store,
-					BannedPeerIDs:            bannedPeerIDs,
 					MeshID:                   meshFlag,
 					DiscoveryInterval:        discoveryIntervalFlag,
 					ListenAddrs:              listenAddrs,
@@ -617,6 +634,9 @@ func main() {
 				})
 				if err != nil {
 					logger.Fatalf("Failed to initialize node after enrollment: %v", err)
+				}
+				if err := meshNode.SyncControlPlane(ctx); err != nil {
+					logger.Warnf("Control plane sync after enrollment failed (using enrollment config): %v", err)
 				}
 				if err := meshNode.Start(ctx); err != nil {
 					logger.Fatalf("Failed to start node after enrollment: %v", err)

@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/google/sam/api"
+	cpclient "github.com/google/sam/internal/controlplane/client"
 	"github.com/google/sam/internal/identity"
 	"github.com/google/sam/internal/ratelimit"
 	golog "github.com/ipfs/go-log/v2"
@@ -443,9 +444,9 @@ func (r *Router) enroll(peerID peer.ID) error {
 		return fmt.Errorf("enrollment response status %s: %s", resp.Status, string(body))
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := cpclient.ReadBody(resp.Body)
 	if err != nil {
-		return err
+		return fmt.Errorf("enrollment response: %w", err)
 	}
 
 	var enrollResp api.EnrollResponse
@@ -504,9 +505,9 @@ func (r *Router) enrollBootstrap(peerID peer.ID) error {
 		return fmt.Errorf("bootstrap enrollment request response status %s: %s", resp.Status, string(body))
 	}
 
-	respData, err := io.ReadAll(resp.Body)
+	respData, err := cpclient.ReadBody(resp.Body)
 	if err != nil {
-		return err
+		return fmt.Errorf("bootstrap enrollment response: %w", err)
 	}
 
 	enrollResp := &api.BootstrapEnrollResponse{}
@@ -565,10 +566,10 @@ func (r *Router) enrollBootstrap(peerID peer.ID) error {
 					continue
 				}
 
-				statusBody, err := io.ReadAll(statusResp.Body)
+				statusBody, err := cpclient.ReadBody(statusResp.Body)
 				_ = statusResp.Body.Close()
 				if err != nil {
-					logger.Warnf("failed to read status body: %v", err)
+					logger.Warnf("enrollment status response: %v", err)
 					continue
 				}
 
@@ -679,32 +680,11 @@ func (r *Router) recoverAfterLease401() error {
 }
 
 func (r *Router) syncKeys() error {
-	client := r.controlPlaneClient(10 * time.Second)
-	resp, err := client.Get(r.config.ControlPlaneURL + "/keys")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to sync keys, status %s", resp.Status)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	var keysResp api.KeysResponse
-	if err := proto.Unmarshal(body, &keysResp); err != nil {
-		return err
-	}
-
 	// Only a set signed by a key this router already trusts may replace
 	// the trust set; anything else is whoever answered the URL.
-	newKeys, err := api.VerifyKeysResponse(&keysResp, r.getTrustedPublicKeys(), time.Now())
+	newKeys, err := r.controlPlane(10*time.Second).FetchKeys(r.ctx, r.getTrustedPublicKeys())
 	if err != nil {
-		return fmt.Errorf("/keys response rejected: %w", err)
+		return err
 	}
 
 	r.keysMu.Lock()
@@ -715,23 +695,16 @@ func (r *Router) syncKeys() error {
 	return nil
 }
 
+// controlPlane reads the pull endpoints of the control plane.
+func (r *Router) controlPlane(timeout time.Duration) *cpclient.Client {
+	return cpclient.New(r.config.ControlPlaneURL, r.controlPlaneClient(timeout))
+}
+
 // controlPlaneClient is the client for every request to the control plane;
 // its transport re-checks the plaintext policy on each hop, redirects included.
 func (r *Router) controlPlaneClient(timeout time.Duration) *http.Client {
-	return &http.Client{
-		Timeout: timeout,
-		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-			if err := api.ValidateControlPlaneTransport(req.URL.String(), r.config.AllowInsecureControlPlane); err != nil {
-				return nil, err
-			}
-			return http.DefaultTransport.RoundTrip(req)
-		}),
-	}
+	return cpclient.NewHTTPClient(timeout, func() bool { return r.config.AllowInsecureControlPlane })
 }
-
-type roundTripperFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func (r *Router) getTrustedPublicKeys() []ed25519.PublicKey {
 	r.keysMu.RLock()
@@ -928,8 +901,13 @@ func (r *Router) renewLease() {
 			return
 		}
 
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := cpclient.ReadBody(resp.Body)
 		_ = resp.Body.Close()
+		if readErr != nil {
+			logger.Errorf("Control plane lease renewal response: %v", readErr)
+			leaseRenewalsTotal.WithLabelValues(leaseRejected).Inc()
+			return
+		}
 
 		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
 			logger.Warnf("Control plane lease renewal rejected (401 Unauthorized: %s), attempting recovery...", string(body))
@@ -1045,30 +1023,13 @@ func (r *Router) runFederationLoop() {
 }
 
 func (r *Router) connectBootstrapRouters() {
-	client := r.controlPlaneClient(10 * time.Second)
 	// Taken before the request: anything banned after this point cannot be
 	// reflected in the answer, so reconciliation must not read its absence as
 	// an unban (see reconcileBannedPeers).
 	fetchedAt := time.Now()
-	resp, err := client.Get(r.config.ControlPlaneURL + "/info")
+	info, err := r.controlPlane(10 * time.Second).FetchInfo(r.ctx)
 	if err != nil {
 		logger.Errorf("[Federation] Failed to fetch router info: %v", err)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		logger.Errorf("[Federation] GET /info returned status %d", resp.StatusCode)
-		return
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return
-	}
-
-	var info api.ControlPlaneInfoResponse
-	if err := proto.Unmarshal(body, &info); err != nil {
 		return
 	}
 
@@ -1406,9 +1367,9 @@ func (r *Router) RefreshEnrollment(ctx context.Context) error {
 		return fmt.Errorf("refresh failed with status %s: %s", resp.Status, string(body))
 	}
 
-	respData, err := io.ReadAll(resp.Body)
+	respData, err := cpclient.ReadBody(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
+		return fmt.Errorf("refresh response: %w", err)
 	}
 
 	var refreshResp api.TokenRefreshResponse

@@ -37,6 +37,7 @@ import (
 
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/google/sam/api"
+	cpclient "github.com/google/sam/internal/controlplane/client"
 	"github.com/google/sam/internal/identity"
 	samdiscovery "github.com/google/sam/internal/node/discovery"
 	"github.com/google/sam/internal/ratelimit"
@@ -320,17 +321,6 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 	node.revokedPeers, err = lru.New[string, int64](RevocationCacheSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create revocation cache: %w", err)
-	}
-	// Seed from the control plane's ban set so the gater enforces existing
-	// bans from the first connection, instead of waiting for an event that
-	// was already published while this node was down.
-	for _, id := range cfg.BannedPeerIDs {
-		p, err := peer.Decode(id)
-		if err != nil {
-			logger.Warnf("Ignoring undecodable banned peer ID %q from the control plane: %v", id, err)
-			continue
-		}
-		node.revokedPeers.Add(p.String(), time.Now().UnixMilli())
 	}
 	node.peerLabelGate, err = lru.New[string, time.Time](labelGateCacheSize)
 	if err != nil {
@@ -1189,9 +1179,9 @@ func (n *SamNode) RefreshEnrollment(ctx context.Context) error {
 		}
 	}
 
-	respData, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
+	respData, err := cpclient.ReadBody(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
+		return fmt.Errorf("refresh response: %w", err)
 	}
 
 	var refreshResp api.TokenRefreshResponse
