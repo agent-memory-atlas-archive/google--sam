@@ -145,7 +145,7 @@ must be on the role itself.
 At enrollment and at refresh, the control plane resolves the identity's roles
 from the bindings and mints into the credential one `role()` fact per role
 and the compiled `granted_*` facts of every role. Nodes also fetch the policy
-(`--control-plane-sync-interval`, 5 minutes) and compile it into rules such as
+(`--control-plane-sync-interval`, 15 minutes) and compile it into rules such as
 `role("developer") <- group("engineering")` and
 `granted_service_exact("mcp","code-reviewer") <- role("developer")`. These
 rules run at verification time. Additions therefore reach nodes within the

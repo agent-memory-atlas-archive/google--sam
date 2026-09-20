@@ -94,7 +94,8 @@ becomes `granted_service_exact("mcp", "calculator")`, `mcp://*` becomes
 `*.acme.example` matches `svc.acme.example` but not `evil-acme.example`.
 
 Nodes also fetch the policy themselves, every `--control-plane-sync-interval`
-(five minutes by default), and compile it into rules such as
+(15 minutes by default, sooner when a policy update event reaches them), and
+compile it into rules such as
 `role("developer") <- group("eng")` and
 `granted_service_exact("mcp", "calculator") <- role("developer")`. When a
 node verifies a credential, these rules run against the identity facts in it.

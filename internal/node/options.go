@@ -80,6 +80,9 @@ type Options struct {
 	ControlPlaneSyncInterval time.Duration
 	// ControlPlaneSyncJitter is the maximum random delay before a sync that a
 	// gossip event asked for, so a fleet told at once does not pull at once.
+	// Zero uses a tenth of ControlPlaneSyncInterval: the spread has to grow
+	// with the fleet's cadence, or a policy update on a large mesh is a
+	// stampede.
 	ControlPlaneSyncJitter time.Duration
 	// BackendProbeTimeout bounds how long a command-spawned service backend
 	// (sam-node.yaml's `command`, spawned as a local subprocess) is given to
@@ -155,8 +158,8 @@ func (o *Options) Default() {
 	if o.CatalogReportInitialDelay <= 0 {
 		o.CatalogReportInitialDelay = 5 * time.Second
 	}
-	if o.ControlPlaneSyncJitter <= 0 {
-		o.ControlPlaneSyncJitter = 10 * time.Second
+	if o.ControlPlaneSyncJitter <= 0 && o.ControlPlaneSyncInterval > 0 {
+		o.ControlPlaneSyncJitter = o.ControlPlaneSyncInterval / 10
 	}
 	if o.NodeConfig == nil {
 		o.NodeConfig = &NodeConfigComplete{}

@@ -174,8 +174,11 @@ func (n *SamNode) triggerControlPlaneSync() {
 }
 
 // startControlPlaneSyncLoop pulls once shortly after start, then every
-// interval and whenever triggered. Failures are logged at Warn once and at
-// Debug while they persist, with an Info on recovery.
+// interval and whenever triggered. Each periodic wait is stretched by up to a
+// tenth of the interval and each trigger delayed by up to the configured
+// jitter, so a fleet started or notified together does not pull together.
+// Failures are logged at Warn once and at Debug while they persist, with an
+// Info on recovery.
 func (n *SamNode) startControlPlaneSyncLoop(ctx context.Context, interval time.Duration) {
 	if interval <= 0 || n.Store == nil {
 		return
@@ -196,8 +199,7 @@ func (n *SamNode) startControlPlaneSyncLoop(ctx context.Context, interval time.D
 					default:
 					}
 				}
-				jitter := n.config.ControlPlaneSyncJitter
-				if jitter > 0 {
+				if jitter := n.config.ControlPlaneSyncJitter; jitter > 0 {
 					select {
 					case <-ctx.Done():
 						return
@@ -205,7 +207,7 @@ func (n *SamNode) startControlPlaneSyncLoop(ctx context.Context, interval time.D
 					}
 				}
 			}
-			timer.Reset(interval)
+			timer.Reset(interval + time.Duration(rand.Int63n(int64(interval/10)+1)))
 
 			err := n.syncControlPlane(ctx)
 			switch {

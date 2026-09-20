@@ -89,11 +89,14 @@ const (
 
 	// Key pruning
 	KeyPruningInterval = 1 * time.Hour
-	// DefaultControlPlaneSyncInterval matches the router's --keys-sync-interval:
-	// well inside the control plane's default 1h key grace period, so a node
-	// has several chances to learn a successor key while its predecessor can
-	// still vouch for it.
-	DefaultControlPlaneSyncInterval = 5 * time.Minute
+	// DefaultControlPlaneSyncInterval bounds how long a running node can lag
+	// the control plane on keys, bans and policy when no gossip event reaches
+	// it. It must sit well inside the control plane's --key-grace-period
+	// (1h by default): a successor key can only be adopted while the key it
+	// replaces still vouches for it, and one attempt per window is a race.
+	// Four attempts per default window is the trade against load on large
+	// meshes, where an operator raising the grace period can raise this too.
+	DefaultControlPlaneSyncInterval = 15 * time.Minute
 
 	// Reprovide interval
 	ReprovideInterval = 5 * time.Minute
