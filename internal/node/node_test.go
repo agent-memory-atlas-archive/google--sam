@@ -728,41 +728,6 @@ func TestNewSamNode_BiscuitTimeout(t *testing.T) {
 	})
 }
 
-func TestNewSamNode_BannedPeerCanonicalisation(t *testing.T) {
-	bannedPriv, _, err := crypto.GenerateEd25519Key(nil)
-	if err != nil {
-		t.Fatalf("failed to generate key: %v", err)
-	}
-	p, err := peer.IDFromPrivateKey(bannedPriv)
-	if err != nil {
-		t.Fatalf("failed to derive peer ID: %v", err)
-	}
-	canonicalID := p.String()
-	cidv1ID := peer.ToCid(p).String()
-
-	priv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
-	if err != nil {
-		t.Fatalf("failed to generate node key: %v", err)
-	}
-	store, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = store.Close() }()
-
-	node, err := NewSamNode(Options{
-		PrivKey:       priv,
-		Store:         store,
-		BannedPeerIDs: []string{cidv1ID},
-	})
-	if err != nil {
-		t.Fatalf("NewSamNode: %v", err)
-	}
-	if !node.revokedPeers.Contains(canonicalID) {
-		t.Errorf("revokedPeers missing canonical ID %q (seeded with %q)", canonicalID, cidv1ID)
-	}
-}
-
 func TestNewSamNode_DHTOptions(t *testing.T) {
 	priv, _, _ := crypto.GenerateKeyPair(crypto.Ed25519, -1)
 	store, _ := NewStore(t.TempDir())

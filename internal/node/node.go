@@ -321,17 +321,6 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create revocation cache: %w", err)
 	}
-	// Seed from the control plane's ban set so the gater enforces existing
-	// bans from the first connection, instead of waiting for an event that
-	// was already published while this node was down.
-	for _, id := range cfg.BannedPeerIDs {
-		p, err := peer.Decode(id)
-		if err != nil {
-			logger.Warnf("Ignoring undecodable banned peer ID %q from the control plane: %v", id, err)
-			continue
-		}
-		node.revokedPeers.Add(p.String(), time.Now().UnixMilli())
-	}
 	node.peerLabelGate, err = lru.New[string, time.Time](labelGateCacheSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create label gate cache: %w", err)

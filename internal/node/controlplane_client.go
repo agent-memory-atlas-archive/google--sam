@@ -19,7 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/sam/api"
+	cpclient "github.com/google/sam/internal/controlplane/client"
 )
 
 // allowInsecureControlPlane is process-wide because the control-plane URL
@@ -33,25 +33,8 @@ func SetAllowInsecureControlPlane(allow bool) {
 	allowInsecureControlPlane.Store(allow)
 }
 
-// controlPlaneTransport applies api.ValidateControlPlaneTransport to every
-// request, including redirects, so a plaintext hop is refused wherever the
-// URL came from.
-type controlPlaneTransport struct {
-	base http.RoundTripper
-}
-
-func (t controlPlaneTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if err := api.ValidateControlPlaneTransport(req.URL.String(), allowInsecureControlPlane.Load()); err != nil {
-		return nil, err
-	}
-	return t.base.RoundTrip(req)
-}
-
 // controlPlaneHTTPClient is the client for every request the node makes to
-// its control plane.
+// its control plane; the plaintext policy is re-checked on every hop.
 func controlPlaneHTTPClient(timeout time.Duration) *http.Client {
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: controlPlaneTransport{base: http.DefaultTransport},
-	}
+	return cpclient.NewHTTPClient(timeout, allowInsecureControlPlane.Load)
 }

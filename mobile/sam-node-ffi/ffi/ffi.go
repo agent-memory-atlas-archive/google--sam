@@ -153,11 +153,16 @@ func StartNode(configJSON string) error {
 	var controlPlanePubKey ed25519.PublicKey
 	var routerAddrs []multiaddr.Multiaddr
 
-	// Sync config from stored/synced configuration
-	storedPubKey, syncedAddrs, bannedPeerIDs, err := node.SyncMeshConfig(context.Background(), store)
+	// What the last run left behind; the node pulls what the control plane
+	// knows now before it starts.
+	storedPubKey, storedAddrs, err := store.LoadMeshConfig()
 	if err == nil && len(storedPubKey) > 0 {
 		controlPlanePubKey = storedPubKey
-		routerAddrs = syncedAddrs
+		for _, s := range storedAddrs {
+			if ma, parseErr := multiaddr.NewMultiaddr(s); parseErr == nil {
+				routerAddrs = append(routerAddrs, ma)
+			}
+		}
 	}
 
 	priv := node.GetOrGenerateKey(store)
@@ -208,7 +213,6 @@ func StartNode(configJSON string) error {
 		ControlPlanePubKey:   controlPlanePubKey,
 		RouterAddrs:          routerAddrs,
 		Store:                store,
-		BannedPeerIDs:        bannedPeerIDs,
 		MeshID:               meshID,
 		DiscoveryInterval:    discoveryInterval,
 		ListenAddrs:          listenAddrs,
@@ -230,6 +234,9 @@ func StartNode(configJSON string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancelFunc = cancel
 
+	if err := samNode.SyncControlPlane(ctx); err != nil {
+		logger.Warnf("Control plane sync before start failed (using stored config): %v", err)
+	}
 	if err := samNode.Start(ctx); err != nil {
 		cancel()
 		_ = store.Close()
@@ -441,11 +448,6 @@ func enrollWith(dataDir string, controlPlaneURL string, allowLoopback bool, labe
 
 	if err := store.SaveControlPlaneURL(controlPlaneURL); err != nil {
 		return fmt.Errorf("failed to save control plane URL: %w", err)
-	}
-
-	_, _, _, err = node.SyncMeshConfig(enrollCtx, store)
-	if err != nil {
-		return fmt.Errorf("failed to sync mesh config post-enrollment: %w", err)
 	}
 
 	return nil

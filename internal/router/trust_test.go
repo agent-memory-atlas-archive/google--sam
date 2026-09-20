@@ -96,7 +96,7 @@ func TestSyncKeysRequiresTrustedSignature(t *testing.T) {
 	defer srv.Close()
 
 	newRouter := func() *Router {
-		return &Router{config: Options{ControlPlaneURL: srv.URL}, trustedPublicKeys: []ed25519.PublicKey{oldPub}}
+		return &Router{ctx: context.Background(), config: Options{ControlPlaneURL: srv.URL}, trustedPublicKeys: []ed25519.PublicKey{oldPub}}
 	}
 	marshal := func(resp *api.KeysResponse) []byte {
 		data, err := proto.Marshal(resp)

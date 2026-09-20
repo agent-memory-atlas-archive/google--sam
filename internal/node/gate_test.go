@@ -93,10 +93,10 @@ func TestConnectionGater(t *testing.T) {
 	}
 }
 
-// The revocation cache is seeded from the control plane's ban set at startup
-// (Options.BannedPeerIDs, filled by SyncMeshConfig). Without that a restarted
-// node would enforce no ban at all until the next MeshEvent_BANNED, which for
-// a ban published while it was down never arrives.
+// The revocation cache is filled from the control plane's ban set by the
+// pre-start pull (SyncControlPlane -> reconcileBannedPeers). Without that a
+// restarted node would enforce no ban at all until the next MeshEvent_BANNED,
+// which for a ban published while it was down never arrives.
 func TestGaterEnforcesSeededBans(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewStore(dir)
@@ -117,20 +117,22 @@ func TestGaterEnforcesSeededBans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherPriv, _, _ := crypto.GenerateEd25519Key(nil)
+	otherPriv, _, err := crypto.GenerateEd25519Key(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	allowed, err := peer.IDFromPrivateKey(otherPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	node, err := NewSamNode(Options{
-		PrivKey:       bannedPriv,
-		Store:         store,
-		BannedPeerIDs: []string{peer.ToCid(banned).String(), "not-a-peer-id"},
-	})
+	node, err := NewSamNode(Options{PrivKey: bannedPriv, Store: store})
 	if err != nil {
-		t.Fatalf("a ban set with an undecodable entry must not fail startup: %v", err)
+		t.Fatal(err)
 	}
+	// The wire form may be any encoding of the peer ID, and one bad entry
+	// must not stop the rest from being enforced.
+	node.reconcileBannedPeers([]string{peer.ToCid(banned).String(), "not-a-peer-id"}, time.Now())
 
 	gater := &nodeConnGate{node: node}
 	if gater.InterceptPeerDial(banned) {
