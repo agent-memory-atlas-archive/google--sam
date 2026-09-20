@@ -48,34 +48,27 @@ func TestIntegrationStdioDatapath(t *testing.T) {
 
 	// Start Node A
 	t.Log("Starting Node A...")
-	_ = startBackgroundNode(t, nodeBin, routerAddr, homeA,
+	nodeA := startBackgroundNode(t, nodeBin, routerAddr, homeA,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
-		"--bind-addr", "127.0.0.1:0",
 		"--api-token-path", tokenPath(t, apiToken),
 		"--config", cfgA,
 	)
 
 	// Start Node B
 	t.Log("Starting Node B...")
-	_ = startBackgroundNode(t, nodeBin, routerAddr, homeB,
+	nodeB := startBackgroundNode(t, nodeBin, routerAddr, homeB,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
-		"--bind-addr", "127.0.0.1:0",
 		"--api-token-path", tokenPath(t, apiToken),
 	)
 
-	// Resolve actual addresses from logs
-	actualApiAddrA := waitForMCPAddr(t, filepath.Join(homeA, "node.log"))
-	actualApiAddrB := waitForMCPAddr(t, filepath.Join(homeB, "node.log"))
+	nodeA.waitForAPI(t)
+	actualApiAddrB := nodeB.waitForAPI(t)
 
-	// Wait for nodes to start sidecar API
-	waitForAPI(t, actualApiAddrA)
-	waitForAPI(t, actualApiAddrB)
-
-	addrA := waitForPeerInfoInLog(t, filepath.Join(homeA, "node.log"))
+	addrA := nodeA.p2pAddr
 	peerIDA := getPeerIDFromAddr(addrA)
 
 	// Connect Node B to Node A
@@ -177,36 +170,29 @@ func TestIntegrationHTTPDatapath(t *testing.T) {
 
 	// Start Node A
 	t.Log("Starting Node A...")
-	_ = startBackgroundNode(t, nodeBin, routerAddr, homeA,
+	nodeA := startBackgroundNode(t, nodeBin, routerAddr, homeA,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
-		"--bind-addr", "127.0.0.1:0",
 		"--api-token-path", tokenPath(t, apiToken),
 		"--config", cfgA,
 	)
 
 	// Start Node B
 	t.Log("Starting Node B...")
-	_ = startBackgroundNode(t, nodeBin, routerAddr, homeB,
+	nodeB := startBackgroundNode(t, nodeBin, routerAddr, homeB,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
-		"--bind-addr", "127.0.0.1:0",
 		"--api-token-path", tokenPath(t, apiToken),
 	)
 
-	// Resolve actual addresses from logs
-	actualApiAddrA := waitForMCPAddr(t, filepath.Join(homeA, "node.log"))
-	actualApiAddrB := waitForMCPAddr(t, filepath.Join(homeB, "node.log"))
+	nodeA.waitForAPI(t)
+	actualApiAddrB := nodeB.waitForAPI(t)
 
-	// Wait for nodes to start sidecar API
-	waitForAPI(t, actualApiAddrA)
-	waitForAPI(t, actualApiAddrB)
-
-	addrA := waitForPeerInfoInLog(t, filepath.Join(homeA, "node.log"))
+	addrA := nodeA.p2pAddr
 	peerIDA := getPeerIDFromAddr(addrA)
-	addrB := waitForPeerInfoInLog(t, filepath.Join(homeB, "node.log"))
+	addrB := nodeB.p2pAddr
 	peerIDB := getPeerIDFromAddr(addrB)
 
 	// Connect Node B to Node A

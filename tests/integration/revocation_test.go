@@ -21,7 +21,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -113,97 +112,45 @@ roles:
 	fetchPeerID(t, cpPort)
 
 	// 4. Start Node 1
-	node1ApiPort := getFreePort(t)
 	node1Home := filepath.Join(tmpDir, "node1_home")
-	_ = os.MkdirAll(node1Home, 0755)
-
-	logDir := filepath.Join(repoRoot(t), "tests/integration/logs")
-	_ = os.MkdirAll(logDir, 0755)
-
-	node1LogPath := filepath.Join(logDir, "node1.log")
-	node1LogFile, _ := os.Create(node1LogPath)
-	defer func() { _ = node1LogFile.Close() }()
-
-	node1Cmd := exec.Command(nodeBin, "run",
+	node1 := launchNode(t, nodeBin,
+		append(os.Environ(), "HOME="+node1Home, "XDG_CONFIG_HOME="+filepath.Join(node1Home, ".config")),
+		node1Home, "run",
 		"--control-plane", fmt.Sprintf("http://127.0.0.1:%d", cpPort),
 		"--jwt", mintToken(map[string]interface{}{"sub": "mock-user", "roles": []string{api.RoleNode}}),
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
-		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--allow-loopback",
-		"--bind-addr", fmt.Sprintf("127.0.0.1:%d", node1ApiPort),
 		"--api-token-path", tokenPath(t, "node1-token"),
 		"--log-level", "debug",
 	)
-	node1Cmd.Env = append(os.Environ(), "HOME="+node1Home, "XDG_CONFIG_HOME="+filepath.Join(node1Home, ".config"))
-	node1Cmd.Stdout = node1LogFile
-	node1Cmd.Stderr = node1LogFile
-	if err := node1Cmd.Start(); err != nil {
-		t.Fatalf("failed to start node 1: %v", err)
-	}
-	defer func() {
-		_ = node1Cmd.Process.Kill()
-		_ = node1Cmd.Wait()
-	}()
 
 	// 5. Start Node 2
-	node2ApiPort := getFreePort(t)
 	node2Home := filepath.Join(tmpDir, "node2_home")
-	_ = os.MkdirAll(node2Home, 0755)
-
-	node2LogPath := filepath.Join(logDir, "node2.log")
-	node2LogFile, _ := os.Create(node2LogPath)
-	defer func() { _ = node2LogFile.Close() }()
-
-	node2Cmd := exec.Command(nodeBin, "run",
+	node2 := launchNode(t, nodeBin,
+		append(os.Environ(), "HOME="+node2Home, "XDG_CONFIG_HOME="+filepath.Join(node2Home, ".config")),
+		node2Home, "run",
 		"--control-plane", fmt.Sprintf("http://127.0.0.1:%d", cpPort),
 		"--jwt", mintToken(map[string]interface{}{"sub": "mock-user", "roles": []string{api.RoleNode}}),
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
-		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--allow-loopback",
-		"--bind-addr", fmt.Sprintf("127.0.0.1:%d", node2ApiPort),
 		"--api-token-path", tokenPath(t, "node2-token"),
 		"--log-level", "debug",
 	)
-	node2Cmd.Env = append(os.Environ(), "HOME="+node2Home, "XDG_CONFIG_HOME="+filepath.Join(node2Home, ".config"))
-	node2Cmd.Stdout = node2LogFile
-	node2Cmd.Stderr = node2LogFile
-	if err := node2Cmd.Start(); err != nil {
-		t.Fatalf("failed to start node 2: %v", err)
-	}
-	defer func() {
-		_ = node2Cmd.Process.Kill()
-		_ = node2Cmd.Wait()
-	}()
 
-	// Wait for nodes to go online actively
-	waitForNodeOnline(t, node1LogPath)
-	waitForNodeOnline(t, node2LogPath)
+	node1API := node1.waitForAPI(t)
+	node2.waitForAPI(t)
 
-	// Extract Node 2's PeerID and Address from its log
-	node2LogData, _ := os.ReadFile(node2LogPath)
-	rePeerID := regexp.MustCompile(`PeerID: (12D3Koo[a-zA-Z0-9]+)`)
-	matches := rePeerID.FindStringSubmatch(string(node2LogData))
-	if len(matches) < 2 {
-		t.Fatalf("failed to find Node 2 peer ID in logs:\n%s", string(node2LogData))
-	}
-	node2PeerID := matches[1]
-
-	reAddr := regexp.MustCompile(`Listening on: \[(/ip4/127.0.0.1/tcp/\d+)`)
-	matchesAddr := reAddr.FindStringSubmatch(string(node2LogData))
-	if len(matchesAddr) < 2 {
-		t.Fatalf("failed to find Node 2 listening TCP address in logs:\n%s", string(node2LogData))
-	}
-	node2TCPAddr := matchesAddr[1]
+	node2AddrStr := node2.p2pAddr
+	node2PeerID := node2.peerID.String()
 
 	// 6. Request Node 1 to connect to Node 2
-	connectPeerWithToken(t, fmt.Sprintf("127.0.0.1:%d", node1ApiPort), "node1-token",
-		fmt.Sprintf("%s/p2p/%s", node2TCPAddr, node2PeerID))
+	connectPeerWithToken(t, node1API, "node1-token", node2AddrStr)
 
 	// Verify Node 1 is connected to Node 2
 	time.Sleep(1 * time.Second)
 	stdout, stderr, err := runCommand(t, repoRoot(t), 5*time.Second, nil, "",
 		clientBin,
-		"-url", fmt.Sprintf("http://127.0.0.1:%d/mcp", node1ApiPort),
+		"-url", "http://"+node1API+"/mcp",
 		"-token", "node1-token",
 		"-tool", "get_mesh_info",
 		"-args", "{}",
@@ -259,26 +206,11 @@ roles:
 	}
 	event.Signature = ed25519.Sign(cpPrivKey, eventData)
 
-	// Extract Node 1's PeerID and Address from its log
-	node1LogData, _ := os.ReadFile(node1LogPath)
-	matches1 := rePeerID.FindStringSubmatch(string(node1LogData))
-	if len(matches1) < 2 {
-		t.Fatalf("failed to find Node 1 peer ID in logs:\n%s", string(node1LogData))
-	}
-	node1PeerID := matches1[1]
-
-	matchesAddr1 := reAddr.FindStringSubmatch(string(node1LogData))
-	if len(matchesAddr1) < 2 {
-		t.Fatalf("failed to find Node 1 listening TCP address in logs:\n%s", string(node1LogData))
-	}
-	node1TCPAddr := matchesAddr1[1]
-
 	// Publish Gossip event directly to Node 1
-	node1AddrStr := fmt.Sprintf("%s/p2p/%s", node1TCPAddr, node1PeerID)
-	publishGossipEvent(t, node1AddrStr, event)
+	publishGossipEvent(t, node1.p2pAddr, event)
 
 	// 8. Wait for revocation event to propagate and Node 1 to disconnect Node 2 actively
-	waitForNodeDisconnection(t, clientBin, node1ApiPort, node2PeerID)
+	waitForNodeDisconnection(t, clientBin, node1API, node2PeerID)
 }
 
 func publishGossipEvent(t *testing.T, routerAddrStr string, event *api.MeshEvent) {
@@ -350,7 +282,7 @@ func publishGossipEvent(t *testing.T, routerAddrStr string, event *api.MeshEvent
 	}
 }
 
-func waitForNodeDisconnection(t *testing.T, clientBin string, node1ApiPort int, node2PeerID string) {
+func waitForNodeDisconnection(t *testing.T, clientBin string, node1API string, node2PeerID string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -358,7 +290,7 @@ func waitForNodeDisconnection(t *testing.T, clientBin string, node1ApiPort int, 
 	for {
 		stdout, _, err := runCommand(t, repoRoot(t), 2*time.Second, nil, "",
 			clientBin,
-			"-url", fmt.Sprintf("http://127.0.0.1:%d/mcp", node1ApiPort),
+			"-url", "http://"+node1API+"/mcp",
 			"-token", "node1-token",
 			"-tool", "get_mesh_info",
 			"-args", "{}",

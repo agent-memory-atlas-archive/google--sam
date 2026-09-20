@@ -56,24 +56,22 @@ func TestIdentityEvidenceOperatorFlow(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
 	ownerSocket := filepath.Join(socketDir, "owner.sock")
 
-	_ = startBackgroundNode(t, nodeBin, controlPlaneURL, ownerHome,
+	owner := startBackgroundNode(t, nodeBin, controlPlaneURL, ownerHome,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
 		"--socket-path", ownerSocket,
 	)
-	_ = startBackgroundNode(t, nodeBin, controlPlaneURL, providerHome,
+	provider := startBackgroundNode(t, nodeBin, controlPlaneURL, providerHome,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
 	)
 
-	ownerAPI := waitForMCPAddr(t, filepath.Join(ownerHome, "node.log"))
-	providerAPI := waitForMCPAddr(t, filepath.Join(providerHome, "node.log"))
-	waitForAPI(t, ownerAPI)
-	waitForAPI(t, providerAPI)
+	ownerAPI := owner.waitForAPI(t)
+	provider.waitForAPI(t)
 
-	providerAddr := waitForPeerInfoInLog(t, filepath.Join(providerHome, "node.log"))
+	providerAddr := provider.p2pAddr
 	providerPeerID := getPeerIDFromAddr(providerAddr)
 	if providerPeerID == "" {
 		t.Fatalf("provider address %q has no PeerID", providerAddr)

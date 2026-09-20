@@ -83,25 +83,23 @@ services:
 	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
 	nodeSocket := filepath.Join(sockDir, "node.sock")
 
-	_ = startBackgroundNode(t, nodeBin, hubAddr, homeA,
+	nodeA := startBackgroundNode(t, nodeBin, hubAddr, homeA,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
 		"--config", configA,
 	)
-	_ = startBackgroundNode(t, nodeBin, hubAddr, homeB,
+	nodeB := startBackgroundNode(t, nodeBin, hubAddr, homeB,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
 		"--socket-path", nodeSocket,
 	)
 
-	apiAddrA := waitForMCPAddr(t, filepath.Join(homeA, "node.log"))
-	apiAddrB := waitForMCPAddr(t, filepath.Join(homeB, "node.log"))
-	waitForAPI(t, apiAddrA)
-	waitForAPI(t, apiAddrB)
+	apiAddrA := nodeA.waitForAPI(t)
+	apiAddrB := nodeB.waitForAPI(t)
 
-	addrA := waitForPeerInfoInLog(t, filepath.Join(homeA, "node.log"))
+	addrA := nodeA.p2pAddr
 	connectPeer(t, apiAddrB, addrA)
 	waitForDHTPeers(t, apiAddrA)
 

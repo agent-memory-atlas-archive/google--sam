@@ -85,7 +85,7 @@ func TestSandboxBoundaryCUJ(t *testing.T) {
 	defer external.Close()
 
 	t.Log("Starting node A (provider) and node B (the gateway's node)...")
-	_ = startBackgroundNode(t, nodeBin, hubAddr, homeA,
+	nodeA := startBackgroundNode(t, nodeBin, hubAddr, homeA,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
@@ -93,19 +93,17 @@ func TestSandboxBoundaryCUJ(t *testing.T) {
 			svcDecl{Type: "inference", Name: "test-llm", TargetURL: inference.URL},
 			svcDecl{Type: "mcp", Name: "calc", TargetURL: tools.URL}),
 	)
-	_ = startBackgroundNode(t, nodeBin, hubAddr, homeB,
+	nodeB := startBackgroundNode(t, nodeBin, hubAddr, homeB,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
 		"--socket-path", nodeSocket,
 	)
 
-	apiAddrA := waitForMCPAddr(t, filepath.Join(homeA, "node.log"))
-	apiAddrB := waitForMCPAddr(t, filepath.Join(homeB, "node.log"))
-	waitForAPI(t, apiAddrA)
-	waitForAPI(t, apiAddrB)
+	apiAddrA := nodeA.waitForAPI(t)
+	apiAddrB := nodeB.waitForAPI(t)
 
-	addrA := waitForPeerInfoInLog(t, filepath.Join(homeA, "node.log"))
+	addrA := nodeA.p2pAddr
 	peerA := extractPeerID(addrA)
 	connectPeer(t, apiAddrB, addrA)
 	waitForDHTPeers(t, apiAddrA)

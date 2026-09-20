@@ -148,7 +148,7 @@ roles:
 	}()
 
 	// Wait for Node to be online actively
-	waitForNodeOnline(t, nodeLogPath)
+	waitForAPI(t, fmt.Sprintf("127.0.0.1:%d", nodeApiPort))
 
 	// Get initial keys
 	initialKeys := fetchPublicKeys(t, cpPort)
