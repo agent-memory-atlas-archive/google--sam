@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -156,18 +157,105 @@ func TestErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("an oversized body is cut at the cap, not buffered", func(t *testing.T) {
+	t.Run("an oversized body is an error, not a shorter message", func(t *testing.T) {
+		// A ban set cut at an entry boundary would decode as a valid, smaller
+		// ban set; the client must refuse the answer instead.
+		big := &api.ControlPlaneInfoResponse{}
+		for len(big.BannedPeerIds) < 200_000 {
+			big.BannedPeerIds = append(big.BannedPeerIds, "12D3KooWL7xNnc7bdzPGobhPxvunLC1uNhHfSCK8ZTXjR1YSTG9T")
+		}
+		if n := proto.Size(big); n <= MaxBodyBytes {
+			t.Fatalf("test answer is %d bytes, need more than %d", n, MaxBodyBytes)
+		}
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if _, err := w.Write(make([]byte, MaxBodyBytes+1)); err != nil {
-				t.Errorf("write: %v", err)
-			}
+			writeProto(t, w, big)
 		}))
 		defer srv.Close()
-		c := New(srv.URL, NewHTTPClient(time.Second, nil))
-		if _, err := c.FetchInfo(context.Background()); err == nil {
-			t.Fatal("a body over the cap must not decode into a valid answer")
+		c := New(srv.URL, NewHTTPClient(5*time.Second, nil))
+		info, err := c.FetchInfo(context.Background())
+		if !errors.Is(err, ErrBodyTooLarge) {
+			t.Fatalf("FetchInfo = (%d bans, %v), want ErrBodyTooLarge", len(info.GetBannedPeerIds()), err)
 		}
 	})
+}
+
+// The cap must never cut a legitimate answer: a large ban set well inside it
+// arrives whole, and a body of exactly the cap still decodes.
+func TestLargeAnswersArriveWhole(t *testing.T) {
+	const bans = 100_000
+	big := &api.ControlPlaneInfoResponse{RouterAddresses: []string{"/ip4/10.0.0.1/tcp/4501"}}
+	for i := 0; i < bans; i++ {
+		big.BannedPeerIds = append(big.BannedPeerIds, "12D3KooWL7xNnc7bdzPGobhPxvunLC1uNhHfSCK8ZTXjR1YSTG9T")
+	}
+	if n := proto.Size(big); n >= MaxBodyBytes {
+		t.Fatalf("%d bans is %d bytes, over the %d cap: the cap is too small for a mesh this size", bans, n, MaxBodyBytes)
+	}
+
+	t.Run("large ban set", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writeProto(t, w, big)
+		}))
+		defer srv.Close()
+		info, err := New(srv.URL, NewHTTPClient(5*time.Second, nil)).FetchInfo(context.Background())
+		if err != nil {
+			t.Fatalf("FetchInfo: %v", err)
+		}
+		if got := len(info.BannedPeerIds); got != bans {
+			t.Fatalf("FetchInfo returned %d bans, want %d: the answer was cut", got, bans)
+		}
+	})
+
+	t.Run("body of exactly the cap", func(t *testing.T) {
+		// Pad the router address so the encoded message is exactly MaxBodyBytes.
+		exact := &api.ControlPlaneInfoResponse{RouterAddresses: []string{""}}
+		pad := MaxBodyBytes - proto.Size(exact) - 3 // 3: the length prefix grows to three bytes
+		exact.RouterAddresses[0] = strings.Repeat("a", pad)
+		for proto.Size(exact) < MaxBodyBytes {
+			exact.RouterAddresses[0] += "a"
+		}
+		if n := proto.Size(exact); n != MaxBodyBytes {
+			t.Fatalf("test body is %d bytes, want exactly %d", n, MaxBodyBytes)
+		}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writeProto(t, w, exact)
+		}))
+		defer srv.Close()
+		info, err := New(srv.URL, NewHTTPClient(5*time.Second, nil)).FetchInfo(context.Background())
+		if err != nil {
+			t.Fatalf("FetchInfo at exactly the cap: %v", err)
+		}
+		if len(info.RouterAddresses) != 1 || len(info.RouterAddresses[0]) != len(exact.RouterAddresses[0]) {
+			t.Fatal("body of exactly the cap did not arrive whole")
+		}
+	})
+}
+
+func TestFetchPolicy(t *testing.T) {
+	want := &api.PolicyConfigGetResponse{
+		Roles:    []*api.PolicyRole{{Name: "developer", AllowedServices: []string{"mcp://*"}}},
+		Bindings: []*api.PolicyBinding{{Role: "developer", Members: []string{"group:eng"}}},
+	}
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		if r.URL.Path != "/policies" {
+			http.NotFound(w, r)
+			return
+		}
+		writeProto(t, w, want)
+	}))
+	defer srv.Close()
+
+	policy, err := New(srv.URL, NewHTTPClient(time.Second, nil)).FetchPolicy(context.Background(), []byte("biscuit"))
+	if err != nil {
+		t.Fatalf("FetchPolicy: %v", err)
+	}
+	if !proto.Equal(policy, want) {
+		t.Errorf("FetchPolicy = %v, want %v", policy, want)
+	}
+	if gotAuth != "Bearer "+base64.StdEncoding.EncodeToString([]byte("biscuit")) {
+		t.Errorf("Authorization = %q, want the biscuit as a base64 bearer token", gotAuth)
+	}
 }
 
 // The control plane is the trust root, so a plaintext hop to it is refused

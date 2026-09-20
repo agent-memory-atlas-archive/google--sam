@@ -37,6 +37,7 @@ import (
 
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/google/sam/api"
+	cpclient "github.com/google/sam/internal/controlplane/client"
 	"github.com/google/sam/internal/identity"
 	samdiscovery "github.com/google/sam/internal/node/discovery"
 	"github.com/google/sam/internal/ratelimit"
@@ -1178,9 +1179,9 @@ func (n *SamNode) RefreshEnrollment(ctx context.Context) error {
 		}
 	}
 
-	respData, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
+	respData, err := cpclient.ReadBody(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
+		return fmt.Errorf("refresh response: %w", err)
 	}
 
 	var refreshResp api.TokenRefreshResponse

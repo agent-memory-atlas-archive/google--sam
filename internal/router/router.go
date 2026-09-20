@@ -444,9 +444,9 @@ func (r *Router) enroll(peerID peer.ID) error {
 		return fmt.Errorf("enrollment response status %s: %s", resp.Status, string(body))
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := cpclient.ReadBody(resp.Body)
 	if err != nil {
-		return err
+		return fmt.Errorf("enrollment response: %w", err)
 	}
 
 	var enrollResp api.EnrollResponse
@@ -505,9 +505,9 @@ func (r *Router) enrollBootstrap(peerID peer.ID) error {
 		return fmt.Errorf("bootstrap enrollment request response status %s: %s", resp.Status, string(body))
 	}
 
-	respData, err := io.ReadAll(resp.Body)
+	respData, err := cpclient.ReadBody(resp.Body)
 	if err != nil {
-		return err
+		return fmt.Errorf("bootstrap enrollment response: %w", err)
 	}
 
 	enrollResp := &api.BootstrapEnrollResponse{}
@@ -566,10 +566,10 @@ func (r *Router) enrollBootstrap(peerID peer.ID) error {
 					continue
 				}
 
-				statusBody, err := io.ReadAll(statusResp.Body)
+				statusBody, err := cpclient.ReadBody(statusResp.Body)
 				_ = statusResp.Body.Close()
 				if err != nil {
-					logger.Warnf("failed to read status body: %v", err)
+					logger.Warnf("enrollment status response: %v", err)
 					continue
 				}
 
@@ -901,8 +901,13 @@ func (r *Router) renewLease() {
 			return
 		}
 
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := cpclient.ReadBody(resp.Body)
 		_ = resp.Body.Close()
+		if readErr != nil {
+			logger.Errorf("Control plane lease renewal response: %v", readErr)
+			leaseRenewalsTotal.WithLabelValues(leaseRejected).Inc()
+			return
+		}
 
 		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
 			logger.Warnf("Control plane lease renewal rejected (401 Unauthorized: %s), attempting recovery...", string(body))
@@ -1362,9 +1367,9 @@ func (r *Router) RefreshEnrollment(ctx context.Context) error {
 		return fmt.Errorf("refresh failed with status %s: %s", resp.Status, string(body))
 	}
 
-	respData, err := io.ReadAll(resp.Body)
+	respData, err := cpclient.ReadBody(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
+		return fmt.Errorf("refresh response: %w", err)
 	}
 
 	var refreshResp api.TokenRefreshResponse

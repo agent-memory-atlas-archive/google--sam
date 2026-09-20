@@ -32,7 +32,9 @@ import (
 
 // maxControlPlaneBodyBytes caps every response body read from the control
 // plane or an IdP: a misbehaving or impersonated server must not be able to
-// make the node buffer arbitrary amounts of memory.
+// make the node buffer arbitrary amounts of memory. Bodies that carry a
+// message go through cpclient.ReadBody, which turns an oversized answer into
+// an error rather than a truncated message.
 const maxControlPlaneBodyBytes = cpclient.MaxBodyBytes
 
 // controlPlaneClient speaks the pull endpoints of controlPlaneURL through the
@@ -83,41 +85,7 @@ func publicKeysOf(keys []TrustedKey) []ed25519.PublicKey {
 
 // FetchMeshPolicy retrieves the latest mesh policy from the control plane's /policies endpoint using a biscuit token.
 func FetchMeshPolicy(ctx context.Context, controlPlaneURL string, biscuitToken []byte) (*api.PolicyConfigGetResponse, error) {
-	if !strings.HasPrefix(controlPlaneURL, "http://") && !strings.HasPrefix(controlPlaneURL, "https://") {
-		controlPlaneURL = "https://" + controlPlaneURL
-	}
-	controlPlaneURL = strings.TrimSuffix(controlPlaneURL, "/")
-
-	urlStr := controlPlaneURL + "/policies"
-	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+base64.StdEncoding.EncodeToString(biscuitToken))
-
-	client := controlPlaneHTTPClient(10 * time.Second)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP request failed: %w", err)
-	}
-	defer resp.Body.Close() //nolint:errcheck
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("control plane returned status %s: %s", resp.Status, string(body))
-	}
-
-	var policyResp api.PolicyConfigGetResponse
-	if err := proto.Unmarshal(body, &policyResp); err != nil {
-		return nil, fmt.Errorf("failed to decode /policies response: %w", err)
-	}
-
-	return &policyResp, nil
+	return controlPlaneClient(controlPlaneURL).FetchPolicy(ctx, biscuitToken)
 }
 
 // ReportNodeCatalog self-reports this node's locally registered services to

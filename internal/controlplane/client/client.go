@@ -21,6 +21,8 @@ package client
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -34,8 +36,29 @@ import (
 
 // MaxBodyBytes caps every response body read from a control plane: a
 // misbehaving or impersonated server must not be able to make a client
-// buffer arbitrary amounts of memory.
-const MaxBodyBytes = 1 << 20
+// buffer arbitrary amounts of memory. It is sized for the largest legitimate
+// answer, the ban set in /info at roughly 55 bytes per peer ID, so about
+// 150k banned peers fit; the policy is bounded by the control plane's own
+// 1 MiB cap on POST /policies, and /keys is a few hundred bytes.
+const MaxBodyBytes = 8 << 20
+
+// ErrBodyTooLarge marks an answer over MaxBodyBytes. It is an error, never a
+// prefix: a protobuf message cut at a field boundary still decodes, so a
+// truncated ban set or router list would be read as a smaller, valid one.
+var ErrBodyTooLarge = errors.New("control plane answer exceeds the body cap")
+
+// ReadBody reads a control plane response body of at most MaxBodyBytes and
+// reports ErrBodyTooLarge for anything larger.
+func ReadBody(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, MaxBodyBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	if len(body) > MaxBodyBytes {
+		return nil, fmt.Errorf("%w (%d bytes)", ErrBodyTooLarge, MaxBodyBytes)
+	}
+	return body, nil
+}
 
 // transport applies api.ValidateControlPlaneTransport to every request,
 // redirects included, so a plaintext hop is refused wherever the URL came
@@ -81,7 +104,7 @@ func New(baseURL string, httpClient *http.Client) *Client {
 // details a node needs to enroll.
 func (c *Client) FetchInfo(ctx context.Context) (*api.ControlPlaneInfoResponse, error) {
 	var info api.ControlPlaneInfoResponse
-	if err := c.get(ctx, "/info", &info); err != nil {
+	if err := c.get(ctx, "/info", nil, &info); err != nil {
 		return nil, err
 	}
 	return &info, nil
@@ -93,7 +116,7 @@ func (c *Client) FetchInfo(ctx context.Context) (*api.ControlPlaneInfoResponse, 
 // control plane, not become it.
 func (c *Client) FetchKeys(ctx context.Context, trusted []ed25519.PublicKey) ([]ed25519.PublicKey, error) {
 	var resp api.KeysResponse
-	if err := c.get(ctx, "/keys", &resp); err != nil {
+	if err := c.get(ctx, "/keys", nil, &resp); err != nil {
 		return nil, err
 	}
 	keys, err := api.VerifyKeysResponse(&resp, trusted, time.Now())
@@ -103,10 +126,23 @@ func (c *Client) FetchKeys(ctx context.Context, trusted []ed25519.PublicKey) ([]
 	return keys, nil
 }
 
-func (c *Client) get(ctx context.Context, path string, msg proto.Message) error {
+// FetchPolicy is GET /policies, authenticated with the caller's biscuit: the
+// roles and bindings a node compiles into its authorization rules.
+func (c *Client) FetchPolicy(ctx context.Context, biscuit []byte) (*api.PolicyConfigGetResponse, error) {
+	var policy api.PolicyConfigGetResponse
+	if err := c.get(ctx, "/policies", biscuit, &policy); err != nil {
+		return nil, err
+	}
+	return &policy, nil
+}
+
+func (c *Client) get(ctx context.Context, path string, biscuit []byte, msg proto.Message) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+	if len(biscuit) > 0 {
+		req.Header.Set("Authorization", "Bearer "+base64.StdEncoding.EncodeToString(biscuit))
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -114,9 +150,9 @@ func (c *Client) get(ctx context.Context, path string, msg proto.Message) error 
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxBodyBytes))
+	body, err := ReadBody(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
+		return fmt.Errorf("%s: %w", path, err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("control plane returned status %s: %s", resp.Status, string(body))

@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/google/sam/api"
+	cpclient "github.com/google/sam/internal/controlplane/client"
 	"github.com/google/sam/internal/identity"
 	golog "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -171,9 +172,9 @@ func (n *SamNode) processEnrollResponse(resp *http.Response) (*api.EnrollRespons
 		return nil, fmt.Errorf("enrollment failed with status %s: %s", resp.Status, string(body))
 	}
 
-	respData, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
+	respData, err := cpclient.ReadBody(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %v", err)
+		return nil, fmt.Errorf("enrollment response: %w", err)
 	}
 
 	var enrollResp api.EnrollResponse
@@ -289,9 +290,9 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, b
 		return fmt.Errorf("enrollment failed with status %s: %s", resp.Status, string(body))
 	}
 
-	respData, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
+	respData, err := cpclient.ReadBody(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
+		return fmt.Errorf("bootstrap enrollment response: %w", err)
 	}
 
 	enrollResp := &api.BootstrapEnrollResponse{}
@@ -351,10 +352,10 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, b
 					continue
 				}
 
-				hRespData, err := io.ReadAll(io.LimitReader(hResp.Body, maxControlPlaneBodyBytes))
+				hRespData, err := cpclient.ReadBody(hResp.Body)
 				_ = hResp.Body.Close()
 				if err != nil {
-					logger.Warnf("Failed to read status response body: %v", err)
+					logger.Warnf("Enrollment status response: %v", err)
 					continue
 				}
 
