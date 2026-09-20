@@ -356,7 +356,14 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start router: %w", err)
 	}
 	s.router = rtr
-
+	// One process, one mesh peer: the control plane publishes its events on
+	// the embedded router's own topic instead of dialing itself.
+	mesh, err := controlplane.NewP2PMeshAdapter(rtr.Host, rtr.EventTopic, store)
+	if err != nil {
+		_ = rtr.Close()
+		return fmt.Errorf("failed to attach control plane to the mesh: %w", err)
+	}
+	cp.SetMeshAdapter(mesh)
 	if s.publicAddr, err = s.resolvePublicAddr(); err != nil {
 		_ = rtr.Close()
 		return err

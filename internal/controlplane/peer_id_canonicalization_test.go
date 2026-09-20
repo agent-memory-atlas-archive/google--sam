@@ -407,8 +407,12 @@ func TestPublishEventValidatesPeerID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create pubsub: %v", err)
 	}
+	topic, err := ps.Join(api.GossipEvents)
+	if err != nil {
+		t.Fatalf("failed to join topic: %v", err)
+	}
 
-	adapter, err := NewP2PMeshAdapter(h, ps, store)
+	adapter, err := NewP2PMeshAdapter(h, topic, store)
 	if err != nil {
 		t.Fatalf("failed to create P2PMeshAdapter: %v", err)
 	}
