@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -87,62 +86,6 @@ func writeNodeConfig(t *testing.T, dir string, labels map[string]string, service
 	return p
 }
 
-func startBackgroundNode(t *testing.T, nodeBin string, routerAddr string, homeDir string, args ...string) *exec.Cmd {
-	t.Helper()
-	env := append(os.Environ(),
-		"HOME="+homeDir,
-		"XDG_CONFIG_HOME="+filepath.Join(homeDir, ".config"),
-		"SAM_API_TOKEN=test-token", // per-test overrides use --api-token-path, which wins
-	)
-	allArgs := append([]string{"run", "--control-plane", routerAddr, "--jwt", "test-jwt", "--bind-addr", "127.0.0.1:0", "--allow-loopback"}, args...)
-	cmd := exec.Command(nodeBin, allArgs...)
-	cmd.Env = env
-
-	logFile, err := os.Create(filepath.Join(homeDir, "node.log"))
-	if err != nil {
-		t.Fatalf("failed to create log file: %v", err)
-	}
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("failed to start background node: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if err := cmd.Process.Kill(); err != nil {
-			t.Logf("warning: failed to kill background node: %v", err)
-		}
-		if err := logFile.Close(); err != nil {
-			t.Logf("warning: failed to close log file: %v", err)
-		}
-	})
-
-	return cmd
-}
-
-func waitForMCPAddr(t *testing.T, logPath string) string {
-	t.Helper()
-	// Generous under CI load; polling returns as soon as the line appears.
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		data, _ := os.ReadFile(logPath)
-		lines := strings.Split(string(data), "\n")
-		for _, line := range lines {
-			if strings.Contains(line, "Starting MCP server on TCP address ") {
-				parts := strings.Split(line, "Starting MCP server on TCP address ")
-				if len(parts) > 1 {
-					return strings.TrimSpace(parts[1])
-				}
-			}
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	data, _ := os.ReadFile(logPath)
-	t.Fatalf("timeout waiting for MCP addr in log: %s\n--- log contents ---\n%s", logPath, string(data))
-	return ""
-}
-
 func callMCP(t *testing.T, mcpAddr string, toolName string, params map[string]any) string {
 	t.Helper()
 	ctx := context.Background()
@@ -201,36 +144,6 @@ func (a *authRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	return a.rt.RoundTrip(clone)
 }
 
-func waitForPeerInfoInLog(t *testing.T, logPath string) string {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		data, _ := os.ReadFile(logPath)
-		lines := strings.Split(string(data), "\n")
-		var peerID string
-		var tcpAddr string
-		for _, line := range lines {
-			if strings.HasPrefix(line, "PeerID: ") {
-				peerID = strings.TrimPrefix(line, "PeerID: ")
-			}
-			if strings.Contains(line, "Listening on: ") {
-				parts := strings.Split(line, " ")
-				for _, p := range parts {
-					if strings.Contains(p, "/tcp/") {
-						tcpAddr = strings.Trim(p, "[]")
-					}
-				}
-			}
-		}
-		if peerID != "" && tcpAddr != "" {
-			return tcpAddr + "/p2p/" + peerID
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Fatalf("timeout waiting for peer info in log: %s", logPath)
-	return ""
-}
-
 func TestCatalogRoutingAndFailover(t *testing.T) {
 	nodeBin := buildBinary(t, "./cmd/sam-node")
 	_, routerAddr := startMockRouter(t)
@@ -241,25 +154,25 @@ func TestCatalogRoutingAndFailover(t *testing.T) {
 
 	// Start Node A (Client)
 	t.Log("Starting Node A...")
-	_ = startBackgroundNode(t, nodeBin, routerAddr, homeA, "--listen", "/ip4/127.0.0.1/udp/0/quic-v1", "--listen", "/ip4/127.0.0.1/tcp/0", "--discovery-interval", "100ms")
+	nodeA := startBackgroundNode(t, nodeBin, routerAddr, homeA, "--listen", "/ip4/127.0.0.1/udp/0/quic-v1", "--listen", "/ip4/127.0.0.1/tcp/0", "--discovery-interval", "100ms")
 	t.Log("Node A started.")
 
-	// Wait for Node A to start and get its MCP address
-	mcpAddrA := waitForMCPAddr(t, filepath.Join(homeA, "node.log"))
+	mcpAddrA := nodeA.waitForAPI(t)
 
 	// Start Node B (Provider 1)
 	t.Log("Starting Node B...")
-	cmdB := startBackgroundNode(t, nodeBin, routerAddr, homeB, "--listen", "/ip4/127.0.0.1/udp/0/quic-v1", "--listen", "/ip4/127.0.0.1/tcp/0", "--discovery-interval", "100ms")
+	nodeB := startBackgroundNode(t, nodeBin, routerAddr, homeB, "--listen", "/ip4/127.0.0.1/udp/0/quic-v1", "--listen", "/ip4/127.0.0.1/tcp/0", "--discovery-interval", "100ms")
 	t.Log("Node B started.")
 
 	// Start Node C (Provider 2)
 	t.Log("Starting Node C...")
-	_ = startBackgroundNode(t, nodeBin, routerAddr, homeC, "--listen", "/ip4/127.0.0.1/udp/0/quic-v1", "--listen", "/ip4/127.0.0.1/tcp/0", "--discovery-interval", "100ms")
+	nodeC := startBackgroundNode(t, nodeBin, routerAddr, homeC, "--listen", "/ip4/127.0.0.1/udp/0/quic-v1", "--listen", "/ip4/127.0.0.1/tcp/0", "--discovery-interval", "100ms")
 	t.Log("Node C started.")
 
-	// Wait for Node B and C to start and get their addresses
-	addrB := waitForPeerInfoInLog(t, filepath.Join(homeB, "node.log"))
-	addrC := waitForPeerInfoInLog(t, filepath.Join(homeC, "node.log"))
+	nodeB.waitForAPI(t)
+	nodeC.waitForAPI(t)
+	addrB := nodeB.p2pAddr
+	addrC := nodeC.p2pAddr
 
 	// Force Node A to connect to Node B and Node C
 	connectPeer(t, mcpAddrA, addrB)
@@ -329,9 +242,7 @@ func TestCatalogRoutingAndFailover(t *testing.T) {
 	t.Logf("First call response: %s", respData)
 
 	// Now kill Node B and assert failover to Node C
-	if err := cmdB.Process.Kill(); err != nil {
-		t.Fatalf("failed to kill Node B: %v", err)
-	}
+	nodeB.kill()
 
 	// Wait a bit for catalog update or failover to happen on next call
 	time.Sleep(500 * time.Millisecond)

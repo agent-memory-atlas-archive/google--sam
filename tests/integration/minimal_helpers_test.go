@@ -682,24 +682,6 @@ func writePolicyWithRouter(t *testing.T, path string, yamlContent string) {
 	}
 }
 
-func waitForNodeOnline(t *testing.T, logPath string) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	for {
-		data, err := os.ReadFile(logPath)
-		if err == nil && strings.Contains(string(data), "SAM Node Online") {
-			return
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("timed out waiting for node to go online")
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
-}
-
 // injectPolicyYAML posts a policy fixture through the same conversion the console
 // performs: YAML for readability, protojson on the wire. Going through JSON keeps
 // this helper free of any field list, so a new PolicyRole field needs no change

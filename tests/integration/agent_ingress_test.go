@@ -104,13 +104,13 @@ func TestAgentIngressCUJ(t *testing.T) {
 		t.Fatalf("writing node config: %v", err)
 	}
 
-	_ = startBackgroundNode(t, nodeBin, hubAddr, homeA,
+	nodeA := startBackgroundNode(t, nodeBin, hubAddr, homeA,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
 	)
 	// Node B hosts the agent, and is the one that advertises its service.
-	_ = startBackgroundNode(t, nodeBin, hubAddr, homeB,
+	nodeB := startBackgroundNode(t, nodeBin, hubAddr, homeB,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
@@ -118,12 +118,10 @@ func TestAgentIngressCUJ(t *testing.T) {
 		"--config", cfgPath,
 	)
 
-	apiAddrA := waitForMCPAddr(t, filepath.Join(homeA, "node.log"))
-	apiAddrB := waitForMCPAddr(t, filepath.Join(homeB, "node.log"))
-	waitForAPI(t, apiAddrA)
-	waitForAPI(t, apiAddrB)
+	apiAddrA := nodeA.waitForAPI(t)
+	apiAddrB := nodeB.waitForAPI(t)
 
-	addrB := waitForPeerInfoInLog(t, filepath.Join(homeB, "node.log"))
+	addrB := nodeB.p2pAddr
 	peerB := extractPeerID(addrB)
 	connectPeer(t, apiAddrA, addrB)
 	waitForDHTPeers(t, apiAddrB)

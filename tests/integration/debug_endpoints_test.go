@@ -113,34 +113,26 @@ roles: []
 
 	// Start Node A
 	t.Log("Starting Node A...")
-	_ = startBackgroundNode(t, nodeBin, controlPlaneURL, homeA,
+	nodeA := startBackgroundNode(t, nodeBin, controlPlaneURL, homeA,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
-		"--bind-addr", "127.0.0.1:0",
 		"--api-token-path", tokenPath(t, apiToken),
 		"--jwt", nodeJWT,
 	)
 
 	// Start Node B
 	t.Log("Starting Node B...")
-	_ = startBackgroundNode(t, nodeBin, controlPlaneURL, homeB,
+	nodeB := startBackgroundNode(t, nodeBin, controlPlaneURL, homeB,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
-		"--bind-addr", "127.0.0.1:0",
 		"--api-token-path", tokenPath(t, apiToken),
 		"--jwt", nodeJWT,
 	)
 
-	// Resolve actual local API address from log
-	actualApiAddrA := waitForMCPAddr(t, filepath.Join(homeA, "node.log"))
-	actualApiAddrB := waitForMCPAddr(t, filepath.Join(homeB, "node.log"))
+	actualApiAddrA := nodeA.waitForAPI(t)
+	actualApiAddrB := nodeB.waitForAPI(t)
 
-	// Wait for nodes to start sidecar API
-	waitForAPI(t, actualApiAddrA)
-	waitForAPI(t, actualApiAddrB)
-
-	// Resolve Peer addresses
-	addrA := waitForPeerInfoInLog(t, filepath.Join(homeA, "node.log"))
+	addrA := nodeA.p2pAddr
 
 	// Connect Node B to Node A directly; exercises POST /debug/connect-peer
 	connectPeer(t, actualApiAddrB, addrA)

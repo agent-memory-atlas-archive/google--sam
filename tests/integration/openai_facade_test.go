@@ -19,7 +19,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -75,7 +74,7 @@ func TestOpenAIFacadeCUJ(t *testing.T) {
 	defer backend.Close()
 
 	t.Log("Starting Node A (provider)...")
-	_ = startBackgroundNode(t, nodeBin, hubAddr, homeA,
+	nodeA := startBackgroundNode(t, nodeBin, hubAddr, homeA,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
@@ -83,18 +82,16 @@ func TestOpenAIFacadeCUJ(t *testing.T) {
 		"--config", writeNodeConfig(t, homeA, map[string]string{"region": "eu"}, svcDecl{Type: "inference", Name: "test-llm", TargetURL: backend.URL}),
 	)
 	t.Log("Starting Node B (consumer)...")
-	_ = startBackgroundNode(t, nodeBin, hubAddr, homeB,
+	nodeB := startBackgroundNode(t, nodeBin, hubAddr, homeB,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
 	)
 
-	apiAddrA := waitForMCPAddr(t, filepath.Join(homeA, "node.log"))
-	apiAddrB := waitForMCPAddr(t, filepath.Join(homeB, "node.log"))
-	waitForAPI(t, apiAddrA)
-	waitForAPI(t, apiAddrB)
+	apiAddrA := nodeA.waitForAPI(t)
+	apiAddrB := nodeB.waitForAPI(t)
 
-	addrA := waitForPeerInfoInLog(t, filepath.Join(homeA, "node.log"))
+	addrA := nodeA.p2pAddr
 	connectPeer(t, apiAddrB, addrA)
 	waitForDHTPeers(t, apiAddrA)
 

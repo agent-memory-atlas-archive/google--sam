@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -169,12 +168,10 @@ services:
 
 	homeB := filepath.Join(tmpDir, "nodeB")
 	apiTokenB := "tokenB"
-	apiPortB := getFreePort(t)
 
-	cmdB := exec.Command(nodeBin, "run",
+	nodeB := launchNode(t, nodeBin, os.Environ(), homeB, "run",
 		"--control-plane", fmt.Sprintf("http://127.0.0.1:%d", httpPortCP),
 		"--data-dir", homeB,
-		"--bind-addr", fmt.Sprintf("127.0.0.1:%d", apiPortB),
 		"--api-token-path", tokenPath(t, apiTokenB),
 		"--jwt", mintToken(map[string]interface{}{
 			"sub":    "bob-subject",
@@ -182,29 +179,12 @@ services:
 			"email":  "nodeB@example.com",
 			"groups": []string{"compute", "backend"},
 		}),
-		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--allow-loopback",
 		"--config", nodeBPolicyFile,
 	)
-	if err := os.MkdirAll(homeB, 0755); err != nil {
-		t.Fatal(err)
-	}
-	logFileB, err := os.Create(filepath.Join(homeB, "node.log"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = logFileB.Close() }()
-	cmdB.Stdout = logFileB
-	cmdB.Stderr = logFileB
-	if err := cmdB.Start(); err != nil {
-		t.Fatalf("Failed to start Node B: %v", err)
-	}
-	defer func() { _ = cmdB.Process.Kill(); _ = cmdB.Wait() }()
-
-	actualApiAddrB := waitForMCPAddr(t, filepath.Join(homeB, "node.log"))
-	waitForAPI(t, actualApiAddrB)
-	addrB := waitForPeerInfoInLog(t, filepath.Join(homeB, "node.log"))
+	nodeB.waitForAPI(t)
+	addrB := nodeB.p2pAddr
 
 	// 3. Test Permutations
 	tests := []struct {
@@ -264,39 +244,20 @@ services:
 		t.Run(tt.name, func(t *testing.T) {
 			homeA := filepath.Join(tmpDir, fmt.Sprintf("nodeA_%d", i))
 			apiTokenA := "tokenA"
-			apiPortA := getFreePort(t)
 
 			// The seat comes from the sam:system:authenticated binding above,
 			// never from a roles claim naming sam:role:node.
 			jwtA := mintToken(tt.jwtClaims)
 
-			cmdA := exec.Command(nodeBin, "run",
+			nodeA := launchNode(t, nodeBin, os.Environ(), homeA, "run",
 				"--control-plane", fmt.Sprintf("http://127.0.0.1:%d", httpPortCP),
 				"--data-dir", homeA,
-				"--bind-addr", fmt.Sprintf("127.0.0.1:%d", apiPortA),
 				"--api-token-path", tokenPath(t, apiTokenA),
 				"--jwt", jwtA,
-				"--listen", "/ip4/127.0.0.1/tcp/0",
 				"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 				"--allow-loopback",
 			)
-			if err := os.MkdirAll(homeA, 0755); err != nil {
-				t.Fatal(err)
-			}
-			logFileA, err := os.Create(filepath.Join(homeA, "node.log"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = logFileA.Close() }()
-			cmdA.Stdout = logFileA
-			cmdA.Stderr = logFileA
-			if err := cmdA.Start(); err != nil {
-				t.Fatalf("Failed to start Node A: %v", err)
-			}
-			defer func() { _ = cmdA.Process.Kill(); _ = cmdA.Wait() }()
-
-			actualApiAddrA := waitForMCPAddr(t, filepath.Join(homeA, "node.log"))
-			waitForAPI(t, actualApiAddrA)
+			actualApiAddrA := nodeA.waitForAPI(t)
 
 			parts := strings.Split(addrB, "/p2p/")
 			if len(parts) != 2 {
