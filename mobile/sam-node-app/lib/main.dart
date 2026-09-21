@@ -17,6 +17,7 @@ import 'sam_ffi.dart';
 import 'mcp_server.dart';
 import 'enroll_link.dart';
 import 'scan_page.dart';
+import 'oidc.dart';
 
 // Isolate.run lives in these top-level functions, not in State methods: a closure
 // there shares its context with sibling setState closures, so `this` and its
@@ -504,16 +505,12 @@ class _NodeControlPageState extends State<NodeControlPage> {
         _status = 'Exchanging code for token...';
       });
 
-      final tokenResponse = await http.post(
-        Uri.parse(tokenUrl),
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: {
-          'grant_type': 'authorization_code',
-          'client_id': clientId,
-          'code': code,
-          'redirect_uri': redirectUri,
-          'code_verifier': verifier,
-        },
+      final tokenResponse = await exchangeAuthorizationCode(
+        tokenUrl: Uri.parse(tokenUrl),
+        clientId: clientId,
+        code: code,
+        redirectUri: redirectUri,
+        verifier: verifier,
       );
 
       if (tokenResponse.statusCode != 200) {
@@ -638,15 +635,13 @@ class _NodeControlPageState extends State<NodeControlPage> {
       if (!_devicePollingActive) break;
 
       try {
-        final response = await http.post(
-          Uri.parse(tokenUrl),
-          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-          body: {
-            'grant_type': 'urn:ietf:params:oauth:grant-type:device_code',
-            'device_code': deviceCode,
-            'client_id': clientId,
-          },
+        final response = await exchangeDeviceCode(
+          tokenUrl: Uri.parse(tokenUrl),
+          clientId: clientId,
+          deviceCode: deviceCode,
+          isActive: () => mounted && _devicePollingActive,
         );
+        if (response == null || !mounted || !_devicePollingActive) break;
 
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);
