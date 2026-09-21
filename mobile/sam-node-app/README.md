@@ -1,12 +1,20 @@
-# SAM Connect (Flutter Client)
+# SAM Connect (Android)
 
-This folder contains a Flutter application that packages and runs the native Go-based `sam-node` mesh client on mobile devices (Android and iOS) using Go's CGO compiler and Dart FFI (Foreign Function Interface).
+This folder contains a Flutter application that packages and runs the native Go-based `sam-node` mesh client on Android using Go's CGO compiler and Dart FFI (Foreign Function Interface).
+
+SAM Connect currently supports Android only. The repository has an iOS FFI
+library build target, but no iOS app project or release.
+
+For manual testing, follow the [Android tester tutorial](../../site/content/docs/preview/mobile.md#android-tester-tutorial).
+Choose browser enrollment on `https://bananas.sam-mesh.dev` or
+`https://hub.sam-mesh.dev`, or scan the QR code from your own `sam-one` mesh.
+Both paths include connection checks and instructions for reporting failures.
 
 ---
 
 ## Architecture Overview
 
-The app compiles the core Go mesh networking and routing logic into a C-compatible shared library (`.so` or `.a`), which is loaded dynamically by the Dart runtime. The Dart GUI manages the lifecycle of the node (enrollment, start, stop) via FFI function calls, while any tool registration, discovery, or mesh API queries are sent via standard HTTP JSON-RPC to the local loopback port of the node's sidecar server.
+The app compiles the core Go mesh networking and routing logic into a C-compatible shared library (`.so`), which is loaded dynamically by the Dart runtime. The Dart GUI manages the lifecycle of the node (enrollment, start, stop) via FFI function calls, while any tool registration, discovery, or mesh API queries are sent via standard HTTP JSON-RPC to the local loopback port of the node's sidecar server.
 
 ---
 
@@ -16,7 +24,6 @@ Before building the application, ensure you have configured:
 1. **Flutter SDK**: Installed and configured (run `flutter doctor` to verify).
 2. **Go Compiler**: Version 1.26+ installed.
 3. **Android NDK**: Required to cross-compile the Go library for Android platforms. Ensure the `ANDROID_NDK_HOME` environment variable points to your NDK installation.
-4. **Xcode**: (iOS only) Installed and configured for iOS compile targets.
 
 Android DNS bootstrap addresses (`/dnsaddr/...`) require Android 10 or newer.
 The mobile client resolves their TXT records through Android's native resolver,
@@ -46,12 +53,6 @@ Run one of the following from the **repository root directory**. The `mobile-ffi
     mkdir -p mobile/sam-node-app/android/app/src/main/jniLibs/x86_64
     cp bin/android-x86_64/libsam.so mobile/sam-node-app/android/app/src/main/jniLibs/x86_64/
     ```
-
-*   **For iOS Devices**:
-    ```bash
-    make mobile-ffi-ios
-    ```
-    *Generates static archive `bin/ios/libsam.a`*
 
 ### 2. Run the App
 
