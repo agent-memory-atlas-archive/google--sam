@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"reflect"
 	"testing"
 	"time"
@@ -79,5 +80,57 @@ func TestAndroidDNSWait(t *testing.T) {
 	defer cancel()
 	if err := waitAndroidDNS(ctx, descriptors[0]); err != nil {
 		t.Fatalf("ready socket error = %v", err)
+	}
+	if err := waitAndroidDNS(context.Background(), descriptors[0]); err != nil {
+		t.Fatalf("ready socket without deadline error = %v", err)
+	}
+	cancel()
+	if err := waitAndroidDNS(ctx, descriptors[0]); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled context with ready socket error = %v, want context.Canceled", err)
+	}
+}
+
+func TestAndroidDNSWaitCancellationRace(t *testing.T) {
+	descriptors, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = unix.Close(descriptors[0])
+		_ = unix.Close(descriptors[1])
+	})
+	before, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := range 200 {
+		ctx, cancel := context.WithCancel(t.Context())
+		writeDone := make(chan error, 1)
+		go func() {
+			if attempt%2 == 0 {
+				cancel()
+			}
+			_, err := unix.Write(descriptors[1], []byte{1})
+			cancel()
+			writeDone <- err
+		}()
+		waitErr := waitAndroidDNS(ctx, descriptors[0])
+		if err := <-writeDone; err != nil {
+			t.Fatal(err)
+		}
+		if waitErr != nil && !errors.Is(waitErr, context.Canceled) {
+			t.Fatalf("attempt %d: wait error = %v", attempt, waitErr)
+		}
+		var received [1]byte
+		if _, err := unix.Read(descriptors[0], received[:]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("file descriptors before = %d, after = %d", len(before), len(after))
 	}
 }

@@ -77,12 +77,35 @@ func (resolver androidDNSResolver) LookupTXT(ctx context.Context, name string) (
 }
 
 func waitAndroidDNS(ctx context.Context, descriptor int) error {
-	descriptors := []unix.PollFd{{Fd: int32(descriptor), Events: unix.POLLIN}}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var cancelPipe [2]int
+	if err := unix.Pipe2(cancelPipe[:], unix.O_CLOEXEC); err != nil {
+		return fmt.Errorf("creating Android DNS cancellation pipe: %w", err)
+	}
+	cancelDone := make(chan struct{})
+	stopCancel := context.AfterFunc(ctx, func() {
+		_ = unix.Close(cancelPipe[1])
+		close(cancelDone)
+	})
+	defer func() {
+		if stopCancel() {
+			_ = unix.Close(cancelPipe[1])
+		} else {
+			<-cancelDone
+		}
+		_ = unix.Close(cancelPipe[0])
+	}()
+	descriptors := []unix.PollFd{
+		{Fd: int32(descriptor), Events: unix.POLLIN},
+		{Fd: int32(cancelPipe[0]), Events: unix.POLLIN},
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		ready, err := unix.Poll(descriptors, 50)
+		ready, err := unix.Poll(descriptors, -1)
 		if err == unix.EINTR {
 			continue
 		}
