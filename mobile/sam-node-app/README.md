@@ -18,6 +18,11 @@ Before building the application, ensure you have configured:
 3. **Android NDK**: Required to cross-compile the Go library for Android platforms. Ensure the `ANDROID_NDK_HOME` environment variable points to your NDK installation.
 4. **Xcode**: (iOS only) Installed and configured for iOS compile targets.
 
+Android DNS bootstrap addresses (`/dnsaddr/...`) require Android 10 or newer.
+The mobile client resolves their TXT records through Android's native resolver,
+which uses the device's network and private DNS configuration. Older Android
+versions can still use explicit router IP addresses.
+
 ---
 
 ## Compilation Instructions
