@@ -635,15 +635,13 @@ class _NodeControlPageState extends State<NodeControlPage> {
       if (!_devicePollingActive) break;
 
       try {
-        final response = await http.post(
-          Uri.parse(tokenUrl),
-          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-          body: {
-            'grant_type': 'urn:ietf:params:oauth:grant-type:device_code',
-            'device_code': deviceCode,
-            'client_id': clientId,
-          },
+        final response = await exchangeDeviceCode(
+          tokenUrl: Uri.parse(tokenUrl),
+          clientId: clientId,
+          deviceCode: deviceCode,
+          isActive: () => mounted && _devicePollingActive,
         );
+        if (response == null || !mounted || !_devicePollingActive) break;
 
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);
