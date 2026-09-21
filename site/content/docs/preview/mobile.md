@@ -117,20 +117,22 @@ covers running `sam-one` and reaching it from a phone. For this enrollment
 test, you only need the server and its QR code. You can skip that guide's
 model-serving steps.
 
+Use this command to start the mesh and print its enrollment QR code:
+
+```bash
+sam-one --data-dir ~/sam-one --tunnel cloudflare --enroll-qr
+```
+
 1. On your computer, install `sam-one` using the
    [installation instructions](../../getting-started/quickstart/#1-install).
    If a trusted operator already has a mesh running, ask them for an
    enrollment code and its expected hostname, then continue at item 4.
-2. Run this command in a terminal on the computer:
-
-   ```bash
-   sam-one --data-dir ~/sam-one --tunnel cloudflare
-   ```
-
+2. Run the command above in a terminal on the computer.
 3. If prompted, approve the download of `cloudflared`. Wait for the HTTPS
    API URL and enrollment QR code in the terminal. The tunnel provides a
    temporary `trycloudflare.com` address without requiring a Cloudflare
    account. Keep `sam-one` running and the computer awake during the test.
+
 4. On the phone, return to **Dashboard** and tap **Scan enrollment code**.
    Allow camera access when asked and scan the code from the computer's
    screen.
@@ -140,6 +142,63 @@ model-serving steps.
 6. Keep the app open until the dashboard appears, then continue to step 4
    of the tutorial. This enrollment path does not open Google or GitHub
    login.
+
+The following output was captured from a temporary `sam-one` instance.
+Its QR token successfully enrolled a test node and was consumed. The server
+and tunnel were then stopped and their state deleted. Token values and the
+temporary directory path are redacted below. Use the URL and QR code from
+your own terminal, not this example.
+
+```text
+SAM standalone mesh is ready!
+
+API URL:      https://used-encryption-assumptions-miller.trycloudflare.com
+Tunnel:       https://used-encryption-assumptions-miller.trycloudflare.com -> http://127.0.0.1:46289
+Web Console:  https://used-encryption-assumptions-miller.trycloudflare.com/console
+Router Peer:  12D3KooWACEWomFbWyd7e2NWhyVakzZ81Kq97j7iiix1HuJzbTw1
+Admin Token:  [redacted]
+Join Token:   [redacted]
+
+To enroll a node:
+  sam-node join https://used-encryption-assumptions-miller.trycloudflare.com --bootstrap-token-path <temporary-data-dir>/join-token
+══════════════════════════════════════════════════════════════════
+
+Scan with the SAM app to enroll a device into used-encryption-assumptions-miller.trycloudflare.com
+(single use, valid for 1h0m0s):
+
+█████████████████████████████████████████████████████████
+█████████████████████████████████████████████████████████
+████ ▄▄▄▄▄ ███▀█ █ ▄▄▄▄▀█▄▀  ▄▄▄ ▄▀▀ ▀▀▄▀ ▀▀ █ ▄▄▄▄▄ ████
+████ █   █ █ ▄████▀█▀█▄█▄▀█▀▄▀█▀▄▄ ▀▄ ▀▀▀▀█ ▄█ █   █ ████
+████ █▄▄▄█ █ ▀ █▄▄  ▄▄▀▄ ▄ ▄▄▄ ▀▄ ▄  █▀  ▄▀███ █▄▄▄█ ████
+████▄▄▄▄▄▄▄█ █▄▀▄█▄█▄█ ▀ █ █▄█ ▀ ▀▄█ █▄▀▄▀ █ █▄▄▄▄▄▄▄████
+████ ▀ ▄▄ ▄▀█ ▀▄▄▄▀▀▄  ▄▄▀ ▄▄▄▄▀█▀▀ ▀██ ▄ ▄▀▄█  ▄▄▄██████
+████▄▄▄ ▀▀▄▀▄  █▀▄▀█▄▀█▄▀▀█ █▀ ▀▄ ▀  ▄ ▀▄▀ ▀▄ ██▀▄█  ████
+█████▀▀▄█▀▄▀▄ █▀█▀▄█▄▀█▄█▀▄▀▄▀██▀▀ ▄█ ▄  ▄█▄▄ ▀▄▀▄▄▄█████
+████ ▀██▄█▄▄▄  ▄▄ ██▄█ ▄█▀█ ▄█▄▄██▀▀▄█▄ ▄█ █ ██▀▀ ▄ ▄████
+████ █ ▄ █▄▀   ▀█▄▄▄█▄▀▄▄▀█▄▄▄▄▄█▄ ▀█ ██ ▀█▄▄  ▄▀▀▄▀▄████
+████▀ ▀▀ ▀▄▄▄ █ ▀▀ ▄▄▀▀▄█▄▄▄█▄▄▄▀  ▀██▄▄▄▀ ▀▀ ▀█▀███ ████
+████  ▄  ▄▄█▄▀▀ ▀   ▀▄█▀▄ ██▄▄█▄▀▀  █▄▄ ▄▀█▄▄▄ ▀▀▄▄▄▄████
+█████▀██ ▄▄▄  █▄█ ▀█▀█▀▀▀▀ ▄▄▄ ▀▀▄▀▄ ▄ ▀█▀ ▄ ▄▄▄ ██  ████
+████▀███ █▄█ ▀▄▀██ ▄ ▄ ▀▄▄ █▄█ ██▄▀ ███ ▄█▄  █▄█ ▄▄▄▄████
+████▄▀ █▄▄▄▄ ▄▀▀█▄▄ █▄█▄▄█    ▄▄ ▀▀█ █ █▄▀▄█▄▄▄  ▄▄█ ████
+█████▄██ ▄▄▀█▀  ▄  █▄▀▄▀▀ ▀▄  █▄█   ███ ▄▀▄▄██ ▄▄ ▄ ▄████
+████▀█▀██ ▄ █▄▄ ▀ █▀█▄█▀ █▄▄ ▀▀▀█ █▄▄█▄█▄▄▄▄▀▀▄█▀▄█  ████
+████▀ ▀ ▄▀▄  ▄ ▀  ▄ ▀▄█▄▄█▄▄▀ █▀ ▀█▄ ▄▄▄  █▄▄   ▄▄ ▄▄████
+███████ ▄█▄█▀██▄▀▀█▀▄▀██▄ ▄▄  ▀█ █ ▄ ▄▄█▄▀ ▄▀▄▄▄█▀█▄ ████
+████▄▄█ █ ▄▄▄▄  ▄ ▄▀▄▄▀▀▄▀▄█▀██▄▀▀  ███ ▄██ ▀█  ▄█ ▀▄████
+█████ ▀▀█▄▄▄▄▀ █▄█ ▀▀▄█▄▄█ █▀▄▀▀  ██▀▀▄ █  ▄  ▄▄▄▄▄ ▄████
+████▄▄▄███▄█  ▄▀ ▀▄ █▀█ ▄  ▄▄▄ ██  ▄█▄█   █  ▄▄▄ ▄ ▄█████
+████ ▄▄▄▄▄ █▀▄▄█▀ ▄▀  ▄ █▀ █▄█ ▀ ▀▀ ▀▀▄▀▄▀▄█ █▄█ ▄█  ████
+████ █   █ █ ▄█▀███ ▄█▀▄█▀ ▄   ▄▀▀▀█▀█▄ ▄▀█▀  ▄▄ ▄▄▄ ████
+████ █▄▄▄█ █▄▀██ █▄▄▄█ ▄█ ▀▄▄▀ ▄█▄ ██ ▄ █▀▄██▀▀█▀▀██▀████
+████▄▄▄▄▄▄▄█▄▄▄█▄█▄███▄█▄███▄██▄█▄▄█████▄██▄████▄█▄▄▄████
+█████████████████████████████████████████████████████████
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+sam://enroll?server=https%3A%2F%2Fused-encryption-assumptions-miller.trycloudflare.com&token=[redacted]
+Token ID: 2542ac5fa60e (revoke early with: sam-one token revoke 2542ac5fa60e)
+```
 
 {{< figure src="/images/sam-connect-join.png" alt="Join this mesh confirmation dialog showing a control plane hostname and Cancel and Join buttons" caption="After scanning, check the control plane hostname before tapping Join. This screenshot shows an example tunnel address and the app's shortened token hint; your values will differ." width="320" >}}
 
