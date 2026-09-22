@@ -1753,6 +1753,12 @@ func (n *SamNode) findProvidersByCID(ctx context.Context, c cid.Cid) ([]peer.Add
 	}
 	providers := make([]peer.AddrInfo, 0, len(providersMap))
 	for _, p := range providersMap {
+		// Same reason as shouldDialDiscovered: a revoked peer's provider
+		// record outlives its ban, so without this every service lookup
+		// fans out a doomed dial and returns one fewer usable provider.
+		if n.peerIsRevoked(p.ID) {
+			continue
+		}
 		routerAddrsCount := 0
 		if n.RouterPeerID != "" {
 			routerAddrsCount = len(n.Host.Peerstore().Addrs(n.RouterPeerID))
