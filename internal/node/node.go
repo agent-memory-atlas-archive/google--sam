@@ -1536,7 +1536,9 @@ func (n *SamNode) startDiscovery(ctx context.Context, meshID string, interval ti
 				continue
 			}
 			for p := range peers {
-				if p.ID == n.Host.ID() {
+				// Revoked peers keep advertising the mesh rendezvous; without this
+				// every tick re-dials them and the gater denies it.
+				if p.ID == n.Host.ID() || n.peerIsRevoked(p.ID) {
 					continue
 				}
 
