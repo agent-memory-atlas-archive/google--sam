@@ -1536,7 +1536,9 @@ func (n *SamNode) startDiscovery(ctx context.Context, meshID string, interval ti
 				continue
 			}
 			for p := range peers {
-				if p.ID == n.Host.ID() {
+				// Revoked peers keep advertising the mesh rendezvous, so without
+				// this every tick re-dials them and the gater denies it.
+				if p.ID == n.Host.ID() || n.peerIsRevoked(p.ID) {
 					continue
 				}
 
@@ -1746,6 +1748,12 @@ func (n *SamNode) findProvidersByCID(ctx context.Context, c cid.Cid) ([]peer.Add
 	}
 	providers := make([]peer.AddrInfo, 0, len(providersMap))
 	for _, p := range providersMap {
+		// Same reason as the discovery loop: a revoked peer's provider
+		// record outlives its ban, so without this every service lookup
+		// fans out a doomed dial and returns one fewer usable provider.
+		if n.peerIsRevoked(p.ID) {
+			continue
+		}
 		routerAddrsCount := 0
 		if n.RouterPeerID != "" {
 			routerAddrsCount = len(n.Host.Peerstore().Addrs(n.RouterPeerID))
