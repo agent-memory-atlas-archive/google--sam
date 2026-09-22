@@ -1536,9 +1536,7 @@ func (n *SamNode) startDiscovery(ctx context.Context, meshID string, interval ti
 				continue
 			}
 			for p := range peers {
-				// Revoked peers keep advertising the mesh rendezvous; without this
-				// every tick re-dials them and the gater denies it.
-				if p.ID == n.Host.ID() || n.peerIsRevoked(p.ID) {
+				if !n.shouldDialDiscovered(p.ID) {
 					continue
 				}
 
@@ -1575,6 +1573,13 @@ func (n *SamNode) startDiscovery(ctx context.Context, meshID string, interval ti
 			}
 		}
 	}
+}
+
+// shouldDialDiscovered filters the DHT discovery results. Revoked peers keep
+// advertising the mesh rendezvous, so without this every tick re-dials them
+// and the connection gater denies it.
+func (n *SamNode) shouldDialDiscovered(p peer.ID) bool {
+	return p != n.Host.ID() && !n.peerIsRevoked(p)
 }
 
 // awaitRoutingTable blocks until the DHT routing table has a peer, ctx ends
