@@ -398,3 +398,26 @@ test('reported services render with type, labels and report time', async ({ page
   const nodeRow = page.locator('#table-nodes tr', { hasText: PEER });
   await expect(nodeRow.locator('.cell-subtext')).toHaveText('component=stvv, region=eu-west');
 });
+
+// Revoking a node bans its record rather than deleting it, so /admin/status
+// keeps returning it; the console must not keep showing it as enrolled.
+test('revoked nodes disappear from the Nodes view and the node count', async ({ page }) => {
+  const LIVE = '12D3KooWLiveNodeFixturePeer';
+  const REVOKED = '12D3KooWRevokedNodeFixturePeer';
+  await page.route('**/api/admin/status', async (route) => {
+    const response = await route.fetch();
+    const status = await response.json();
+    status.enrolled_nodes = [
+      { PeerID: LIVE, Role: 'sam:role:node', OwnerID: 'root-admin', Banned: false },
+      { PeerID: REVOKED, Role: 'sam:role:node', OwnerID: 'root-admin', Banned: true },
+    ];
+    await route.fulfill({ response, json: status });
+  });
+
+  await login(page);
+  await page.click('.nav-item[data-target="nodes"]');
+
+  await expect(page.locator('#table-nodes')).toContainText(LIVE);
+  await expect(page.locator('#table-nodes')).not.toContainText(REVOKED);
+  await expect(page.locator('#stat-nodes')).toHaveText('1');
+});
