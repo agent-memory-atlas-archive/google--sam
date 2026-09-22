@@ -598,6 +598,9 @@ func TestReportNodeCatalog(t *testing.T) {
 		if r.URL.Path != "/nodes/catalog" {
 			t.Errorf("Expected path /nodes/catalog, got %s", r.URL.Path)
 		}
+		if userAgent := r.UserAgent(); !strings.HasPrefix(userAgent, "sam-node/") || userAgent == "sam-node/" {
+			t.Errorf("Expected versioned sam-node User-Agent, got %q", userAgent)
+		}
 		gotAuth = r.Header.Get("Authorization")
 		gotContentType = r.Header.Get("Content-Type")
 		body, err := io.ReadAll(r.Body)

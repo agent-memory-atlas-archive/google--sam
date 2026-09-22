@@ -31,6 +31,7 @@ import (
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/node"
 	"github.com/google/sam/internal/secrets"
+	"github.com/google/sam/internal/version"
 	golog "github.com/ipfs/go-log/v2"
 	"github.com/mattn/go-isatty"
 	"github.com/multiformats/go-multiaddr"
@@ -277,8 +278,9 @@ func interactiveJoin(ctx context.Context, store *node.Store, targetControlPlane 
 
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "sam-node",
-		Short: "Sovereign Agent Mesh Node",
+		Use:     "sam-node",
+		Short:   "Sovereign Agent Mesh Node",
+		Version: version.String(),
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			node.SetAllowInsecureControlPlane(insecureControlPlaneFlag)
 			// The stored URL is checked at request time by the same policy;

@@ -1,5 +1,7 @@
 REPO_ROOT:=${CURDIR}
 OUT_DIR=$(REPO_ROOT)/bin
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo devel)
+VERSION_LDFLAGS = -X github.com/google/sam/internal/version.Version=$(VERSION)
 
 .DEFAULT_GOAL := build
 
@@ -23,10 +25,10 @@ ANDROID_CC_X86_64=$(ANDROID_NDK_TOOLCHAIN)/x86_64-linux-android30-clang
 
 
 build:
-	go build -v -o "$(OUT_DIR)/sam-node" ./cmd/sam-node
+	go build -v -ldflags "$(VERSION_LDFLAGS)" -o "$(OUT_DIR)/sam-node" ./cmd/sam-node
 	go build -v -o "$(OUT_DIR)/sam-control-plane" ./cmd/sam-control-plane
-	go build -v -o "$(OUT_DIR)/sam-router" ./cmd/sam-router
-	go build -v -o "$(OUT_DIR)/sam-one" ./cmd/sam-one
+	go build -v -ldflags "$(VERSION_LDFLAGS)" -o "$(OUT_DIR)/sam-router" ./cmd/sam-router
+	go build -v -ldflags "$(VERSION_LDFLAGS)" -o "$(OUT_DIR)/sam-one" ./cmd/sam-one
 	go build -v -o "$(OUT_DIR)/mcp-client" ./cmd/mcp-client
 	go build -v -o "$(OUT_DIR)/sam-box" ./cmd/sam-box
 	go build -v -o "$(OUT_DIR)/sam-bench" ./cmd/sam-bench
@@ -42,14 +44,14 @@ build:
 .PHONY: mobile-ffi-host mobile-ffi-android mobile-ffi-android-x86_64 mobile-ffi-ios mobile-ffi mobile-app-apk mobile-app-apk-emulator mobile-app-bundle
 mobile-ffi-host:
 	mkdir -p "$(OUT_DIR)"
-	CGO_ENABLED=1 go build -v -buildmode=c-shared -o "$(OUT_DIR)/libsam.so" ./mobile/sam-node-ffi
+	CGO_ENABLED=1 go build -v -ldflags "$(VERSION_LDFLAGS)" -buildmode=c-shared -o "$(OUT_DIR)/libsam.so" ./mobile/sam-node-ffi
 
 mobile-ffi-android:
 	@if [ -z "$(ANDROID_NDK_LATEST)" ]; then \
 		echo "Error: Android NDK not found under $(ANDROID_HOME_RESOLVED)/ndk/. Please install NDK (Side-by-side) via Android Studio or sdkmanager." >&2; \
 		exit 1; \
 	fi
-	GOOS=android GOARCH=arm64 CGO_ENABLED=1 CC=$(ANDROID_CC_ARM64) go build -v -ldflags="-checklinkname=0" -buildmode=c-shared -o "$(OUT_DIR)/android/libsam.so" ./mobile/sam-node-ffi
+	GOOS=android GOARCH=arm64 CGO_ENABLED=1 CC=$(ANDROID_CC_ARM64) go build -v -ldflags="-checklinkname=0 $(VERSION_LDFLAGS)" -buildmode=c-shared -o "$(OUT_DIR)/android/libsam.so" ./mobile/sam-node-ffi
 
 mobile-ffi-android-x86_64:
 	@if [ -z "$(ANDROID_NDK_LATEST)" ]; then \
@@ -57,11 +59,11 @@ mobile-ffi-android-x86_64:
 		exit 1; \
 	fi
 	mkdir -p "$(OUT_DIR)/android-x86_64"
-	GOOS=android GOARCH=amd64 CGO_ENABLED=1 CC=$(ANDROID_CC_X86_64) go build -v -ldflags="-checklinkname=0" -buildmode=c-shared -o "$(OUT_DIR)/android-x86_64/libsam.so" ./mobile/sam-node-ffi
+	GOOS=android GOARCH=amd64 CGO_ENABLED=1 CC=$(ANDROID_CC_X86_64) go build -v -ldflags="-checklinkname=0 $(VERSION_LDFLAGS)" -buildmode=c-shared -o "$(OUT_DIR)/android-x86_64/libsam.so" ./mobile/sam-node-ffi
 
 mobile-ffi-ios:
 	mkdir -p "$(OUT_DIR)/ios"
-	GOOS=ios GOARCH=arm64 CGO_ENABLED=1 go build -v -buildmode=c-archive -o "$(OUT_DIR)/ios/libsam.a" ./mobile/sam-node-ffi
+	GOOS=ios GOARCH=arm64 CGO_ENABLED=1 go build -v -ldflags "$(VERSION_LDFLAGS)" -buildmode=c-archive -o "$(OUT_DIR)/ios/libsam.a" ./mobile/sam-node-ffi
 
 mobile-ffi: mobile-ffi-host mobile-ffi-android mobile-ffi-android-x86_64 mobile-ffi-ios
 
@@ -243,10 +245,10 @@ docker-build-control-plane:
 	docker build --load -t sam-control-plane:local -f Dockerfile.sam-control-plane .
 
 docker-build-router:
-	docker build --load -t sam-router:local -f Dockerfile.sam-router .
+	docker build --load --build-arg VERSION="$(VERSION)" -t sam-router:local -f Dockerfile.sam-router .
 
 docker-build-node:
-	docker build --load -t sam-node:local -f Dockerfile.sam-node .
+	docker build --load --build-arg VERSION="$(VERSION)" -t sam-node:local -f Dockerfile.sam-node .
 
 docker-build-mock-oidc:
 	docker build --load -t sam-mock-oidc:local -f tests/e2e/docker/Dockerfile.mock-oidc .

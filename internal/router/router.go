@@ -703,7 +703,7 @@ func (r *Router) controlPlane(timeout time.Duration) *cpclient.Client {
 // controlPlaneClient is the client for every request to the control plane;
 // its transport re-checks the plaintext policy on each hop, redirects included.
 func (r *Router) controlPlaneClient(timeout time.Duration) *http.Client {
-	return cpclient.NewHTTPClient(timeout, func() bool { return r.config.AllowInsecureControlPlane })
+	return cpclient.NewHTTPClient(timeout, func() bool { return r.config.AllowInsecureControlPlane }, "sam-router")
 }
 
 func (r *Router) getTrustedPublicKeys() []ed25519.PublicKey {

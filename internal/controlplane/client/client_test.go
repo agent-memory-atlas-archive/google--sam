@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/google/sam/api"
+	"github.com/google/sam/internal/version"
 )
 
 func writeProto(t *testing.T, w http.ResponseWriter, msg proto.Message) {
@@ -45,6 +46,41 @@ func writeProto(t *testing.T, w http.ResponseWriter, msg proto.Message) {
 	}
 }
 
+func TestHTTPClientUserAgent(t *testing.T) {
+	for _, component := range []string{"sam-node", "sam-router"} {
+		t.Run(component, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				if got, want := request.UserAgent(), component+"/"+version.String(); got != want {
+					t.Errorf("User-Agent = %q, want %q", got, want)
+				}
+				if request.Header.Get("Authorization") != "Bearer test" {
+					t.Error("transport changed the authentication header")
+				}
+				if request.URL.Path == "/redirect" {
+					http.Redirect(w, request, "/final", http.StatusTemporaryRedirect)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer server.Close()
+			request, err := http.NewRequest(http.MethodGet, server.URL+"/redirect", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("Authorization", "Bearer test")
+			request.Header.Set("User-Agent", "original")
+			response, err := NewHTTPClient(time.Second, nil, component).Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = response.Body.Close()
+			if request.UserAgent() != "original" {
+				t.Fatal("transport mutated the caller's request")
+			}
+		})
+	}
+}
+
 func TestFetchInfo(t *testing.T) {
 	want := &api.ControlPlaneInfoResponse{
 		RouterAddresses: []string{"/ip4/10.0.0.1/tcp/4501"},
@@ -58,7 +94,7 @@ func TestFetchInfo(t *testing.T) {
 	defer srv.Close()
 
 	// A trailing slash on the base URL must not double up in the path.
-	c := New(srv.URL+"/", NewHTTPClient(time.Second, nil))
+	c := New(srv.URL+"/", NewHTTPClient(time.Second, nil, "sam-node"))
 	info, err := c.FetchInfo(context.Background())
 	if err != nil {
 		t.Fatalf("FetchInfo: %v", err)
@@ -102,7 +138,7 @@ func TestFetchKeys(t *testing.T) {
 			writeProto(t, w, resp)
 		}))
 		t.Cleanup(srv.Close)
-		return New(srv.URL, NewHTTPClient(time.Second, nil))
+		return New(srv.URL, NewHTTPClient(time.Second, nil, "sam-node"))
 	}
 
 	t.Run("a set vouched for by a trusted key is adopted whole", func(t *testing.T) {
@@ -137,7 +173,7 @@ func TestErrors(t *testing.T) {
 			http.Error(w, "store down", http.StatusServiceUnavailable)
 		}))
 		defer srv.Close()
-		c := New(srv.URL, NewHTTPClient(time.Second, nil))
+		c := New(srv.URL, NewHTTPClient(time.Second, nil, "sam-node"))
 		_, err := c.FetchInfo(context.Background())
 		if err == nil || !strings.Contains(err.Error(), "503") || !strings.Contains(err.Error(), "store down") {
 			t.Fatalf("FetchInfo error = %v, want status and body", err)
@@ -151,7 +187,7 @@ func TestErrors(t *testing.T) {
 			}
 		}))
 		defer srv.Close()
-		c := New(srv.URL, NewHTTPClient(time.Second, nil))
+		c := New(srv.URL, NewHTTPClient(time.Second, nil, "sam-node"))
 		if _, err := c.FetchInfo(context.Background()); err == nil || !strings.Contains(err.Error(), "decode /info") {
 			t.Fatalf("FetchInfo error = %v, want a decode error naming the path", err)
 		}
@@ -171,7 +207,7 @@ func TestErrors(t *testing.T) {
 			writeProto(t, w, big)
 		}))
 		defer srv.Close()
-		c := New(srv.URL, NewHTTPClient(5*time.Second, nil))
+		c := New(srv.URL, NewHTTPClient(5*time.Second, nil, "sam-node"))
 		info, err := c.FetchInfo(context.Background())
 		if !errors.Is(err, ErrBodyTooLarge) {
 			t.Fatalf("FetchInfo = (%d bans, %v), want ErrBodyTooLarge", len(info.GetBannedPeerIds()), err)
@@ -196,7 +232,7 @@ func TestLargeAnswersArriveWhole(t *testing.T) {
 			writeProto(t, w, big)
 		}))
 		defer srv.Close()
-		info, err := New(srv.URL, NewHTTPClient(5*time.Second, nil)).FetchInfo(context.Background())
+		info, err := New(srv.URL, NewHTTPClient(5*time.Second, nil, "sam-node")).FetchInfo(context.Background())
 		if err != nil {
 			t.Fatalf("FetchInfo: %v", err)
 		}
@@ -220,7 +256,7 @@ func TestLargeAnswersArriveWhole(t *testing.T) {
 			writeProto(t, w, exact)
 		}))
 		defer srv.Close()
-		info, err := New(srv.URL, NewHTTPClient(5*time.Second, nil)).FetchInfo(context.Background())
+		info, err := New(srv.URL, NewHTTPClient(5*time.Second, nil, "sam-node")).FetchInfo(context.Background())
 		if err != nil {
 			t.Fatalf("FetchInfo at exactly the cap: %v", err)
 		}
@@ -246,7 +282,7 @@ func TestFetchPolicy(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	policy, err := New(srv.URL, NewHTTPClient(time.Second, nil)).FetchPolicy(context.Background(), []byte("biscuit"))
+	policy, err := New(srv.URL, NewHTTPClient(time.Second, nil, "sam-node")).FetchPolicy(context.Background(), []byte("biscuit"))
 	if err != nil {
 		t.Fatalf("FetchPolicy: %v", err)
 	}
@@ -272,7 +308,7 @@ func TestHTTPClientTransportPolicy(t *testing.T) {
 	nonLoopbackURL := strings.Replace(srv.URL, "127.0.0.1", "sam-control-plane.invalid", 1)
 
 	allow := false
-	httpClient := NewHTTPClient(time.Second, func() bool { return allow })
+	httpClient := NewHTTPClient(time.Second, func() bool { return allow }, "sam-node")
 
 	if _, err := New(srv.URL, httpClient).FetchInfo(context.Background()); err != nil {
 		t.Fatalf("loopback plaintext must be accepted: %v", err)

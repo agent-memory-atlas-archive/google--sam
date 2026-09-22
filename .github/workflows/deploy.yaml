@@ -90,6 +90,7 @@ jobs:
       with:
         context: .
         file: Dockerfile.sam-router
+        build-args: VERSION=${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
         platforms: ${{ github.ref_type == 'tag' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
         push: true
         tags: ${{ steps.meta-router.outputs.tags }}
@@ -112,6 +113,7 @@ jobs:
       with:
         context: .
         file: Dockerfile.sam-node
+        build-args: VERSION=${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
         platforms: ${{ github.ref_type == 'tag' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
         push: true
         tags: ${{ steps.meta-node.outputs.tags }}
@@ -200,6 +202,7 @@ jobs:
       with:
         context: .
         file: Dockerfile.sam-one
+        build-args: VERSION=${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
         platforms: ${{ github.ref_type == 'tag' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
         push: true
         tags: ${{ steps.meta-sam-one.outputs.tags }}
