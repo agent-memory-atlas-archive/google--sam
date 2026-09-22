@@ -131,6 +131,9 @@ type Router struct {
 	enrollMu          sync.Mutex
 	privKey           crypto.PrivKey
 
+	keysSyncTrigger        chan struct{}
+	rotationRefreshPending bool
+
 	// Control contexts
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -162,6 +165,7 @@ func NewRouter(ctx context.Context, config Options) (*Router, error) {
 		ctx:              ctx,
 		cancel:           cancel,
 		handshakeLimiter: handshakeLimiter,
+		keysSyncTrigger:  make(chan struct{}, 1),
 	}, nil
 }
 
@@ -688,8 +692,27 @@ func (r *Router) syncKeys() error {
 	}
 
 	r.keysMu.Lock()
+	for _, newKey := range newKeys {
+		known := false
+		for _, oldKey := range r.trustedPublicKeys {
+			if newKey.Equal(oldKey) {
+				known = true
+				break
+			}
+		}
+		if !known && len(r.biscuitToken) > 0 {
+			r.rotationRefreshPending = true
+		}
+	}
 	r.trustedPublicKeys = newKeys
 	r.keysMu.Unlock()
+
+	if r.rotationRefreshPending {
+		if err := r.RefreshEnrollment(r.ctx); err != nil {
+			return fmt.Errorf("refresh enrollment after key rotation: %w", err)
+		}
+		r.rotationRefreshPending = false
+	}
 
 	logger.Debugf("Synced %d valid public keys from control plane", len(newKeys))
 	return nil
@@ -798,10 +821,15 @@ func (r *Router) listenForControlPlaneEvents(ctx context.Context) {
 			}
 		case api.MeshEvent_KEY_ROTATION:
 			logger.Infof("[Router Event] Received KEY_ROTATION event, triggering key sync")
-			if err := r.syncKeys(); err != nil {
-				logger.Warnf("[Router Event] Failed to sync keys after KEY_ROTATION event: %v", err)
-			}
+			r.triggerKeysSync()
 		}
+	}
+}
+
+func (r *Router) triggerKeysSync() {
+	select {
+	case r.keysSyncTrigger <- struct{}{}:
+	default:
 	}
 }
 
@@ -813,11 +841,12 @@ func (r *Router) runKeysSyncLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			if err := r.syncKeys(); err != nil {
-				logger.Errorf("Failed periodic keys sync: %v", err)
-			}
+		case <-r.keysSyncTrigger:
 		case <-r.ctx.Done():
 			return
+		}
+		if err := r.syncKeys(); err != nil {
+			logger.Errorf("Failed keys sync: %v", err)
 		}
 	}
 }

@@ -22,6 +22,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -112,6 +113,64 @@ func writeRefreshResponse(t *testing.T, w http.ResponseWriter, token []byte) {
 	}
 	w.Header().Set("Content-Type", "application/x-protobuf")
 	_, _ = w.Write(data)
+}
+
+func TestRotationRefreshDuringControlPlaneSync(t *testing.T) {
+	for _, viaEvent := range []bool{false, true} {
+		name := "periodic sync"
+		if viaEvent {
+			name = "rotation event"
+		}
+		t.Run(name, func(t *testing.T) {
+			newPub, newPriv := mustGenerateKey(t)
+			var fresh []byte
+			var refreshes atomic.Int32
+			refresh := func(w http.ResponseWriter, request *http.Request) {
+				if refreshes.Add(1) == 1 {
+					http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				writeRefreshResponse(t, w, fresh)
+			}
+			harness := newRefreshHarness(t, refresh)
+			fresh = mintRoleBiscuit(t, newPriv, harness.peerID, api.RoleNode)
+			mux := http.NewServeMux()
+			mux.HandleFunc("/keys", keysHandler(t, []ed25519.PublicKey{harness.cpPub, newPub}, []ed25519.PrivateKey{harness.cpPriv, newPriv}))
+			mux.HandleFunc("/refresh", refresh)
+			mux.HandleFunc("/info", protoHandler(t, &api.ControlPlaneInfoResponse{}))
+			mux.HandleFunc("/policies", protoHandler(t, &api.PolicyConfigGetResponse{}))
+			server := httptest.NewServer(mux)
+			defer server.Close()
+			if err := harness.node.Store.SaveControlPlaneURL(server.URL); err != nil {
+				t.Fatal(err)
+			}
+			if viaEvent {
+				harness.node.controlPlaneSyncTrigger = make(chan struct{}, 1)
+				harness.node.handleKeyRotationEvent(&api.MeshEvent{NewPublicKey: newPub})
+				select {
+				case <-harness.node.controlPlaneSyncTrigger:
+				default:
+					t.Fatal("rotation event did not trigger a control-plane sync")
+				}
+			}
+			if err := harness.node.SyncControlPlane(context.Background()); err == nil {
+				t.Fatal("sync must report the failed credential refresh")
+			}
+			harness.storedIdentityUnchanged(t)
+			if err := harness.node.SyncControlPlane(context.Background()); err != nil {
+				t.Fatalf("retry refresh: %v", err)
+			}
+			if !bytes.Equal(harness.node.GetIdentity(), fresh) {
+				t.Fatal("node kept a credential signed by the retiring key")
+			}
+			if err := harness.node.SyncControlPlane(context.Background()); err != nil {
+				t.Fatalf("unchanged keys: %v", err)
+			}
+			if got := refreshes.Load(); got != 2 {
+				t.Fatalf("refresh attempts = %d, want one failure and one success", got)
+			}
+		})
+	}
 }
 
 func (h *refreshHarness) storedIdentityUnchanged(t *testing.T) {

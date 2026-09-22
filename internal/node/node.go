@@ -186,6 +186,7 @@ type SamNode struct {
 	currentRelays           []peer.AddrInfo
 	reprovideTrigger        chan struct{}
 	controlPlaneSyncTrigger chan struct{}
+	rotationRefreshPending  atomic.Bool
 	BiscuitTimeout          time.Duration
 	cachedIdentity          atomic.Value
 	logger                  *golog.ZapEventLogger
@@ -1397,16 +1398,17 @@ func containsTrustedKey(keys []TrustedKey, key ed25519.PublicKey) bool {
 
 // addTrustedKey appends a control plane public key to the trust set (no-op
 // on duplicates) and persists the updated set so it survives restarts.
-func (n *SamNode) addTrustedKey(key ed25519.PublicKey) {
+func (n *SamNode) addTrustedKey(key ed25519.PublicKey) bool {
 	n.keysMu.Lock()
 	if containsTrustedKey(n.trustedKeys, key) {
 		n.keysMu.Unlock()
-		return
+		return false
 	}
 	n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: key, ReceivedAt: time.Now()})
 	snapshot := append([]TrustedKey(nil), n.trustedKeys...)
 	n.keysMu.Unlock()
 	n.persistTrustedKeys(snapshot)
+	return true
 }
 
 func (n *SamNode) persistTrustedKeys(keys []TrustedKey) {
@@ -1424,7 +1426,10 @@ func (n *SamNode) handleKeyRotationEvent(event *api.MeshEvent) {
 		return
 	}
 	logger.Infow("[Mesh Event] key rotation received", "event", meshEventKeyRotation, "key", fmt.Sprintf("%x", event.NewPublicKey))
-	n.addTrustedKey(ed25519.PublicKey(event.NewPublicKey))
+	if n.addTrustedKey(ed25519.PublicKey(event.NewPublicKey)) && len(n.GetIdentity()) > 0 {
+		n.rotationRefreshPending.Store(true)
+	}
+	n.triggerControlPlaneSync()
 }
 
 // pruneTrustedKeys drops keys older than gracePeriod but always keeps the

@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -121,6 +122,17 @@ func TestSyncKeysRequiresTrustedSignature(t *testing.T) {
 		}
 	})
 
+	t.Run("empty set preserves trusted keys", func(t *testing.T) {
+		body = marshal(&api.KeysResponse{Timestamp: time.Now().UnixMilli()})
+		router := newRouter()
+		if err := router.syncKeys(); err == nil {
+			t.Fatal("an empty /keys answer must not be adopted")
+		}
+		if keys := router.getTrustedPublicKeys(); len(keys) != 1 || !keys[0].Equal(oldPub) {
+			t.Errorf("trust set changed on an empty answer: %d keys", len(keys))
+		}
+	})
+
 	t.Run("unsigned set is refused", func(t *testing.T) {
 		body = marshal(&api.KeysResponse{PublicKeys: [][]byte{oldPub, attackerPub}})
 		r := newRouter()
@@ -146,6 +158,141 @@ func TestSyncKeysRequiresTrustedSignature(t *testing.T) {
 			t.Errorf("trust set changed on a refused answer: %d keys", len(keys))
 		}
 	})
+}
+
+func TestKeysSyncLoopCoalescesTriggers(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := &api.KeysResponse{PublicKeys: [][]byte{publicKey}}
+	if err := api.SignKeysResponse(keys, []ed25519.PrivateKey{privateKey}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	body, err := proto.Marshal(keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := make(chan struct{}, 4)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests <- struct{}{}
+		select {
+		case <-release:
+			_, _ = w.Write(body)
+		case <-request.Context().Done():
+		}
+	}))
+	t.Cleanup(server.Close)
+	router, err := NewRouter(context.Background(), Options{ControlPlaneURL: server.URL, KeysSyncInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router.trustedPublicKeys = []ed25519.PublicKey{publicKey}
+	router.wg.Add(1)
+	go router.runKeysSyncLoop()
+	t.Cleanup(func() {
+		router.cancel()
+		router.wg.Wait()
+	})
+	await := func(signal <-chan struct{}, message string) {
+		t.Helper()
+		select {
+		case <-signal:
+		case <-time.After(2 * time.Second):
+			t.Fatal(message)
+		}
+	}
+	router.triggerKeysSync()
+	await(requests, "key sync did not start")
+	notified := make(chan struct{})
+	go func() {
+		for range 10 {
+			router.triggerKeysSync()
+		}
+		router.getTrustedPublicKeys()
+		close(notified)
+	}()
+	await(notified, "notifications or key readers blocked on the control-plane request")
+	if pending := len(router.keysSyncTrigger); pending != 1 {
+		t.Fatalf("pending triggers = %d, want one coalesced follow-up", pending)
+	}
+	release <- struct{}{}
+	await(requests, "pending key sync was lost")
+	if pending := len(router.keysSyncTrigger); pending != 0 {
+		t.Fatalf("pending triggers = %d after follow-up", pending)
+	}
+}
+
+func TestSyncKeysRefreshesOnRotation(t *testing.T) {
+	oldPub, oldPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newPub, newPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerID, err := peer.IDFromPrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := mintRouterBiscuit(t, newPriv, peerID, api.RoleRouter)
+	keys := &api.KeysResponse{PublicKeys: [][]byte{oldPub, newPub}}
+	if err := api.SignKeysResponse(keys, []ed25519.PrivateKey{oldPriv, newPriv}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	var refreshes atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var response proto.Message
+		switch request.URL.Path {
+		case "/keys":
+			response = keys
+		case "/refresh":
+			if refreshes.Add(1) == 1 {
+				http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			response = &api.TokenRefreshResponse{BiscuitToken: fresh, ExpiresAt: time.Now().Add(24 * time.Hour).Unix()}
+		default:
+			t.Errorf("unexpected request to %s", request.URL.Path)
+			http.NotFound(w, request)
+			return
+		}
+		body, marshalErr := proto.Marshal(response)
+		if marshalErr != nil {
+			t.Error(marshalErr)
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+	router := &Router{
+		ctx:               context.Background(),
+		privKey:           priv,
+		biscuitToken:      mintRouterBiscuit(t, oldPriv, peerID, api.RoleRouter),
+		trustedPublicKeys: []ed25519.PublicKey{oldPub},
+		config:            Options{ControlPlaneURL: server.URL, RequiredRole: api.RoleRouter, BiscuitTimeout: time.Second},
+	}
+	if err := router.syncKeys(); err == nil {
+		t.Fatal("rotation sync must report the failed credential refresh")
+	}
+	if err := router.syncKeys(); err != nil {
+		t.Fatalf("retry refresh: %v", err)
+	}
+	if !bytes.Equal(router.biscuitToken, fresh) {
+		t.Fatal("router kept a credential signed by the retiring key")
+	}
+	if err := router.syncKeys(); err != nil {
+		t.Fatalf("unchanged keys: %v", err)
+	}
+	if got := refreshes.Load(); got != 2 {
+		t.Fatalf("refresh attempts = %d, want one failure and one success", got)
+	}
 }
 
 func mintRouterBiscuit(t *testing.T, priv ed25519.PrivateKey, peerID peer.ID, role string) []byte {

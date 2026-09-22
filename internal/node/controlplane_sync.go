@@ -47,8 +47,13 @@ func (n *SamNode) SyncControlPlane(ctx context.Context) error {
 		return errors.New("control plane URL not found in store")
 	}
 	var errs []error
-	if err := n.syncTrustedKeys(ctx, controlPlaneURL); err != nil {
+	if addedKeys, err := n.syncTrustedKeys(ctx, controlPlaneURL); err != nil {
 		errs = append(errs, fmt.Errorf("keys: %w", err))
+	} else if len(n.GetIdentity()) > 0 && (n.rotationRefreshPending.Swap(false) || addedKeys) {
+		if err := n.RefreshEnrollment(ctx); err != nil {
+			n.rotationRefreshPending.Store(true)
+			errs = append(errs, fmt.Errorf("refresh enrollment after key rotation: %w", err))
+		}
 	}
 	if err := n.syncMeshInfo(ctx, controlPlaneURL); err != nil {
 		errs = append(errs, fmt.Errorf("info: %w", err))
@@ -66,28 +71,34 @@ func (n *SamNode) SyncControlPlane(ctx context.Context) error {
 // about. Verification against the keys already trusted keeps whoever answers
 // the URL from becoming the trust root; an empty answer is a failure so the
 // set is never wiped.
-func (n *SamNode) syncTrustedKeys(ctx context.Context, controlPlaneURL string) error {
+func (n *SamNode) syncTrustedKeys(ctx context.Context, controlPlaneURL string) (bool, error) {
 	n.keysMu.RLock()
 	existing := append([]TrustedKey(nil), n.trustedKeys...)
 	n.keysMu.RUnlock()
 	if len(existing) == 0 {
-		return errors.New("no trusted control plane keys to verify /keys against")
+		return false, errors.New("no trusted control plane keys to verify /keys against")
 	}
 	keys, err := FetchControlPlaneKeys(ctx, controlPlaneURL, publicKeysOf(existing))
 	if err != nil {
-		return err
+		return false, err
 	}
 	if len(keys) == 0 {
-		return errors.New("/keys returned no keys")
+		return false, errors.New("/keys returned no keys")
 	}
 	merged := mergeTrustedKeys(existing, keys, time.Now())
+	addedKeys := false
 	n.keysMu.Lock()
+	for _, key := range keys {
+		if !containsTrustedKey(n.trustedKeys, key) {
+			addedKeys = true
+		}
+	}
 	n.trustedKeys = merged
 	snapshot := append([]TrustedKey(nil), merged...)
 	n.keysMu.Unlock()
 	n.persistTrustedKeys(snapshot)
 	logger.Debugf("Synced %d valid control plane keys", len(merged))
-	return nil
+	return addedKeys, nil
 }
 
 // syncMeshInfo reads /info. The router addresses are persisted for the next

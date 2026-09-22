@@ -39,6 +39,58 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func TestEnrollmentKeyAdoptionDoesNotQueueRefresh(t *testing.T) {
+	currentPub, currentPriv := mustGenerateKey(t)
+	gracePub, gracePriv := mustGenerateKey(t)
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	privateKey := GetOrGenerateKey(store)
+	peerID, err := peer.IDFromPrivateKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential := mintRoleBiscuit(t, currentPriv, peerID, api.RoleNode)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/register", protoHandler(t, &api.EnrollResponse{
+		BiscuitToken:          credential,
+		ControlPlanePublicKey: currentPub,
+		Expiration:            time.Now().Add(24 * time.Hour).Unix(),
+	}))
+	mux.HandleFunc("/keys", keysHandler(t, []ed25519.PublicKey{gracePub, currentPub}, []ed25519.PrivateKey{gracePriv, currentPriv}))
+	mux.HandleFunc("/info", protoHandler(t, &api.ControlPlaneInfoResponse{}))
+	mux.HandleFunc("/policies", protoHandler(t, &api.PolicyConfigGetResponse{}))
+	mux.HandleFunc("/refresh", func(w http.ResponseWriter, request *http.Request) {
+		t.Error("freshly enrolled credential must not be refreshed")
+		http.Error(w, "unexpected refresh", http.StatusInternalServerError)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	if err := store.SaveControlPlaneURL(server.URL); err != nil {
+		t.Fatal(err)
+	}
+	node := &SamNode{Store: store, BiscuitTimeout: time.Second, config: Options{RequiredRole: api.RoleNode}}
+	if _, err := node.enrollHTTP(context.Background(), server.URL, "test-jwt", peerID, privateKey); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(node.GetIdentity(), credential) || len(node.trustedKeys) != 2 {
+		t.Fatal("enrollment must adopt the credential and both trusted keys")
+	}
+	if node.rotationRefreshPending.Load() {
+		t.Error("enrollment key adoption queued a redundant refresh")
+	}
+	if err := node.SyncControlPlane(context.Background()); err != nil {
+		t.Fatalf("sync after enrollment: %v", err)
+	}
+	node.rotationRefreshPending.Store(true)
+	node.adoptEnrolledKeys(context.Background(), server.URL, currentPub)
+	if !node.rotationRefreshPending.Load() {
+		t.Fatal("enrollment key adoption cleared a pending rotation refresh")
+	}
+}
+
 // startMockRouterWithKey runs a minimal router whose auth response biscuit is
 // signed by the given CP key, so nodes trusting that key can authenticate.
 func startMockRouterWithKey(t *testing.T, cpPriv ed25519.PrivateKey, role string) string {

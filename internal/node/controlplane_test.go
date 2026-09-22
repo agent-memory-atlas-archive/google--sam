@@ -30,7 +30,6 @@ import (
 
 	"github.com/google/sam/api"
 	lru "github.com/hashicorp/golang-lru/v2"
-	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 	"google.golang.org/protobuf/proto"
@@ -136,8 +135,10 @@ func TestSyncTrustedKeys(t *testing.T) {
 		srv := keysServer(t, []ed25519.PublicKey{retiredPub, currentPub}, []ed25519.PrivateKey{retiredPriv, currentPriv})
 		defer srv.Close()
 		n := newNode(t)
-		if err := n.syncTrustedKeys(context.Background(), srv.URL); err != nil {
+		if addedKeys, err := n.syncTrustedKeys(context.Background(), srv.URL); err != nil {
 			t.Fatalf("syncTrustedKeys: %v", err)
+		} else if !addedKeys {
+			t.Fatal("syncTrustedKeys must report the newly learned key")
 		}
 		if len(n.trustedKeys) != 2 || !containsTrustedKey(n.trustedKeys, retiredPub) || !containsTrustedKey(n.trustedKeys, currentPub) {
 			t.Errorf("trust set = %d keys, want retired and current", len(n.trustedKeys))
@@ -149,13 +150,19 @@ func TestSyncTrustedKeys(t *testing.T) {
 		if len(stored) != 2 {
 			t.Errorf("persisted %d keys, want 2", len(stored))
 		}
+		if n.rotationRefreshPending.Load() {
+			t.Error("adopting keys alone must not queue a credential refresh")
+		}
+		if addedKeys, err := n.syncTrustedKeys(context.Background(), srv.URL); err != nil || addedKeys {
+			t.Fatalf("unchanged key set: addedKeys = %v, err = %v", addedKeys, err)
+		}
 	})
 
 	t.Run("rejects a set no trusted key signed", func(t *testing.T) {
 		srv := keysServer(t, []ed25519.PublicKey{strangerPub}, []ed25519.PrivateKey{strangerPriv})
 		defer srv.Close()
 		n := newNode(t)
-		if err := n.syncTrustedKeys(context.Background(), srv.URL); err == nil {
+		if _, err := n.syncTrustedKeys(context.Background(), srv.URL); err == nil {
 			t.Fatal("a /keys answer signed only by an unknown key must not be adopted")
 		}
 		if len(n.trustedKeys) != 1 || !n.trustedKeys[0].Key.Equal(currentPub) {
@@ -167,7 +174,7 @@ func TestSyncTrustedKeys(t *testing.T) {
 		srv := keysServer(t, []ed25519.PublicKey{currentPub, strangerPub}, nil)
 		defer srv.Close()
 		n := newNode(t)
-		if err := n.syncTrustedKeys(context.Background(), srv.URL); err == nil {
+		if _, err := n.syncTrustedKeys(context.Background(), srv.URL); err == nil {
 			t.Fatal("an unsigned /keys answer must not be adopted")
 		}
 		if containsTrustedKey(n.trustedKeys, strangerPub) {
@@ -180,7 +187,7 @@ func TestSyncTrustedKeys(t *testing.T) {
 		defer srv.Close()
 		n := newNode(t)
 		n.trustedKeys = nil
-		if err := n.syncTrustedKeys(context.Background(), srv.URL); err == nil {
+		if _, err := n.syncTrustedKeys(context.Background(), srv.URL); err == nil {
 			t.Fatal("with no trusted key there is nothing to verify /keys against")
 		}
 	})
@@ -411,6 +418,21 @@ func TestSyncControlPlaneBeforeStart(t *testing.T) {
 	mux.HandleFunc("/keys", keysHandler(t, []ed25519.PublicKey{cpPub, gracePub}, []ed25519.PrivateKey{cpPriv, gracePriv}))
 	mux.HandleFunc("/info", protoHandler(t, &api.ControlPlaneInfoResponse{RouterAddresses: []string{freshRouter}}))
 	mux.HandleFunc("/policies", protoHandler(t, &api.PolicyConfigGetResponse{}))
+	mux.HandleFunc("/refresh", func(w http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		var refresh api.TokenRefreshRequest
+		if err != nil || proto.Unmarshal(body, &refresh) != nil {
+			t.Error("invalid refresh request")
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		peerID, err := peer.Decode(refresh.PeerId)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		writeRefreshResponse(t, w, mintRoleBiscuit(t, cpPriv, peerID, api.RoleNode))
+	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -434,7 +456,8 @@ func TestSyncControlPlaneBeforeStart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		priv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+		priv := GetOrGenerateKey(store)
+		peerID, err := peer.IDFromPrivateKey(priv)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -442,7 +465,11 @@ func TestSyncControlPlaneBeforeStart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		n.SetIdentityCache([]byte("identity"))
+		identity := mintRoleBiscuit(t, cpPriv, peerID, api.RoleNode)
+		if err := store.SaveIdentity(identity); err != nil {
+			t.Fatal(err)
+		}
+		n.SetIdentityCache(identity)
 		return n
 	}
 
