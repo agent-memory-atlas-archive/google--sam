@@ -219,9 +219,13 @@ async function loadData() {
             }
         }
         
+        // A revoked node is banned, not deleted: the record survives for unban
+        // and audit, but it is out of the mesh, so no view may list it.
+        const enrolledNodes = (data.enrolled_nodes || []).filter(node => !node.Banned);
+
         // Update Stats
         const usersCount = (data.users && data.users.length) || 0;
-        const nodesCount = (data.enrolled_nodes && data.enrolled_nodes.length) || 0;
+        const nodesCount = enrolledNodes.length;
         const routersCount = (data.active_routers && data.active_routers.length) || 0;
         const reqsCount = (data.enrollment_requests && data.enrollment_requests.length) || 0;
         
@@ -243,8 +247,8 @@ async function loadData() {
             setTableMessage('table-users', 4, 'Restricted to administrators.');
             setTableMessage('table-enrollments', 4, 'Restricted to administrators.');
         }
-        renderNodesTable(data.enrolled_nodes || [], role);
-        renderServicesTable(data.node_catalog || {}, buildLabelsByPeer(data.enrolled_nodes || []));
+        renderNodesTable(enrolledNodes, role);
+        renderServicesTable(data.node_catalog || {}, buildLabelsByPeer(enrolledNodes));
         renderRoutersTable(data.active_routers || []);
         renderRouterTopography(data.active_routers || []);
         renderBootstrapTokensTable(data.bootstrap_tokens || []);
