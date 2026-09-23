@@ -45,7 +45,6 @@ updates:
 
   - package-ecosystem: "pip"
     directories:
-      - "/sam-mcp-python"
       - "/cmd/chaos-agent"
       - "/tests/e2e/docker/*"
       - "/development/examples/*"

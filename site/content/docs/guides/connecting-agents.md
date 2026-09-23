@@ -207,11 +207,14 @@ async with streamable_http_client("http://127.0.0.1:8080/mcp", http_client=http)
         tools = await session.list_tools()
 ```
 
-The repository's `sam-mcp-python` package wraps this in a `SamClient`.
-`sam-mcp-python/examples/gemini_agent.py` is a complete agent that maps the
-node's tools to Gemini function calls with the `google-genai` SDK. For
-inference, point any OpenAI SDK at `http://127.0.0.1:8080/v1` with the token
-as `api_key`, or at the socket with no key.
+`site/content/docs/snippets/agent_demo.py` in the repository is a complete
+version of this example. For inference, point any OpenAI SDK at
+`http://127.0.0.1:8080/v1` with the token as `api_key`, or at the socket with
+no key.
+
+Native SDKs that join the mesh from inside the agent process, without a
+`sam-node` sidecar, are being built under `sdk/` in the repository; see
+`sdk/README.md` for their status.
 
 ## A note on trust
 

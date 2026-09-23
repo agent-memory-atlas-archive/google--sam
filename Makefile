@@ -156,15 +156,6 @@ test:
 	CGO_ENABLED=1 go test -v -race -count 1 $(if $(WHAT),-run $(WHAT)) ./...
 	CGO_ENABLED=1 go -C cmd/nano-init test -race -count 1 $(if $(WHAT),-run $(WHAT)) ./...
 
-.PHONY: test-python test-python-e2e
-test-python:
-	python3 -m venv sam-mcp-python/.venv
-	./sam-mcp-python/.venv/bin/pip install -e ./sam-mcp-python[test]
-	./sam-mcp-python/.venv/bin/pytest sam-mcp-python/tests/unit
-
-test-python-e2e: build docker-build
-	bats --verbose-run tests/e2e/python_sdk_test.bats
-
 e2e-test: build docker-build
 	bats -j 10 --verbose-run $(if $(WHAT),--filter "$(WHAT)") tests/e2e/
 
