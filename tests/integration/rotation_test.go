@@ -17,6 +17,7 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,9 +29,15 @@ import (
 	"time"
 
 	"github.com/google/sam/api"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/proto"
 )
 
+// TestKeyRotationIntegration is the reauthentication CUJ: the control plane
+// rotates its signing key, the retiring key leaves its grace period, and
+// both the router and the node must by then hold credentials signed by a
+// current key. Asserting only while the retiring key is still valid would
+// pass with credentials nobody refreshed, which is the failure this pins.
 func TestKeyRotationIntegration(t *testing.T) {
 	cpBin := buildBinary(t, "./cmd/sam-control-plane")
 	routerBin := buildBinary(t, "./cmd/sam-router")
@@ -64,8 +71,8 @@ roles:
 		"--admin-token-path", tokenPath(t, "test-admin-token"),
 		"--db-dsn", filepath.Join(tmpDir, "cp-keys.db"),
 		"--issuer", oidcURL,
-		"--key-rotation-interval", "4s",
-		"--key-grace-period", "2s",
+		"--key-rotation-interval", "2s",
+		"--key-grace-period", "1s",
 		"--insecure-skip-tls-verify",
 	)
 	cpCmd.Stdout = os.Stdout
@@ -94,8 +101,8 @@ roles:
 		"--keys-path", filepath.Join(tmpDir, "router-keys.db"),
 		"--allow-loopback",
 		"--oidc-token", routerJWT,
-		"--lease-renew-interval", "2s",
-		"--keys-sync-interval", "1s",
+		"--lease-renew-interval", "1s",
+		"--keys-sync-interval", "500ms",
 	)
 	routerCmd.Stdout = os.Stdout
 	routerCmd.Stderr = os.Stderr
@@ -126,6 +133,15 @@ roles:
 	nodeLogFile, _ := os.Create(nodeLogPath)
 	defer func() { _ = nodeLogFile.Close() }()
 
+	// The owner socket serves /sam/identity, the node's own credential;
+	// t.TempDir is too long for a socket path.
+	socketDir, err := os.MkdirTemp("", "sam-rot-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(socketDir) }()
+	nodeSocket := filepath.Join(socketDir, "node.sock")
+
 	nodeCmd := exec.Command(nodeBin, "run",
 		"--control-plane", fmt.Sprintf("http://127.0.0.1:%d", cpPort),
 		"--jwt", nodeJWT,
@@ -133,7 +149,9 @@ roles:
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--allow-loopback",
 		"--bind-addr", fmt.Sprintf("127.0.0.1:%d", nodeApiPort),
+		"--socket-path", nodeSocket,
 		"--api-token-path", tokenPath(t, "dummy-token"),
+		"--control-plane-sync-interval", "500ms",
 		"--log-level", "debug",
 	)
 	nodeCmd.Env = nodeEnv
@@ -149,17 +167,41 @@ roles:
 
 	// Wait for Node to be online actively
 	waitForAPI(t, fmt.Sprintf("127.0.0.1:%d", nodeApiPort))
+	socketClient := identityEvidenceSocketClient(nodeSocket)
+	waitForIdentityEvidenceSocket(t, socketClient)
 
-	// Get initial keys
-	initialKeys := fetchPublicKeys(t, cpPort)
+	// The key that signed the node's enrollment credential is the one whose
+	// retirement matters: read the credential the way an owner application
+	// would and find its signer among the control plane's live keys.
+	var initial api.IdentityEvidenceResponse
+	getIdentityEvidenceJSON(t, socketClient, "/sam/identity", &initial)
+	nodePeer, err := peer.Decode(initial.PeerId)
+	if err != nil {
+		t.Fatalf("decode node PeerID from evidence: %v", err)
+	}
+	signer := signerOf(t, initial.Biscuit, nodePeer, fetchPublicKeys(t, cpPort))
 
-	// Wait for key rotation to happen actively
-	waitForKeyRotation(t, cpPort, initialKeys)
+	// Once the signer has left /keys, a credential it signed verifies
+	// nowhere; both components must hold re-issued credentials by then.
+	retiredAt := waitForKeysRetired(t, cpPort, [][]byte{signer})
 
 	// 6. Verify Node is still active and can communicate (it should renew successfully and remain online)
 	if nodeCmd.ProcessState != nil && nodeCmd.ProcessState.Exited() {
 		t.Fatalf("node process exited unexpectedly")
 	}
+
+	var current api.IdentityEvidenceResponse
+	getIdentityEvidenceJSON(t, socketClient, "/sam/identity", &current)
+	if _, err := verifyBiscuitForApplication(current.Biscuit, nodePeer, publicKeysFrom(fetchPublicKeys(t, cpPort))); err != nil {
+		t.Fatalf("node credential does not verify under the current control plane keys after its signer retired: %v\n--- node.log ---\n%s", err, readLog(t, nodeLogPath))
+	}
+	if _, err := verifyBiscuitForApplication(current.Biscuit, nodePeer, []ed25519.PublicKey{signer}); err == nil {
+		t.Fatal("node credential still verifies under the retired key: it was never refreshed")
+	}
+
+	// The router renews its lease with its credential; a renewal accepted
+	// after retirement proves the router's credential was re-issued too.
+	waitForLeaseRenewedAfter(t, cpPort, retiredAt)
 
 	// Double check by looking at the node's API or verifying it doesn't crash
 	clientBin := buildBinary(t, "./cmd/mcp-client")
@@ -232,4 +274,78 @@ func waitForKeyRotation(t *testing.T, cpPort int, initialKeys [][]byte) {
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
+}
+
+// signerOf returns the one key among candidates that verifies biscuit for
+// peerID.
+func signerOf(t *testing.T, biscuit []byte, peerID peer.ID, candidates [][]byte) ed25519.PublicKey {
+	t.Helper()
+	for _, candidate := range candidates {
+		key := ed25519.PublicKey(candidate)
+		if _, err := verifyBiscuitForApplication(biscuit, peerID, []ed25519.PublicKey{key}); err == nil {
+			return key
+		}
+	}
+	t.Fatalf("no live control plane key verifies the node's credential")
+	return nil
+}
+
+// waitForKeysRetired returns once none of retiring is served by /keys any
+// more, and when that was observed.
+func waitForKeysRetired(t *testing.T, cpPort int, retiring [][]byte) time.Time {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		stillValid := false
+		for _, key := range fetchPublicKeys(t, cpPort) {
+			for _, old := range retiring {
+				if bytes.Equal(key, old) {
+					stillValid = true
+				}
+			}
+		}
+		if !stillValid {
+			return time.Now()
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the retiring key to leave /keys")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// waitForLeaseRenewedAfter returns once the control plane reports a router
+// lease renewal later than after; the renewal carries the router's biscuit
+// and is refused when that biscuit's key is no longer valid.
+func waitForLeaseRenewedAfter(t *testing.T, cpPort int, after time.Time) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		for _, lease := range fetchAdminStatus(t, cpPort, "test-admin-token").ActiveRouters {
+			if lease.LastRenewal.After(after) {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no router lease renewed after %s: the router's credential was not re-issued", after.Format(time.RFC3339Nano))
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func publicKeysFrom(raw [][]byte) []ed25519.PublicKey {
+	keys := make([]ed25519.PublicKey, 0, len(raw))
+	for _, key := range raw {
+		keys = append(keys, ed25519.PublicKey(key))
+	}
+	return keys
+}
+
+func readLog(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Sprintf("(no log: %v)", err)
+	}
+	return string(data)
 }
