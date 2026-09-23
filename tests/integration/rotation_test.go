@@ -16,7 +16,6 @@ package integration_test
 
 import (
 	"bytes"
-	"context"
 	"crypto/ed25519"
 	"fmt"
 	"io"
@@ -237,43 +236,6 @@ func fetchPublicKeys(t *testing.T, cpPort int) [][]byte {
 		t.Fatalf("failed to unmarshal KeysResponse: %v", err)
 	}
 	return keysResp.PublicKeys
-}
-
-func waitForKeyRotation(t *testing.T, cpPort int, initialKeys [][]byte) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	client := &http.Client{Timeout: 1 * time.Second}
-	for {
-		resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/keys", cpPort))
-		if err == nil {
-			body, err := io.ReadAll(resp.Body)
-			_ = resp.Body.Close()
-			if err == nil {
-				var keysResp api.KeysResponse
-				if err := proto.Unmarshal(body, &keysResp); err == nil {
-					for _, pk := range keysResp.PublicKeys {
-						found := false
-						for _, ik := range initialKeys {
-							if bytes.Equal(pk, ik) {
-								found = true
-								break
-							}
-						}
-						if !found {
-							return // Found a new key!
-						}
-					}
-				}
-			}
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("timed out waiting for key rotation")
-		case <-time.After(200 * time.Millisecond):
-		}
-	}
 }
 
 // signerOf returns the one key among candidates that verifies biscuit for
