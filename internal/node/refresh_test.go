@@ -19,9 +19,12 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -84,6 +87,9 @@ func newRefreshHarness(t *testing.T, refresh http.HandlerFunc) *refreshHarness {
 	}
 	current := mintRoleBiscuit(t, cpPriv, peerID, api.RoleNode)
 	if err := store.SaveIdentity(current); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveIdentityKeySet([]ed25519.PublicKey{cpPub}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -170,6 +176,121 @@ func TestRotationRefreshDuringControlPlaneSync(t *testing.T) {
 				t.Fatalf("refresh attempts = %d, want one failure and one success", got)
 			}
 		})
+	}
+}
+
+// A rotation learned before a restart must still be acted on after it: the
+// persisted key set is then unchanged, so the decision cannot hinge on
+// noticing a new key. Identities issued by builds that recorded no key set
+// fall back to the enrollment key stored in the mesh config.
+func TestRotationRefreshSurvivesRestart(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		name := "recorded key set"
+		if legacy {
+			name = "pre-upgrade identity"
+		}
+		t.Run(name, func(t *testing.T) {
+			newPub, newPriv := mustGenerateKey(t)
+			var fresh []byte
+			var refreshes atomic.Int32
+			refresh := func(w http.ResponseWriter, request *http.Request) {
+				if refreshes.Add(1) == 1 {
+					http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				writeRefreshResponse(t, w, fresh)
+			}
+			harness := newRefreshHarness(t, refresh)
+			fresh = mintRoleBiscuit(t, newPriv, harness.peerID, api.RoleNode)
+			store := harness.node.Store
+			if legacy {
+				if err := store.SaveIdentityKeySet(nil); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.SaveMeshConfig(harness.cpPub, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			mux := http.NewServeMux()
+			mux.HandleFunc("/keys", keysHandler(t, []ed25519.PublicKey{harness.cpPub, newPub}, []ed25519.PrivateKey{harness.cpPriv, newPriv}))
+			mux.HandleFunc("/refresh", refresh)
+			mux.HandleFunc("/info", protoHandler(t, &api.ControlPlaneInfoResponse{}))
+			mux.HandleFunc("/policies", protoHandler(t, &api.PolicyConfigGetResponse{}))
+			server := httptest.NewServer(mux)
+			defer server.Close()
+			if err := store.SaveControlPlaneURL(server.URL); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.SaveTrustedKeys([]TrustedKey{{Key: harness.cpPub, ReceivedAt: time.Now()}}); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := harness.node.SyncControlPlane(context.Background()); err == nil {
+				t.Fatal("sync must report the failed credential refresh")
+			}
+			harness.storedIdentityUnchanged(t)
+
+			// Restart: only what the store holds carries over.
+			restarted, err := NewSamNode(Options{PrivKey: GetOrGenerateKey(store), Store: store, ControlPlanePubKey: harness.cpPub, RequiredRole: api.RoleNode, BiscuitTimeout: time.Second})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(restarted.trustedKeys) != 2 {
+				t.Fatalf("restarted node loaded %d trusted keys, want the persisted pair", len(restarted.trustedKeys))
+			}
+			if err := restarted.SyncControlPlane(context.Background()); err != nil {
+				t.Fatalf("refresh after restart: %v", err)
+			}
+			if !bytes.Equal(restarted.GetIdentity(), fresh) {
+				t.Fatal("restarted node kept a credential signed by the retiring key")
+			}
+			if err := restarted.SyncControlPlane(context.Background()); err != nil {
+				t.Fatalf("settled sync: %v", err)
+			}
+			if got := refreshes.Load(); got != 2 {
+				t.Fatalf("refresh attempts = %d, want one failure before and one success after the restart", got)
+			}
+		})
+	}
+}
+
+// The control plane redeems only the last biscuit it issued, so the rotation
+// sync and the expiry renewal loop must not refresh at the same time: the
+// loser would present an already-rotated biscuit and be refused as a replay.
+func TestConcurrentRefreshesAreSerialized(t *testing.T) {
+	var mu sync.Mutex
+	var lastIssued []byte
+	var harness *refreshHarness
+	harness = newRefreshHarness(t, func(w http.ResponseWriter, request *http.Request) {
+		presented, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer "))
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if !bytes.Equal(presented, lastIssued) {
+			http.Error(w, "Biscuit already rotated", http.StatusUnauthorized)
+			return
+		}
+		lastIssued = mintRoleBiscuit(t, harness.cpPriv, harness.peerID, api.RoleNode)
+		writeRefreshResponse(t, w, lastIssued)
+	})
+	lastIssued = harness.identity
+
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() { errs <- harness.node.RefreshEnrollment(context.Background()) }()
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent refresh: %v", err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !bytes.Equal(harness.node.GetIdentity(), lastIssued) {
+		t.Fatal("node does not hold the last biscuit the control plane issued")
 	}
 }
 

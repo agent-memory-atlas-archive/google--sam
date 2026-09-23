@@ -186,10 +186,13 @@ type SamNode struct {
 	currentRelays           []peer.AddrInfo
 	reprovideTrigger        chan struct{}
 	controlPlaneSyncTrigger chan struct{}
-	rotationRefreshPending  atomic.Bool
-	BiscuitTimeout          time.Duration
-	cachedIdentity          atomic.Value
-	logger                  *golog.ZapEventLogger
+	// refreshMu serializes credential issuance: the control plane redeems
+	// only the last biscuit it issued, so two refreshes in flight would
+	// invalidate each other.
+	refreshMu      sync.Mutex
+	BiscuitTimeout time.Duration
+	cachedIdentity atomic.Value
+	logger         *golog.ZapEventLogger
 
 	// metricsRegistry holds this node's state collector; see metricsHandler.
 	metricsOnce     sync.Once
@@ -1111,6 +1114,9 @@ func (e *RefreshError) Error() string {
 
 // RefreshEnrollment trades the expiring biscuit token for a new one using a cryptographic challenge.
 func (n *SamNode) RefreshEnrollment(ctx context.Context) error {
+	n.refreshMu.Lock()
+	defer n.refreshMu.Unlock()
+
 	// 1. Fetch current biscuit
 	currentBiscuit, err := n.Store.LoadIdentity()
 	if err != nil {
@@ -1226,6 +1232,7 @@ func (n *SamNode) RefreshEnrollment(ctx context.Context) error {
 	if err := n.Store.SaveIdentityExpiration(refreshResp.ExpiresAt); err != nil {
 		return fmt.Errorf("failed to save refreshed expiration: %w", err)
 	}
+	n.recordIdentityKeySet()
 
 	return nil
 }
@@ -1398,17 +1405,16 @@ func containsTrustedKey(keys []TrustedKey, key ed25519.PublicKey) bool {
 
 // addTrustedKey appends a control plane public key to the trust set (no-op
 // on duplicates) and persists the updated set so it survives restarts.
-func (n *SamNode) addTrustedKey(key ed25519.PublicKey) bool {
+func (n *SamNode) addTrustedKey(key ed25519.PublicKey) {
 	n.keysMu.Lock()
 	if containsTrustedKey(n.trustedKeys, key) {
 		n.keysMu.Unlock()
-		return false
+		return
 	}
 	n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: key, ReceivedAt: time.Now()})
 	snapshot := append([]TrustedKey(nil), n.trustedKeys...)
 	n.keysMu.Unlock()
 	n.persistTrustedKeys(snapshot)
-	return true
 }
 
 func (n *SamNode) persistTrustedKeys(keys []TrustedKey) {
@@ -1426,9 +1432,7 @@ func (n *SamNode) handleKeyRotationEvent(event *api.MeshEvent) {
 		return
 	}
 	logger.Infow("[Mesh Event] key rotation received", "event", meshEventKeyRotation, "key", fmt.Sprintf("%x", event.NewPublicKey))
-	if n.addTrustedKey(ed25519.PublicKey(event.NewPublicKey)) && len(n.GetIdentity()) > 0 {
-		n.rotationRefreshPending.Store(true)
-	}
+	n.addTrustedKey(ed25519.PublicKey(event.NewPublicKey))
 	n.triggerControlPlaneSync()
 }
 

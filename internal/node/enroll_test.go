@@ -39,9 +39,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func TestEnrollmentKeyAdoptionDoesNotQueueRefresh(t *testing.T) {
+// Enrollment hands out a biscuit signed by the current key and then learns
+// the full key set, grace key included. Neither step is a rotation the new
+// biscuit predates; a rotation that follows is.
+func TestEnrollmentPinsIdentityKeySet(t *testing.T) {
 	currentPub, currentPriv := mustGenerateKey(t)
 	gracePub, gracePriv := mustGenerateKey(t)
+	rotatedPub, _ := mustGenerateKey(t)
 	store, err := NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -78,16 +82,29 @@ func TestEnrollmentKeyAdoptionDoesNotQueueRefresh(t *testing.T) {
 	if !bytes.Equal(node.GetIdentity(), credential) || len(node.trustedKeys) != 2 {
 		t.Fatal("enrollment must adopt the credential and both trusted keys")
 	}
-	if node.rotationRefreshPending.Load() {
-		t.Error("enrollment key adoption queued a redundant refresh")
+	if node.identityPredatesRotation() {
+		t.Error("a freshly enrolled identity predates no rotation")
 	}
 	if err := node.SyncControlPlane(context.Background()); err != nil {
 		t.Fatalf("sync after enrollment: %v", err)
 	}
-	node.rotationRefreshPending.Store(true)
-	node.adoptEnrolledKeys(context.Background(), server.URL, currentPub)
-	if !node.rotationRefreshPending.Load() {
-		t.Fatal("enrollment key adoption cleared a pending rotation refresh")
+	pinned, err := store.LoadIdentityKeySet()
+	if err != nil || len(pinned) != 2 {
+		t.Fatalf("identity key set = %d keys, err %v; want the grace and current keys", len(pinned), err)
+	}
+
+	node.handleKeyRotationEvent(&api.MeshEvent{NewPublicKey: rotatedPub})
+	if !node.identityPredatesRotation() {
+		t.Fatal("a key learned after issuance must mark the identity for refresh")
+	}
+	restarted := &SamNode{Store: store}
+	if stored, err := store.LoadTrustedKeys(); err != nil {
+		t.Fatal(err)
+	} else {
+		restarted.trustedKeys = stored
+	}
+	if !restarted.identityPredatesRotation() {
+		t.Fatal("the refresh decision must survive a restart")
 	}
 }
 

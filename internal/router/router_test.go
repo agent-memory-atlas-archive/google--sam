@@ -452,8 +452,8 @@ func TestRouterProactiveTokenRefresh(t *testing.T) {
 	defer func() { _ = r.Close() }()
 
 	// Capture initial token and expiration
-	initialToken := r.biscuitToken
-	initialExpiration := r.biscuitExpiration
+	initialToken := r.credential.biscuit
+	initialExpiration := r.credential.expiration
 
 	if len(initialToken) == 0 {
 		t.Fatal("initial router biscuit token is empty")
@@ -466,11 +466,11 @@ func TestRouterProactiveTokenRefresh(t *testing.T) {
 	}
 
 	// Assert that token and expiration updated
-	if bytes.Equal(r.biscuitToken, initialToken) {
+	if bytes.Equal(r.credential.biscuit, initialToken) {
 		t.Error("biscuit token did not change after refresh")
 	}
-	if !r.biscuitExpiration.After(initialExpiration) {
-		t.Errorf("expected refreshed expiration %v to be after initial expiration %v", r.biscuitExpiration, initialExpiration)
+	if !r.credential.expiration.After(initialExpiration) {
+		t.Errorf("expected refreshed expiration %v to be after initial expiration %v", r.credential.expiration, initialExpiration)
 	}
 }
 
@@ -514,19 +514,19 @@ func TestRouterLeaseRenewalReEnrollOn401(t *testing.T) {
 
 	// Corrupt router's biscuit token to simulate key rotation/expiration
 	r.keysMu.Lock()
-	r.biscuitToken = []byte("invalid-corrupted-biscuit")
+	r.credential.biscuit = []byte("invalid-corrupted-biscuit")
 	r.keysMu.Unlock()
 
 	// Call renewLease which should fail with 401, trigger reEnroll, and succeed
 	r.renewLease()
 
-	// Verify that biscuitToken was replaced with a valid non-corrupted token
+	// Verify that the biscuit was replaced with a valid non-corrupted token
 	r.keysMu.RLock()
-	currentToken := r.biscuitToken
+	currentToken := r.credential.biscuit
 	r.keysMu.RUnlock()
 
 	if bytes.Equal(currentToken, []byte("invalid-corrupted-biscuit")) {
-		t.Error("expected biscuitToken to be updated after 401 re-enrollment, but it remained corrupted")
+		t.Error("expected the biscuit to be updated after 401 re-enrollment, but it remained corrupted")
 	}
 }
 
@@ -545,9 +545,9 @@ func TestRouterLeaseRenewalRepeated401Terminates(t *testing.T) {
 	defer func() { _ = h.Close() }()
 
 	r := &Router{
-		Host:         h,
-		privKey:      h.Peerstore().PrivKey(h.ID()),
-		biscuitToken: []byte("dummy-biscuit"),
+		Host:       h,
+		privKey:    h.Peerstore().PrivKey(h.ID()),
+		credential: credential{biscuit: []byte("dummy-biscuit")},
 		config: Options{
 			ControlPlaneURL: ts.URL,
 		},
@@ -612,7 +612,7 @@ func TestRouterProactiveRefreshReEnrollOn401(t *testing.T) {
 
 	// Corrupt router's biscuit token to simulate key rotation
 	r.keysMu.Lock()
-	r.biscuitToken = []byte("stale-biscuit-signed-by-purged-key")
+	r.credential.biscuit = []byte("stale-biscuit-signed-by-purged-key")
 	r.keysMu.Unlock()
 
 	// Trigger proactive refresh which should fail with 401, trigger reEnroll, and succeed
@@ -621,13 +621,13 @@ func TestRouterProactiveRefreshReEnrollOn401(t *testing.T) {
 		t.Fatalf("expected RefreshEnrollment to recover via reEnroll, but got error: %v", err)
 	}
 
-	// Verify that biscuitToken was replaced with a valid fresh token
+	// Verify that the biscuit was replaced with a valid fresh token
 	r.keysMu.RLock()
-	currentToken := r.biscuitToken
+	currentToken := r.credential.biscuit
 	r.keysMu.RUnlock()
 
 	if bytes.Equal(currentToken, []byte("stale-biscuit-signed-by-purged-key")) {
-		t.Error("expected biscuitToken to be updated after 401 refresh fallback, but it remained stale")
+		t.Error("expected the biscuit to be updated after 401 refresh fallback, but it remained stale")
 	}
 }
 
@@ -872,7 +872,7 @@ func TestPerformMutualAuth(t *testing.T) {
 
 			r := &Router{
 				Host:              clientHost,
-				biscuitToken:      []byte("client-biscuit"),
+				credential:        credential{biscuit: []byte("client-biscuit")},
 				trustedPublicKeys: []ed25519.PublicKey{oldPub, newPub},
 				config: Options{
 					BiscuitTimeout: time.Second,
@@ -936,7 +936,7 @@ func TestHandleAuthHandshakeBoundsUnauthenticatedPeers(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.Host = serverHost
-	r.biscuitToken = []byte("router-biscuit")
+	r.credential.biscuit = []byte("router-biscuit")
 	r.trustedPublicKeys = []ed25519.PublicKey{cpPub}
 	serverHost.SetStreamHandler(api.AuthProtocolID, r.HandleAuthHandshake)
 	if err := clientHost.Connect(ctx, peer.AddrInfo{ID: serverHost.ID(), Addrs: serverHost.Addrs()}); err != nil {

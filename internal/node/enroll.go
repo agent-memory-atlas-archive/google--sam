@@ -81,9 +81,10 @@ func (n *SamNode) Enroll(ctx context.Context, controlPlaneURL string, jwt string
 // control plane too old to serve /keys still enrolls with one key.
 func (n *SamNode) adoptEnrolledKeys(ctx context.Context, controlPlaneURL string, newest []byte) {
 	n.addTrustedKey(ed25519.PublicKey(newest))
-	if _, err := n.syncTrustedKeys(ctx, controlPlaneURL); err != nil {
+	if err := n.syncTrustedKeys(ctx, controlPlaneURL); err != nil {
 		logger.Warnf("Could not fetch the control plane's full key set after enrollment (continuing with the enrollment key only): %v", err)
 	}
+	n.recordIdentityKeySet()
 }
 
 // enrollHTTP performs the HTTP half of enrollment for an explicit peer

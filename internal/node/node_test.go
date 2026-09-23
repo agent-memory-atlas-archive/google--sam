@@ -202,8 +202,8 @@ func TestHandleKeyRotationEvent(t *testing.T) {
 	if len(node.trustedKeys) != 1 {
 		t.Errorf("Expected 1 trusted key, got %d", len(node.trustedKeys))
 	}
-	if node.rotationRefreshPending.Load() {
-		t.Error("an unenrolled node must not queue a credential refresh")
+	if node.identityPredatesRotation() {
+		t.Error("an unenrolled node has nothing to refresh")
 	}
 }
 

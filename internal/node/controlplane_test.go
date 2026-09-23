@@ -135,10 +135,8 @@ func TestSyncTrustedKeys(t *testing.T) {
 		srv := keysServer(t, []ed25519.PublicKey{retiredPub, currentPub}, []ed25519.PrivateKey{retiredPriv, currentPriv})
 		defer srv.Close()
 		n := newNode(t)
-		if addedKeys, err := n.syncTrustedKeys(context.Background(), srv.URL); err != nil {
+		if err := n.syncTrustedKeys(context.Background(), srv.URL); err != nil {
 			t.Fatalf("syncTrustedKeys: %v", err)
-		} else if !addedKeys {
-			t.Fatal("syncTrustedKeys must report the newly learned key")
 		}
 		if len(n.trustedKeys) != 2 || !containsTrustedKey(n.trustedKeys, retiredPub) || !containsTrustedKey(n.trustedKeys, currentPub) {
 			t.Errorf("trust set = %d keys, want retired and current", len(n.trustedKeys))
@@ -150,11 +148,8 @@ func TestSyncTrustedKeys(t *testing.T) {
 		if len(stored) != 2 {
 			t.Errorf("persisted %d keys, want 2", len(stored))
 		}
-		if n.rotationRefreshPending.Load() {
-			t.Error("adopting keys alone must not queue a credential refresh")
-		}
-		if addedKeys, err := n.syncTrustedKeys(context.Background(), srv.URL); err != nil || addedKeys {
-			t.Fatalf("unchanged key set: addedKeys = %v, err = %v", addedKeys, err)
+		if n.identityPredatesRotation() {
+			t.Error("a node without an identity has nothing to refresh")
 		}
 	})
 
@@ -162,7 +157,7 @@ func TestSyncTrustedKeys(t *testing.T) {
 		srv := keysServer(t, []ed25519.PublicKey{strangerPub}, []ed25519.PrivateKey{strangerPriv})
 		defer srv.Close()
 		n := newNode(t)
-		if _, err := n.syncTrustedKeys(context.Background(), srv.URL); err == nil {
+		if err := n.syncTrustedKeys(context.Background(), srv.URL); err == nil {
 			t.Fatal("a /keys answer signed only by an unknown key must not be adopted")
 		}
 		if len(n.trustedKeys) != 1 || !n.trustedKeys[0].Key.Equal(currentPub) {
@@ -174,7 +169,7 @@ func TestSyncTrustedKeys(t *testing.T) {
 		srv := keysServer(t, []ed25519.PublicKey{currentPub, strangerPub}, nil)
 		defer srv.Close()
 		n := newNode(t)
-		if _, err := n.syncTrustedKeys(context.Background(), srv.URL); err == nil {
+		if err := n.syncTrustedKeys(context.Background(), srv.URL); err == nil {
 			t.Fatal("an unsigned /keys answer must not be adopted")
 		}
 		if containsTrustedKey(n.trustedKeys, strangerPub) {
@@ -187,7 +182,7 @@ func TestSyncTrustedKeys(t *testing.T) {
 		defer srv.Close()
 		n := newNode(t)
 		n.trustedKeys = nil
-		if _, err := n.syncTrustedKeys(context.Background(), srv.URL); err == nil {
+		if err := n.syncTrustedKeys(context.Background(), srv.URL); err == nil {
 			t.Fatal("with no trusted key there is nothing to verify /keys against")
 		}
 	})

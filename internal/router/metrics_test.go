@@ -88,7 +88,7 @@ func TestRouterMetricsListener(t *testing.T) {
 	r.bannedPeers.Store(peer.ID("peer-x"), true)
 	expiry := time.Now().Add(time.Hour).Truncate(time.Second)
 	r.keysMu.Lock()
-	r.biscuitExpiration = expiry
+	r.credential.expiration = expiry
 	r.keysMu.Unlock()
 	r.isReady.Store(true)
 

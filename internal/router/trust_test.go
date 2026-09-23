@@ -19,10 +19,12 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -274,7 +276,7 @@ func TestSyncKeysRefreshesOnRotation(t *testing.T) {
 	router := &Router{
 		ctx:               context.Background(),
 		privKey:           priv,
-		biscuitToken:      mintRouterBiscuit(t, oldPriv, peerID, api.RoleRouter),
+		credential:        credential{biscuit: mintRouterBiscuit(t, oldPriv, peerID, api.RoleRouter), issuedUnder: []ed25519.PublicKey{oldPub}},
 		trustedPublicKeys: []ed25519.PublicKey{oldPub},
 		config:            Options{ControlPlaneURL: server.URL, RequiredRole: api.RoleRouter, BiscuitTimeout: time.Second},
 	}
@@ -284,7 +286,7 @@ func TestSyncKeysRefreshesOnRotation(t *testing.T) {
 	if err := router.syncKeys(); err != nil {
 		t.Fatalf("retry refresh: %v", err)
 	}
-	if !bytes.Equal(router.biscuitToken, fresh) {
+	if !bytes.Equal(router.credential.biscuit, fresh) {
 		t.Fatal("router kept a credential signed by the retiring key")
 	}
 	if err := router.syncKeys(); err != nil {
@@ -292,6 +294,85 @@ func TestSyncKeysRefreshesOnRotation(t *testing.T) {
 	}
 	if got := refreshes.Load(); got != 2 {
 		t.Fatalf("refresh attempts = %d, want one failure and one success", got)
+	}
+
+	// A freshly enrolled router knows one key; its first sync learns the
+	// grace key too. That is not a rotation its new biscuit predates.
+	enrolled := &Router{
+		ctx:               context.Background(),
+		privKey:           priv,
+		credential:        credential{biscuit: fresh},
+		trustedPublicKeys: []ed25519.PublicKey{newPub},
+		config:            Options{ControlPlaneURL: server.URL, RequiredRole: api.RoleRouter, BiscuitTimeout: time.Second},
+	}
+	if err := enrolled.syncKeys(); err != nil {
+		t.Fatalf("first sync after enrollment: %v", err)
+	}
+	if got := refreshes.Load(); got != 2 {
+		t.Fatalf("first sync after enrollment refreshed (%d attempts total)", got)
+	}
+	if len(enrolled.credential.issuedUnder) != 2 {
+		t.Fatalf("issuance set = %d keys, want the synced pair", len(enrolled.credential.issuedUnder))
+	}
+}
+
+// The control plane redeems only the last biscuit it issued, so the keys
+// loop, the renewal loop and lease recovery must not refresh concurrently.
+func TestRouterConcurrentRefreshesAreSerialized(t *testing.T) {
+	cpPub, cpPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerID, err := peer.IDFromPrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	lastIssued := mintRouterBiscuit(t, cpPriv, peerID, api.RoleRouter)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		presented, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer "))
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if !bytes.Equal(presented, lastIssued) {
+			http.Error(w, "Biscuit already rotated", http.StatusUnauthorized)
+			return
+		}
+		lastIssued = mintRouterBiscuit(t, cpPriv, peerID, api.RoleRouter)
+		body, err := proto.Marshal(&api.TokenRefreshResponse{BiscuitToken: lastIssued, ExpiresAt: time.Now().Add(time.Hour).Unix()})
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+	router := &Router{
+		privKey:           priv,
+		credential:        credential{biscuit: lastIssued},
+		trustedPublicKeys: []ed25519.PublicKey{cpPub},
+		config:            Options{ControlPlaneURL: server.URL, RequiredRole: api.RoleRouter, BiscuitTimeout: time.Second},
+	}
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() { errs <- router.RefreshEnrollment(context.Background()) }()
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent refresh: %v", err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !bytes.Equal(router.credential.biscuit, lastIssued) {
+		t.Fatal("router does not hold the last biscuit the control plane issued")
 	}
 }
 
@@ -353,7 +434,7 @@ func TestRouterRefreshEnrollmentHardening(t *testing.T) {
 	newRouter := func() *Router {
 		return &Router{
 			privKey:           priv,
-			biscuitToken:      current,
+			credential:        credential{biscuit: current},
 			trustedPublicKeys: []ed25519.PublicKey{cpPub},
 			config:            Options{ControlPlaneURL: srv.URL, RequiredRole: api.RoleRouter, BiscuitTimeout: time.Second},
 		}
@@ -375,7 +456,7 @@ func TestRouterRefreshEnrollmentHardening(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "403") {
 			t.Fatalf("RefreshEnrollment = %v, want a 403 error", err)
 		}
-		if !bytes.Equal(r.biscuitToken, current) {
+		if !bytes.Equal(r.credential.biscuit, current) {
 			t.Error("the current biscuit must be kept on a refused refresh")
 		}
 	})
@@ -391,7 +472,7 @@ func TestRouterRefreshEnrollmentHardening(t *testing.T) {
 			if err := r.RefreshEnrollment(context.Background()); err == nil {
 				t.Fatal("RefreshEnrollment adopted a token it must have refused")
 			}
-			if !bytes.Equal(r.biscuitToken, current) {
+			if !bytes.Equal(r.credential.biscuit, current) {
 				t.Error("the current biscuit must be kept when the refreshed one is refused")
 			}
 		})
@@ -404,7 +485,7 @@ func TestRouterRefreshEnrollmentHardening(t *testing.T) {
 		if err := r.RefreshEnrollment(context.Background()); err != nil {
 			t.Fatalf("RefreshEnrollment: %v", err)
 		}
-		if !bytes.Equal(r.biscuitToken, fresh) {
+		if !bytes.Equal(r.credential.biscuit, fresh) {
 			t.Error("a valid refreshed token must replace the current one")
 		}
 	})

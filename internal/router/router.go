@@ -110,6 +110,54 @@ func (a *relayACL) AllowConnect(src peer.ID, srcAddr multiaddr.Multiaddr, dest p
 	return ok
 }
 
+// credential is the router's own mesh identity as the control plane issued
+// it. issuedUnder is the trusted key set at issuance: a trusted key outside
+// it is a rotation the biscuit predates, so the biscuit must be refreshed
+// before that key's predecessor leaves its grace period. It is nil until the
+// first /keys sync after enrollment pins it, since enrollment hands out one
+// key and the sync learns the rest.
+type credential struct {
+	biscuit     []byte
+	expiration  time.Time
+	issuedUnder []ed25519.PublicKey
+}
+
+func newCredential(biscuit []byte, expiresAt int64, issuedUnder []ed25519.PublicKey) credential {
+	return credential{
+		biscuit:     biscuit,
+		expiration:  time.Unix(expiresAt, 0),
+		issuedUnder: append([]ed25519.PublicKey(nil), issuedUnder...),
+	}
+}
+
+// pin records trusted as the issuance set of a biscuit that has none yet.
+func (c *credential) pin(trusted []ed25519.PublicKey) {
+	if len(c.biscuit) > 0 && c.issuedUnder == nil {
+		c.issuedUnder = append([]ed25519.PublicKey(nil), trusted...)
+	}
+}
+
+// predatesRotation reports whether trusted holds a key unknown at issuance.
+func (c credential) predatesRotation(trusted []ed25519.PublicKey) bool {
+	return len(c.biscuit) > 0 && c.issuedUnder != nil && !subsetOf(trusted, c.issuedUnder)
+}
+
+func subsetOf(keys, set []ed25519.PublicKey) bool {
+	for _, key := range keys {
+		known := false
+		for _, candidate := range set {
+			if key.Equal(candidate) {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return false
+		}
+	}
+	return true
+}
+
 // Router represents a libp2p bootstrap/relay node.
 type Router struct {
 	config             Options
@@ -123,16 +171,19 @@ type Router struct {
 	// can open those streams.
 	handshakeLimiter *ratelimit.PeerRateLimiter
 
-	// Keys & Identity
-	biscuitToken      []byte
-	biscuitExpiration time.Time
+	// trustedPublicKeys is what the control plane signs with now, the set
+	// every peer credential is verified against; credential is this
+	// router's own. Both are guarded by keysMu.
 	trustedPublicKeys []ed25519.PublicKey
+	credential        credential
 	keysMu            sync.RWMutex
 	enrollMu          sync.Mutex
 	privKey           crypto.PrivKey
+	// refreshMu serializes credential issuance: the control plane redeems
+	// only the last biscuit it issued.
+	refreshMu sync.Mutex
 
-	keysSyncTrigger        chan struct{}
-	rotationRefreshPending bool
+	keysSyncTrigger chan struct{}
 
 	// Control contexts
 	ctx      context.Context
@@ -459,8 +510,7 @@ func (r *Router) enroll(peerID peer.ID) error {
 	}
 
 	r.keysMu.Lock()
-	r.biscuitToken = enrollResp.BiscuitToken
-	r.biscuitExpiration = time.Unix(enrollResp.Expiration, 0)
+	r.credential = newCredential(enrollResp.BiscuitToken, enrollResp.Expiration, nil)
 	r.trustedPublicKeys = []ed25519.PublicKey{enrollResp.ControlPlanePublicKey}
 	r.keysMu.Unlock()
 
@@ -604,8 +654,7 @@ func (r *Router) enrollBootstrap(peerID peer.ID) error {
 	}
 
 	r.keysMu.Lock()
-	r.biscuitToken = enrollResp.BiscuitToken
-	r.biscuitExpiration = time.Unix(enrollResp.Expiration, 0)
+	r.credential = newCredential(enrollResp.BiscuitToken, enrollResp.Expiration, nil)
 	r.trustedPublicKeys = []ed25519.PublicKey{enrollResp.ControlPlanePublicKey}
 	r.keysMu.Unlock()
 
@@ -692,26 +741,15 @@ func (r *Router) syncKeys() error {
 	}
 
 	r.keysMu.Lock()
-	for _, newKey := range newKeys {
-		known := false
-		for _, oldKey := range r.trustedPublicKeys {
-			if newKey.Equal(oldKey) {
-				known = true
-				break
-			}
-		}
-		if !known && len(r.biscuitToken) > 0 {
-			r.rotationRefreshPending = true
-		}
-	}
 	r.trustedPublicKeys = newKeys
+	r.credential.pin(newKeys)
+	refresh := r.credential.predatesRotation(newKeys)
 	r.keysMu.Unlock()
 
-	if r.rotationRefreshPending {
+	if refresh {
 		if err := r.RefreshEnrollment(r.ctx); err != nil {
 			return fmt.Errorf("refresh enrollment after key rotation: %w", err)
 		}
-		r.rotationRefreshPending = false
 	}
 
 	logger.Debugf("Synced %d valid public keys from control plane", len(newKeys))
@@ -872,7 +910,7 @@ func (r *Router) runLeaseRenewalLoop() {
 func (r *Router) renewLease() {
 	for attempt := 0; attempt < 2; attempt++ {
 		r.keysMu.RLock()
-		biscuit := r.biscuitToken
+		biscuit := r.credential.biscuit
 		r.keysMu.RUnlock()
 
 		if len(biscuit) == 0 {
@@ -1190,7 +1228,7 @@ func (r *Router) HandleAuthHandshake(s network.Stream) {
 
 	// Send mutual response (our biscuit)
 	r.keysMu.RLock()
-	ourBiscuit := r.biscuitToken
+	ourBiscuit := r.credential.biscuit
 	r.keysMu.RUnlock()
 
 	writer := msgio.NewVarintWriter(s)
@@ -1213,8 +1251,11 @@ func (r *Router) performMutualAuth(s network.Stream) error {
 	_ = s.SetDeadline(time.Now().Add(5 * time.Second))
 
 	// Send our biscuit
+	r.keysMu.RLock()
+	ourBiscuit := r.credential.biscuit
+	r.keysMu.RUnlock()
 	writer := msgio.NewVarintWriter(s)
-	authFrame := &api.AuthFrame{Biscuit: r.biscuitToken}
+	authFrame := &api.AuthFrame{Biscuit: ourBiscuit}
 	data, _ := proto.Marshal(authFrame)
 	if err := writer.WriteMsg(data); err != nil {
 		return fmt.Errorf("write mutual auth frame: %w", err)
@@ -1328,8 +1369,11 @@ func isLoopbackOrLinkLocal(addr multiaddr.Multiaddr) bool {
 
 // RefreshEnrollment trades the expiring biscuit token for a new one using a cryptographic challenge.
 func (r *Router) RefreshEnrollment(ctx context.Context) error {
+	r.refreshMu.Lock()
+	defer r.refreshMu.Unlock()
+
 	r.keysMu.RLock()
-	currentBiscuit := r.biscuitToken
+	currentBiscuit := r.credential.biscuit
 	r.keysMu.RUnlock()
 
 	if len(currentBiscuit) == 0 {
@@ -1418,8 +1462,7 @@ func (r *Router) RefreshEnrollment(ctx context.Context) error {
 
 	// Update local biscuit token and expiration under lock
 	r.keysMu.Lock()
-	r.biscuitToken = refreshResp.BiscuitToken
-	r.biscuitExpiration = time.Unix(refreshResp.ExpiresAt, 0)
+	r.credential = newCredential(refreshResp.BiscuitToken, refreshResp.ExpiresAt, r.trustedPublicKeys)
 	r.keysMu.Unlock()
 
 	logger.Infof("Router biscuit token refreshed successfully.")
@@ -1447,7 +1490,7 @@ func (r *Router) runBiscuitRenewalLoop() {
 		select {
 		case <-ticker.C:
 			r.keysMu.RLock()
-			expiration := r.biscuitExpiration
+			expiration := r.credential.expiration
 			r.keysMu.RUnlock()
 
 			if !expiration.IsZero() && time.Until(expiration) < api.BiscuitTokenTTL/5 { // 80% elapsed lifespan of 24h (remaining time < 20% of TTL)

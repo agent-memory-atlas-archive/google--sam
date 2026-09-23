@@ -16,6 +16,7 @@ package node
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -47,11 +48,10 @@ func (n *SamNode) SyncControlPlane(ctx context.Context) error {
 		return errors.New("control plane URL not found in store")
 	}
 	var errs []error
-	if addedKeys, err := n.syncTrustedKeys(ctx, controlPlaneURL); err != nil {
+	if err := n.syncTrustedKeys(ctx, controlPlaneURL); err != nil {
 		errs = append(errs, fmt.Errorf("keys: %w", err))
-	} else if len(n.GetIdentity()) > 0 && (n.rotationRefreshPending.Swap(false) || addedKeys) {
+	} else if n.identityPredatesRotation() {
 		if err := n.RefreshEnrollment(ctx); err != nil {
-			n.rotationRefreshPending.Store(true)
 			errs = append(errs, fmt.Errorf("refresh enrollment after key rotation: %w", err))
 		}
 	}
@@ -71,34 +71,83 @@ func (n *SamNode) SyncControlPlane(ctx context.Context) error {
 // about. Verification against the keys already trusted keeps whoever answers
 // the URL from becoming the trust root; an empty answer is a failure so the
 // set is never wiped.
-func (n *SamNode) syncTrustedKeys(ctx context.Context, controlPlaneURL string) (bool, error) {
+func (n *SamNode) syncTrustedKeys(ctx context.Context, controlPlaneURL string) error {
 	n.keysMu.RLock()
 	existing := append([]TrustedKey(nil), n.trustedKeys...)
 	n.keysMu.RUnlock()
 	if len(existing) == 0 {
-		return false, errors.New("no trusted control plane keys to verify /keys against")
+		return errors.New("no trusted control plane keys to verify /keys against")
 	}
 	keys, err := FetchControlPlaneKeys(ctx, controlPlaneURL, publicKeysOf(existing))
 	if err != nil {
-		return false, err
+		return err
 	}
 	if len(keys) == 0 {
-		return false, errors.New("/keys returned no keys")
+		return errors.New("/keys returned no keys")
 	}
 	merged := mergeTrustedKeys(existing, keys, time.Now())
-	addedKeys := false
 	n.keysMu.Lock()
-	for _, key := range keys {
-		if !containsTrustedKey(n.trustedKeys, key) {
-			addedKeys = true
-		}
-	}
 	n.trustedKeys = merged
 	snapshot := append([]TrustedKey(nil), merged...)
 	n.keysMu.Unlock()
 	n.persistTrustedKeys(snapshot)
 	logger.Debugf("Synced %d valid control plane keys", len(merged))
-	return addedKeys, nil
+	return nil
+}
+
+// identityPredatesRotation reports whether a trusted key exists that was not
+// known when the stored identity was issued: the identity is then signed by
+// a retiring key and must be refreshed before that key leaves its grace
+// period. Both sides of the comparison are persisted, so the answer is the
+// same after a restart. An identity from a build that recorded no set is
+// checked against the stored mesh-config key, the one enrollment handed out
+// with it. Nothing enrolled means nothing to refresh.
+func (n *SamNode) identityPredatesRotation() bool {
+	if n.Store == nil || len(n.GetIdentity()) == 0 {
+		return false
+	}
+	issuance, err := n.Store.LoadIdentityKeySet()
+	if err != nil {
+		logger.Warnf("Could not load the identity's key set: %v", err)
+		return false
+	}
+	if len(issuance) == 0 {
+		enrollmentKey, _, err := n.Store.LoadMeshConfig()
+		if err != nil || len(enrollmentKey) != ed25519.PublicKeySize {
+			return false
+		}
+		issuance = []ed25519.PublicKey{ed25519.PublicKey(enrollmentKey)}
+	}
+	n.keysMu.RLock()
+	defer n.keysMu.RUnlock()
+	for _, tk := range n.trustedKeys {
+		if !containsPublicKey(issuance, tk.Key) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPublicKey(keys []ed25519.PublicKey, key ed25519.PublicKey) bool {
+	for _, candidate := range keys {
+		if candidate.Equal(key) {
+			return true
+		}
+	}
+	return false
+}
+
+// recordIdentityKeySet pins the trusted set to the identity just adopted.
+func (n *SamNode) recordIdentityKeySet() {
+	if n.Store == nil {
+		return
+	}
+	n.keysMu.RLock()
+	keys := publicKeysOf(n.trustedKeys)
+	n.keysMu.RUnlock()
+	if err := n.Store.SaveIdentityKeySet(keys); err != nil {
+		logger.Errorf("Failed to persist the identity's key set: %v", err)
+	}
 }
 
 // syncMeshInfo reads /info. The router addresses are persisted for the next
