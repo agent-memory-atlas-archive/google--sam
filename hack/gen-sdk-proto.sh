@@ -47,5 +47,11 @@ protoc -I api \
   --python_out="${PY_GEN_DIR}" \
   --pyi_out="${PY_GEN_DIR}" \
   api/sam.proto
+# The relay v2 client speaks go-libp2p's circuit.proto directly; see the
+# proto's header for why the SDK carries a copy.
+protoc -I sdk/python/proto \
+  --python_out="${PY_GEN_DIR}" \
+  --pyi_out="${PY_GEN_DIR}" \
+  sdk/python/proto/circuit.proto
 
 echo "SDK protobuf generation complete."

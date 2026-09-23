@@ -38,3 +38,7 @@ export {
   type MeshCredential,
 } from "./credential.ts";
 export { enrollChallenge, enrollStatusChallenge, refreshChallenge, registerChallenge } from "./challenges.ts";
+export { MeshSession, type AdmittedRouter, type JoinOptions } from "./session.ts";
+export { BiscuitVerificationError, ROLE_ROUTER, requireRole, verifyPeerBiscuit, type VerifiedBiscuit } from "./biscuit.ts";
+export { AUTH_HANDLER_OPTIONS, AUTH_PROTOCOL, MCP_PROTOCOL, AuthRejectedError, authenticateWithPeer, authStreamHandler } from "./auth.ts";
+export { createMeshHost, type MeshHostOptions } from "./host.ts";

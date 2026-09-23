@@ -3,9 +3,9 @@
 Native JavaScript SDK for joining a SAM agent mesh from inside the agent
 process. It replaces the `sam-node` sidecar for agents written for Node.js.
 
-Status: **milestone 1** (identity, enrollment, credential refresh). The
-libp2p transport, service discovery and MCP over the mesh are the next
-milestones; see [../README.md](../README.md) for the plan.
+Status: **milestone 2** (identity, enrollment, credential refresh, joining
+the mesh over libp2p with mutual authentication). Discovering and calling
+tools are the next milestones; see [../README.md](../README.md) for the plan.
 
 ## Install
 
@@ -13,8 +13,10 @@ milestones; see [../README.md](../README.md) for the plan.
 cd sdk/js && npm ci && npm run build
 ```
 
-Requires Node.js 22.18 or later. The only runtime dependency is
-`@bufbuild/protobuf`.
+Requires Node.js 22.18 or later. Runtime dependencies are
+`@bufbuild/protobuf`, `@biscuit-auth/biscuit-wasm` and the js-libp2p
+packages (`libp2p`, `@libp2p/tcp`, `@libp2p/tls`, `@chainsafe/libp2p-yamux`,
+`@libp2p/circuit-relay-v2`, `@libp2p/identify`).
 
 ## Use
 
@@ -27,11 +29,19 @@ const mesh = await AgentMesh.enroll({
   stateDir: `${process.env.HOME}/.config/sam-mesh/agent`,
 });
 console.log(mesh.peerId); // 12D3Koo...
-await mesh.refresh(); // trades the biscuit for a fresh one
+
+// On the mesh: authenticated with a router, reachable through it, credential
+// kept fresh until close().
+const session = await mesh.join();
+console.log(session.relayAddresses.map(String));
+
+// Reach another member (directly or through a router) and verify it.
+const peer = await session.authenticate("/ip4/.../p2p/<router>/p2p-circuit/p2p/<peer>");
+console.log(peer.roles, peer.labels, peer.expiration);
+await session.close();
 
 // Later, in a new process:
 const resumed = await AgentMesh.load({ controlPlaneUrl: "https://hub.sam-mesh.dev", stateDir: "..." });
-const frame = resumed.authFrame("mcp://calculator"); // first frame on a mesh stream
 ```
 
 `enroll` takes exactly one of `bootstrapTokenPath`, `bootstrapToken` or
@@ -50,14 +60,20 @@ A plaintext `http://` control plane is accepted only on loopback. Pass
 - `src/credential.ts`: what a member holds, `AuthFrame` encoding.
 - `src/mesh.ts`: `AgentMesh`, persistence under a state directory
   (`identity.key` in the libp2p private key encoding, `credential.json`).
+- `src/biscuit.ts`: verification of a peer's credential with biscuit-wasm,
+  as `internal/identity.verifyBiscuit` does.
+- `src/host.ts`, `src/auth.ts`, `src/session.ts`: the libp2p host, the
+  `/sam/auth/1.0.0` handshake on both sides, `MeshSession` with the relay
+  reservation and the refresh loop.
 - `src/gen/`: generated from `api/sam.proto` by `hack/gen-sdk-proto.sh`.
 
 ## Test
 
 ```bash
-npm test                                          # unit tests, fake control plane
-go test ./tests/integration -run TestNativeSDKs   # against a real control plane
+npm test                                          # unit tests, fake control plane and router
+go test ./tests/integration -run TestNativeSDKs   # real control plane, router and sam-node
 ```
 
-The integration test runs `dist/conformance.js`, so build first. It skips
-when `dist/` or `node_modules/` is missing.
+The integration tests run `dist/conformance.js` and
+`dist/conformance-join.js`, so build first. They skip when `dist/` or
+`node_modules/` is missing.

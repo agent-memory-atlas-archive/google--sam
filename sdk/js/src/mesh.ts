@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { ControlPlaneClient, ROLE_NODE, type Enrollment } from "./controlplane.ts";
 import { credentialFromJSON, credentialToJSON, encodeAuthFrame, type MeshCredential } from "./credential.ts";
 import { Identity } from "./identity.ts";
+import { joinMesh, type JoinOptions, type MeshSession } from "./session.ts";
 
 const IDENTITY_FILE = "identity.key";
 const CREDENTIAL_FILE = "credential.json";
@@ -56,10 +57,8 @@ export interface EnrollOptions extends AgentMeshOptions {
 
 /**
  * A member of the mesh: an identity, the credential the control plane minted
- * for it, and the client that keeps that credential fresh.
- *
- * This is the enrollment half of the SDK. Joining the mesh over libp2p and
- * serving or calling MCP tools build on top of it (see sdk/README.md).
+ * for it, and the client that keeps that credential fresh. join() puts it on
+ * the mesh over libp2p.
  */
 export class AgentMesh {
   readonly identity: Identity;
@@ -170,6 +169,15 @@ export class AgentMesh {
    */
   authFrame(targetService = "", agent = ""): Uint8Array {
     return encodeAuthFrame(this.#credential.biscuit, targetService, agent);
+  }
+
+  /**
+   * Joins the mesh: connects to the routers in the credential, passes the
+   * auth handshake with them, reserves a relay slot and keeps the credential
+   * fresh for as long as the session is open.
+   */
+  join(options?: JoinOptions): Promise<MeshSession> {
+    return joinMesh(this, options);
   }
 
   /** Writes identity and credential to the state directory, if one is configured. */

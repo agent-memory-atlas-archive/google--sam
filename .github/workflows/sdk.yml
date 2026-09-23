@@ -64,8 +64,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install protoc and py-libp2p build dependencies
+        # fastecdsa (a py-libp2p dependency) ships as a source distribution
+        # and builds against GMP.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libgmp-dev
 
       - name: JavaScript SDK
         run: make sdk-js
@@ -76,5 +78,5 @@ jobs:
       - name: Generated bindings are current
         run: ./hack/verify-sdk-generated.sh
 
-      - name: Both SDKs against a real control plane
+      - name: Both SDKs on a mesh with a real control plane, router and sam-node
         run: go test ./tests/integration -run TestNativeSDKs -count=1 -v

@@ -30,10 +30,8 @@ _CREDENTIAL_FILE = "credential.json"
 
 class AgentMesh:
     """A member of the mesh: an identity, the credential the control plane
-    minted for it, and the client that keeps that credential fresh.
-
-    This is the enrollment half of the SDK. Joining the mesh over libp2p and
-    serving or calling MCP tools build on top of it (see sdk/README.md)."""
+    minted for it, and the client that keeps that credential fresh. join()
+    puts it on the mesh over libp2p."""
 
     def __init__(self, identity: Identity, control_plane: ControlPlaneClient, credential: MeshCredential, state_dir: Optional[Path]):
         self.identity = identity
@@ -149,6 +147,17 @@ class AgentMesh:
         """The frame that opens every stream to a peer: this member's biscuit plus
         the service it wants (e.g. "mcp://calculator") and the agent it speaks for."""
         return encode_auth_frame(self._credential.biscuit, target_service, agent)
+
+    def join(self, **options):  # type: ignore[no-untyped-def]
+        """Joins the mesh: connects to the routers in the credential, passes the
+        auth handshake with them, reserves a relay slot and keeps the credential
+        fresh. An async context manager to use under trio:
+
+            async with mesh.join() as session: ...
+        """
+        from .session import join_mesh
+
+        return join_mesh(self, **options)
 
     def save(self) -> None:
         """Writes identity and credential to the state directory, if one is configured."""

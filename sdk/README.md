@@ -21,20 +21,49 @@ node and to the control plane, a `sam-node`.
 
 ## What exists today
 
-Milestone 1 is implemented and tested in both languages:
+Milestones 1 and 2 are implemented and tested in both languages:
 
 | Capability | JS | Python |
 | --- | --- | --- |
 | ed25519 identity, libp2p key encodings, peer ID | yes | yes |
 | Enrollment with a bootstrap token (`POST /enroll`, `GET /enroll/status` polling) | yes | yes |
 | Enrollment with an OIDC token (`POST /register`) | yes | yes |
-| Credential refresh (`POST /refresh`) | yes | yes |
+| Credential refresh (`POST /refresh`), also in the background while joined | yes | yes |
 | Signed key-set sync (`GET /keys`) | yes | yes |
 | Persisted state (identity and credential, owner-only files) | yes | yes |
-| `AuthFrame` encoding | yes | yes |
+| Biscuit verification of a peer's credential (signature, expiry, peer binding, roles, labels) | yes | yes |
+| libp2p host as `sam-node` configures it (TCP, TLS, yamux) | yes | yes |
+| `/sam/auth/1.0.0`, both sides; join = handshake with a router and check its role | yes | yes |
+| Circuit relay v2 reservation on the router; dial and accept through it | yes | yes |
 
-A member built this way holds a valid mesh credential bound to its peer ID
-and knows the router addresses. It cannot yet open a libp2p connection.
+A member built this way is on the mesh: authenticated with a router,
+reachable through it, verifying every peer that dials it and every peer it
+dials. It cannot yet discover or call tools.
+
+Facts about the libp2p implementations that the SDKs work around, each
+pinned by a test:
+
+- py-libp2p 0.7 advertises early muxer negotiation in TLS ALPN but does not
+  complete it, and go-libp2p then refuses the mux upgrade. The Python host
+  sets no ALPN muxer list, so the muxer is negotiated with
+  multistream-select (`sdk/python/src/agent_mesh/host.py`).
+- js-libp2p's `@libp2p/tls` reads the libp2p extension from
+  `extensions[0]` of the peer certificate. py-libp2p's default certificate
+  puts BasicConstraints and KeyUsage first, so the Python host uses a
+  certificate template with only the libp2p extension.
+- py-libp2p's circuit relay v2 client sends its protobufs without the
+  varint length prefix that go-libp2p (and js-libp2p) use, so it cannot talk
+  to a router. The Python SDK carries the relay protocol itself
+  (`sdk/python/src/agent_mesh/relay.py`, `sdk/python/proto/circuit.proto`)
+  on top of py-libp2p's raw-connection upgrade.
+- go-libp2p's relay leaves private addresses out of a reservation, so a
+  router on loopback (every test) grants a reservation that lists no
+  address. js-libp2p falls back to the connection's address; the Python SDK
+  does the same.
+- js-libp2p reserves a relay slot when it starts listening on
+  `<relay>/p2p-circuit`, and a router refuses that before the auth
+  handshake. The JS SDK starts the listener after the handshake, through the
+  transport manager, which is not on the public `Libp2p` interface.
 
 ## Wire contract
 
@@ -160,39 +189,59 @@ conformance runner against a real control plane in manual-approval mode,
 approves the request through `/admin`, and checks the biscuits the SDK
 holds against the control plane's records.
 
-### Milestone 2 — join the mesh
+### Milestone 2 — join the mesh (done)
 
-- libp2p host per SDK: TCP, TLS, yamux, identify, circuit relay v2 client,
-  Kademlia client with prefix `/sam`, dial-through-relay to peers.
-  JS: `libp2p`, `@libp2p/tcp`, `@libp2p/tls`, `@chainsafe/libp2p-yamux`,
-  `@libp2p/circuit-relay-v2`, `@libp2p/kad-dht`, `@libp2p/identify`.
-  Python: `libp2p>=0.7` (`security.tls`, `stream_muxer.yamux`,
-  `relay.circuit_v2`, `kad_dht`); it is trio-based, so the Python SDK's
-  networking API is `anyio`-compatible async.
-- Biscuit verification of the peer's `AuthResponse`: signature under a
-  trusted control plane key, expiry, authority binding to the connection
-  peer ID, and the router role for routers. JS:
-  `@biscuit-auth/biscuit-wasm`; Python: `biscuit-python`.
-- `/sam/auth/1.0.0` client handshake with a router; the router addresses come
-  from the credential.
-- Background credential refresh, driven by the biscuit's expiration as
-  `StartRenewalLoop` does.
-- Test: a Go integration test starts a real router (`startRouter`) and
-  checks, through the control plane's lease report, that the SDK member is
-  among the router's authenticated peers.
+- libp2p host per SDK, configured as `sam-node`'s: TCP, TLS, yamux,
+  identify, circuit relay v2 client. JS: `libp2p`, `@libp2p/tcp`,
+  `@libp2p/tls`, `@chainsafe/libp2p-yamux`, `@libp2p/circuit-relay-v2`,
+  `@libp2p/identify`. Python: `libp2p>=0.7` (`security.tls`,
+  `stream_muxer.yamux`) plus the SDK's own relay client; py-libp2p is
+  trio-based, so `join()` is an async context manager.
+- Biscuit verification of a peer's credential: signature under any trusted
+  control plane key, authority block only, expiry, binding to the
+  connection peer ID, roles and labels. JS: `@biscuit-auth/biscuit-wasm`,
+  instantiated by hand so no Node flag is needed; Python: `biscuit-python`.
+  `sdk/testdata/biscuit_vectors.json` holds tokens minted by
+  `internal/identity` (valid, other peer, expired, untrusted key, appended
+  block, garbage) and both verifiers agree with the Go one on all of them.
+- `/sam/auth/1.0.0` on both sides. Join connects to the routers in the
+  credential, runs the handshake, requires the router role under the key
+  that verified the token, and reserves a relay slot; the router grants one
+  only to an authenticated peer. Inbound handshakes are answered the way
+  `HandleAuthHandshake` does: a credential that does not verify gets a
+  closed stream and nothing else.
+- `session.authenticate(addr)` connects to any peer, directly or through a
+  router (`/p2p-circuit`), and runs the handshake; `session.authenticatedPeers`
+  is the admitted set. Background refresh is driven by the biscuit's
+  expiration, as `StartRenewalLoop` does.
+- Tests. Unit: each SDK joins an in-process fake router (its own libp2p
+  with the handshake and a relay), and refuses a relay without the router
+  role, a router that trusts another control plane, and a refused
+  reservation. Integration: `tests/integration/sdk_mesh_test.go` runs one
+  mesh with a control plane, a `sam-router`, a `sam-node` and one member per
+  SDK, all real, then walks the connectivity matrix: every member on the
+  router's lease; each SDK member verifies the `sam-node` and the other SDK
+  member on both the direct and the relayed path, and is verified by them;
+  the `sam-node` reaches each member through the router; an admitted Go peer
+  does the same and sends a forged frame; an address behind the router for
+  a peer that is not on the mesh fails. About 7 seconds.
 
 ### Milestone 3 — call tools
 
-- DHT lookup by service type and name; `/sam/mcp/1.0.0` client: send the
-  `AuthFrame`, verify the provider's biscuit, then run an MCP client over
-  the varint-framed stream. JS: a `Transport` for
-  `@modelcontextprotocol/sdk`; Python: a read/write stream pair for `mcp`.
+- Kademlia client with prefix `/sam` (JS: `@libp2p/kad-dht`; Python:
+  `libp2p.kad_dht`, to be checked against go-libp2p the way the relay was),
+  lookup by service type and name.
+- `/sam/mcp/1.0.0` client: send the `AuthFrame` with the target service,
+  verify the provider's biscuit, then run an MCP client over the
+  varint-framed stream. JS: a `Transport` for `@modelcontextprotocol/sdk`;
+  Python: a read/write stream pair for `mcp`.
 - Caller-side label requirements (`checkPeerLabels`) on the provider's
   biscuit.
-- Public API: `mesh.discover(type, name)`, `mesh.callTool("mcp://svc/tool",
-  args)`, `mesh.listTools(peer, service)`.
-- Test: the SDK calls a tool served by a `sam-node` started with
-  `startBackgroundNode` and a registered MCP backend, through a real router.
+- Public API: `session.discover(type, name)`,
+  `session.callTool("mcp://svc/tool", args)`, `session.listTools(peer, service)`.
+- Test: the mesh of `sdk_mesh_test.go` gains an MCP backend on the
+  `sam-node`; each SDK member discovers it and calls a tool through the
+  router, and the runners' command protocol gains `discover` and `call`.
 
 ### Milestone 4 — serve tools
 
@@ -240,14 +289,19 @@ python3 -m venv sdk/python/.venv
 sdk/python/.venv/bin/pip install -e 'sdk/python[test]'
 sdk/python/.venv/bin/pytest sdk/python/tests
 
-# Both against a real control plane
+# Both against a real control plane, router and sam-node
 go test ./tests/integration -run TestNativeSDKs -v
 ```
 
-`make sdk-test` runs all of the above. The integration test skips an SDK
+`make sdk-test` runs all of the above. The integration tests skip an SDK
 whose toolchain is missing, and CI (`.github/workflows/sdk.yml`) installs
-both so nothing skips there.
+both so nothing skips there. The SDK members in the mesh test are the
+runners `sdk/js/src/conformance-join.ts` and
+`sdk/python/src/agent_mesh/conformance_join.py`: each joins, prints what it
+holds, then takes JSON commands on stdin (`auth`, `peers`, `quit`) so the Go
+test can drive both languages through the same script.
 
 Interoperability facts that the tests pin: `sdk/testdata/identity_vectors.json`
 holds key encodings, peer IDs and challenge signatures produced with
-go-libp2p, and every SDK's identity tests reproduce them.
+go-libp2p, `sdk/testdata/biscuit_vectors.json` holds tokens minted by the
+control plane's code, and every SDK reproduces or agrees with them.

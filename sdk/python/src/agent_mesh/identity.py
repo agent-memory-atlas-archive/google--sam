@@ -98,6 +98,11 @@ class Identity:
         return _LIBP2P_PRIVATE_KEY_PREFIX + self._seed + self.public_key_raw
 
     @property
+    def seed(self) -> bytes:
+        """The 32-byte ed25519 seed; what a libp2p implementation loads the key from."""
+        return self._seed
+
+    @property
     def libp2p_public_key(self) -> bytes:
         """The libp2p protobuf public key encoding, what the control plane stores."""
         return libp2p_public_key(self.public_key_raw)

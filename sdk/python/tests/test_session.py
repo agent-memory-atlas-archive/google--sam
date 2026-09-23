@@ -1,0 +1,210 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""A mesh in one process: a fake control plane behind the transport hook, a
+fake router (py-libp2p with the auth handshake and a hop handler) and a peer
+that dials the member directly. The real router and control plane are
+exercised by tests/integration/sdk_join_test.go."""
+
+import time
+import urllib.parse
+
+import biscuit_auth as ba
+import multiaddr
+import pytest
+import trio
+from libp2p import new_host
+from libp2p.crypto.ed25519 import create_new_key_pair
+from libp2p.custom_types import TProtocol
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.security.tls.transport import PROTOCOL_ID as TLS_PROTOCOL_ID
+from libp2p.security.tls.transport import TLSTransport
+from libp2p.stream_muxer.yamux.yamux import PROTOCOL_ID as YAMUX_PROTOCOL_ID
+from libp2p.stream_muxer.yamux.yamux import Yamux
+from libp2p.utils.varint import encode_varint_prefixed, read_varint_prefixed_bytes
+
+from agent_mesh._proto import circuit_pb2 as circuit
+from agent_mesh._proto import sam_pb2 as pb
+from agent_mesh.auth import AUTH_PROTOCOL, auth_stream_handler, authenticate_with_peer
+from agent_mesh.biscuit import ROLE_ROUTER
+from agent_mesh.controlplane import ROLE_NODE
+from agent_mesh.identity import Identity
+from agent_mesh.mesh import AgentMesh
+from agent_mesh.relay import HOP_PROTOCOL as RELAY_HOP_PROTOCOL
+
+CP = ba.KeyPair()
+CP_KEY = CP.public_key.to_bytes()
+
+
+def mint(peer_id: str, role: str, expiration: str = "2035-01-01T00:00:00Z") -> bytes:
+    return ba.BiscuitBuilder(
+        "node({p}); expiration(" + expiration + "); role({r});", {"p": peer_id, "r": role}
+    ).build(CP.private_key).to_bytes()
+
+
+def fake_control_plane(router_addresses):
+    """Approves every enrollment with a biscuit bound to the requesting peer."""
+
+    def transport(method, url, headers, body):
+        path = urllib.parse.urlsplit(url).path
+        if (method, path) == ("POST", "/enroll"):
+            req = pb.BootstrapEnrollRequest.FromString(body)
+            return 200, pb.BootstrapEnrollResponse(
+                status=pb.ENROLLMENT_STATUS_APPROVED,
+                biscuit_token=mint(req.peer_id, ROLE_NODE),
+                control_plane_public_key=CP_KEY,
+                router_addresses=router_addresses,
+                expiration=int(time.time()) + 3600,
+            ).SerializeToString()
+        if (method, path) == ("GET", "/keys"):
+            # Unsigned: the client keeps the enrollment key when /keys cannot be verified.
+            return 200, pb.KeysResponse(public_keys=[CP_KEY], timestamp=int(time.time() * 1000)).SerializeToString()
+        return 404, f"no route for {method} {path}".encode()
+
+    return transport
+
+
+def libp2p_host(identity: Identity):
+    kp = create_new_key_pair(identity.seed)
+    return new_host(
+        key_pair=kp,
+        sec_opt={TLS_PROTOCOL_ID: TLSTransport(kp)},
+        muxer_opt={TProtocol(YAMUX_PROTOCOL_ID): Yamux},
+    )
+
+
+def hop_handler(relay_addr: str, grants: bool):
+    """Answers RESERVE like a go-libp2p relay whose ACL either admits or refuses us."""
+
+    async def handle(stream):
+        req = circuit.HopMessage.FromString(await read_varint_prefixed_bytes(stream))
+        assert req.type == circuit.HopMessage.RESERVE
+        if grants:
+            resp = circuit.HopMessage(
+                type=circuit.HopMessage.STATUS,
+                status=circuit.OK,
+                reservation=circuit.Reservation(expire=int(time.time()) + 3600, addrs=[multiaddr.Multiaddr(relay_addr).to_bytes()]),
+            )
+        else:
+            resp = circuit.HopMessage(type=circuit.HopMessage.STATUS, status=circuit.PERMISSION_DENIED)
+        await stream.write(encode_varint_prefixed(resp.SerializeToString()))
+        await stream.close()
+
+    return handle
+
+
+async def start_router(nursery, role=ROLE_ROUTER, trusted=(CP_KEY,), grants=True):
+    identity = Identity.generate()
+    router = libp2p_host(identity)
+    router_biscuit = mint(identity.peer_id, role)
+    router.set_stream_handler(AUTH_PROTOCOL, auth_stream_handler(lambda: router_biscuit, lambda: list(trusted)))
+    started = trio.Event()
+    addr_box = []
+
+    async def run():
+        async with router.run(listen_addrs=[multiaddr.Multiaddr("/ip4/127.0.0.1/tcp/0")]):
+            addr = f"{router.get_addrs()[0]}"
+            router.set_stream_handler(RELAY_HOP_PROTOCOL, hop_handler(addr, grants))
+            addr_box.append(addr)
+            started.set()
+            await trio.sleep_forever()
+
+    nursery.start_soon(run)
+    await started.wait()
+    return router, addr_box[0]
+
+
+async def with_timeout(seconds, fn):
+    with trio.fail_after(seconds):
+        return await fn()
+
+
+def test_join_authenticates_reserves_and_answers_peers():
+    async def main():
+        async with trio.open_nursery() as nursery:
+            router, router_addr = await start_router(nursery)
+            assert "/p2p/12D3Koo" in router_addr
+
+            mesh = AgentMesh.enroll("http://127.0.0.1:1", bootstrap_token="sbt", transport=fake_control_plane([router_addr]))
+            async with mesh.join(listen_addrs=["/ip4/127.0.0.1/tcp/0"], refresh_lead=0) as session:
+                assert [r.peer_id for r in session.routers] == [str(router.get_id())]
+                assert ROLE_ROUTER in session.routers[0].credential.roles
+                assert session.relay_addresses == [f"{router_addr}/p2p-circuit/p2p/{mesh.peer_id}"]
+
+                # A peer dials the member and both sides verify each other.
+                peer_identity = Identity.generate()
+                peer = libp2p_host(peer_identity)
+                async with peer.run(listen_addrs=[]):
+                    member_addr = multiaddr.Multiaddr(f"{session.host.get_addrs()[0]}")
+                    await peer.connect(info_from_p2p_addr(member_addr))
+                    frame = pb.AuthFrame(biscuit=mint(peer_identity.peer_id, ROLE_NODE)).SerializeToString()
+                    member = await authenticate_with_peer(peer, session.host.get_id(), frame, [CP_KEY])
+                    assert member.peer_id == mesh.peer_id
+                    assert member.roles == [ROLE_NODE]
+                    assert session.authenticated_peers[peer_identity.peer_id].year == 2035
+
+                    # A forged credential gets no answer, only a closed stream.
+                    forged = ba.KeyPair()
+                    forged_frame = pb.AuthFrame(
+                        biscuit=ba.BiscuitBuilder("node({p}); expiration(2035-01-01T00:00:00Z);", {"p": peer_identity.peer_id}).build(forged.private_key).to_bytes()
+                    ).SerializeToString()
+                    with pytest.raises(Exception):
+                        await authenticate_with_peer(peer, session.host.get_id(), forged_frame, [CP_KEY])
+            nursery.cancel_scope.cancel()
+
+    trio.run(with_timeout, 30, main)
+
+
+def test_join_fails_closed_when_the_router_is_not_a_router():
+    async def main():
+        async with trio.open_nursery() as nursery:
+            _, addr = await start_router(nursery, role=ROLE_NODE)
+            mesh = AgentMesh.enroll("http://127.0.0.1:1", bootstrap_token="sbt", transport=fake_control_plane([addr]))
+            with pytest.raises(RuntimeError, match="lacks expected role 'sam:role:router'"):
+                async with mesh.join():
+                    pass
+            nursery.cancel_scope.cancel()
+
+    trio.run(with_timeout, 30, main)
+
+
+def test_join_reports_a_router_that_refuses_the_handshake():
+    async def main():
+        async with trio.open_nursery() as nursery:
+            # Trusts a different control plane, so our credential never verifies.
+            _, addr = await start_router(nursery, trusted=(ba.KeyPair().public_key.to_bytes(),))
+            mesh = AgentMesh.enroll("http://127.0.0.1:1", bootstrap_token="sbt", transport=fake_control_plane([addr]))
+            with pytest.raises(RuntimeError, match="no router admitted this member"):
+                async with mesh.join():
+                    pass
+            nursery.cancel_scope.cancel()
+
+    trio.run(with_timeout, 30, main)
+
+
+def test_join_fails_when_the_relay_refuses_the_reservation():
+    async def main():
+        async with trio.open_nursery() as nursery:
+            _, addr = await start_router(nursery, grants=False)
+            mesh = AgentMesh.enroll("http://127.0.0.1:1", bootstrap_token="sbt", transport=fake_control_plane([addr]))
+            with pytest.raises(RuntimeError, match="PERMISSION_DENIED"):
+                async with mesh.join():
+                    pass
+            # Without a reservation the member still joins.
+            async with mesh.join(reserve=False) as session:
+                assert session.routers[0].reservation is None
+                assert session.relay_addresses == []
+            nursery.cancel_scope.cancel()
+
+    trio.run(with_timeout, 30, main)

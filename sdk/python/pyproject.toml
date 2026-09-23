@@ -8,11 +8,15 @@ version = "0.1.0"
 description = "Native SDK for joining a SAM agent mesh from inside a Python agent process"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
+    "biscuit-python>=0.4",
     "cryptography>=42",
-    # py-libp2p (the next milestone) requires protobuf<7; stay co-installable.
+    "libp2p>=0.7,<0.8",
+    "multiaddr>=0.2",
+    # py-libp2p requires protobuf<7; stay co-installable.
     "protobuf>=4.25,<7",
+    "trio>=0.26",
 ]
 
 [project.optional-dependencies]
