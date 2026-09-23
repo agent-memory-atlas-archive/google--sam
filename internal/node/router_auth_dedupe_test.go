@@ -24,6 +24,7 @@ import (
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/google/sam/api"
 	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-msgio"
@@ -31,18 +32,21 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// A router without an external URL advertises one multiaddr per interface,
-// all for the same peer. Authenticating once per address re-runs the
-// handshake on the already-open connection, which trips the router's
-// per-peer handshake limiter and logs a failure for every extra address.
-// One live authenticated session per router must be enough.
-func TestStartAuthenticatesEachRouterOnce(t *testing.T) {
+// fakeRouter is a libp2p host answering the SAM auth protocol. It counts
+// handshakes so a test can tell a fresh session from a reused one.
+type fakeRouter struct {
+	h           host.Host
+	routerAddrs []multiaddr.Multiaddr
+	handshakes  *atomic.Int32
+	cpPub       ed25519.PublicKey
+	mint        func(peerID, role string) []byte
+}
+
+func newFakeRouter(t *testing.T, listenAddrs ...string) *fakeRouter {
+	t.Helper()
 	cpPub, cpPriv, _ := ed25519.GenerateKey(nil)
 
-	// Two listen addresses on the same host stand in for the interfaces a
-	// real router advertises; the handshake counter is per router, not per
-	// address.
-	h, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0", "/ip4/127.0.0.1/tcp/0"))
+	h, err := libp2p.New(libp2p.ListenAddrStrings(listenAddrs...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,31 +98,31 @@ func TestStartAuthenticatesEachRouterOnce(t *testing.T) {
 		}
 		routerAddrs = append(routerAddrs, ma)
 	}
-	// The same address listed twice, as a control plane that stores the
-	// router's lease verbatim can hand out.
-	routerAddrs = append(routerAddrs, routerAddrs[0])
-	if len(routerAddrs) < 3 {
-		t.Fatalf("expected at least 3 router multiaddrs, got %d", len(routerAddrs))
-	}
 
+	return &fakeRouter{h: h, routerAddrs: routerAddrs, handshakes: &handshakes, cpPub: cpPub, mint: mint}
+}
+
+// startNode brings up a node enrolled against this router and authenticated.
+func (r *fakeRouter) startNode(t *testing.T, ctx context.Context, routerAddrs []multiaddr.Multiaddr) *SamNode {
+	t.Helper()
 	store, err := NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = store.Close() }()
+	t.Cleanup(func() { _ = store.Close() })
 	privKey := GetOrGenerateKey(store)
 	pid, err := peer.IDFromPrivateKey(privKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SaveIdentity(mint(pid.String(), api.RoleNode)); err != nil {
+	if err := store.SaveIdentity(r.mint(pid.String(), api.RoleNode)); err != nil {
 		t.Fatal(err)
 	}
 
 	node, err := NewSamNode(Options{
 		PrivKey:            privKey,
 		Store:              store,
-		ControlPlanePubKey: cpPub,
+		ControlPlanePubKey: r.cpPub,
 		RouterAddrs:        routerAddrs,
 		ListenAddrs:        []string{"/ip4/127.0.0.1/tcp/0"},
 		AllowLoopback:      true,
@@ -126,12 +130,51 @@ func TestStartAuthenticatesEachRouterOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
 	if err := node.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(func() { _ = node.Teardown() })
+	return node
+}
+
+// waitForConnectedness polls until the node's view of the router matches want,
+// and reports the last state it saw if the deadline passes first.
+func waitForConnectedness(t *testing.T, node *SamNode, router peer.ID, want network.Connectedness) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var got network.Connectedness
+	for time.Now().Before(deadline) {
+		got = node.Host.Network().Connectedness(router)
+		if got == want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("connectedness to router: got %s, want %s", got, want)
+}
+
+// A router without an external URL advertises one multiaddr per interface,
+// all for the same peer. Authenticating once per address re-runs the
+// handshake on the already-open connection, which trips the router's
+// per-peer handshake limiter and logs a failure for every extra address.
+// One live authenticated session per router must be enough.
+func TestStartAuthenticatesEachRouterOnce(t *testing.T) {
+	// Two listen addresses on the same host stand in for the interfaces a
+	// real router advertises; the handshake counter is per router, not per
+	// address.
+	r := newFakeRouter(t, "/ip4/127.0.0.1/tcp/0", "/ip4/127.0.0.1/tcp/0")
+	h, handshakes := r.h, r.handshakes
+
+	// The same address listed twice, as a control plane that stores the
+	// router's lease verbatim can hand out.
+	routerAddrs := append(r.routerAddrs, r.routerAddrs[0])
+	if len(routerAddrs) < 3 {
+		t.Fatalf("expected at least 3 router multiaddrs, got %d", len(routerAddrs))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	node := r.startNode(t, ctx, routerAddrs)
 
 	if got := handshakes.Load(); got != 1 {
 		t.Fatalf("router saw %d handshakes for %d advertised addresses, want 1", got, len(routerAddrs))
@@ -156,14 +199,61 @@ func TestStartAuthenticatesEachRouterOnce(t *testing.T) {
 	if err := node.Host.Network().ClosePeer(h.ID()); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for node.Host.Network().Connectedness(h.ID()) == network.Connected && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
+	waitForConnectedness(t, node, h.ID(), network.NotConnected)
 	if err := node.ConnectAndAuthWithRouter(ctx, routerAddrs[0]); err != nil {
 		t.Fatalf("re-auth after disconnect: %v", err)
 	}
 	if got := handshakes.Load(); got != 2 {
 		t.Fatalf("re-auth after disconnect: %d handshakes, want 2", got)
+	}
+}
+
+// The router forgets a peer the moment its last connection closes. If the
+// socket then comes back on its own - libp2p redialling, a DHT lookup, a
+// relay reservation attempt - nothing re-runs the handshake, so the node must
+// not keep reporting the session as authenticated. Left stale, IsConnected
+// answers true, the connection monitor sees a healthy router and returns
+// early, and the node sits authenticated-in-its-own-mind for as long as the
+// process lives: reservations refused, Host.Addrs empty, undiscoverable.
+func TestRouterDisconnectClearsAuthenticatedSession(t *testing.T) {
+	r := newFakeRouter(t, "/ip4/127.0.0.1/tcp/0")
+	h, handshakes := r.h, r.handshakes
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	node := r.startNode(t, ctx, r.routerAddrs)
+
+	if !node.IsConnected() {
+		t.Fatal("node does not report an authenticated router connection after Start")
+	}
+
+	if err := node.Host.Network().ClosePeer(h.ID()); err != nil {
+		t.Fatal(err)
+	}
+	waitForConnectedness(t, node, h.ID(), network.NotConnected)
+
+	// Reconnect at the libp2p level only, exactly as an unattended redial
+	// does: a live socket carrying no handshake.
+	if err := node.Host.Connect(ctx, peer.AddrInfo{ID: h.ID(), Addrs: h.Addrs()}); err != nil {
+		t.Fatalf("reconnect without handshake: %v", err)
+	}
+	waitForConnectedness(t, node, h.ID(), network.Connected)
+
+	if got := handshakes.Load(); got != 1 {
+		t.Fatalf("plain reconnect handshook: %d total, want 1", got)
+	}
+	if node.IsConnected() {
+		t.Fatal("node reports an authenticated session over a connection the router never authenticated")
+	}
+
+	// And the monitor's recovery path must restore it.
+	if err := node.ConnectAndAuthWithRouter(ctx, r.routerAddrs[0]); err != nil {
+		t.Fatalf("re-auth after unattended reconnect: %v", err)
+	}
+	if got := handshakes.Load(); got != 2 {
+		t.Fatalf("re-auth after unattended reconnect: %d handshakes, want 2", got)
+	}
+	if !node.IsConnected() {
+		t.Fatal("node does not report an authenticated router connection after re-auth")
 	}
 }

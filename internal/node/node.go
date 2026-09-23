@@ -502,6 +502,23 @@ func (n *SamNode) Start(ctx context.Context) error {
 				logger.Debugf("[Discovery] Peer %s connected via relay/public IP (%s), marking private IP as failed", remotePeer, remoteAddr)
 			}
 		},
+		// The router drops us from its authenticated set the moment our last
+		// connection to it closes, so a stale entry here would report a
+		// session that no longer exists and skip the re-handshake.
+		DisconnectedF: func(_ network.Network, c network.Conn) {
+			remotePeer := c.RemotePeer()
+			// A router advertises several addresses: only the last connection closing ends the session.
+			if len(h.Network().ConnsToPeer(remotePeer)) > 0 {
+				return
+			}
+			n.mu.Lock()
+			_, wasAuthenticated := n.authenticatedRouters[remotePeer]
+			delete(n.authenticatedRouters, remotePeer)
+			n.mu.Unlock()
+			if wasAuthenticated {
+				logger.Warnf("[AuthN] Router %s disconnected; clearing authenticated session so the next check re-handshakes", remotePeer)
+			}
+		},
 	})
 
 	// Permanently add the static relay address to the peerstore so we can build relay paths later
