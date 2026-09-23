@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Fails when the protobuf bindings the SDKs ship are stale relative to
+# api/sam.proto. Regenerates in place, so run it on a clean checkout.
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "${REPO_ROOT}"
+
+GENERATED=(sdk/js/src/gen sdk/python/src/agent_mesh/_proto)
+
+./hack/gen-sdk-proto.sh
+
+if ! git diff --exit-code -- "${GENERATED[@]}"; then
+  echo "ERROR: SDK protobuf bindings are not up to date."
+  echo "Run ./hack/gen-sdk-proto.sh and commit the result."
+  exit 1
+fi
+echo "SDK protobuf bindings are up to date."

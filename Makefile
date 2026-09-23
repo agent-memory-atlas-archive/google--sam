@@ -159,6 +159,24 @@ test:
 e2e-test: build docker-build
 	bats -j 10 --verbose-run $(if $(WHAT),--filter "$(WHAT)") tests/e2e/
 
+# Native SDKs under sdk/. sdk-js and sdk-python run each SDK's own unit
+# tests and leave it installed, which is what TestNativeSDKs needs to run
+# both against a real control plane instead of skipping.
+.PHONY: sdk-js sdk-python sdk-proto sdk-test
+sdk-js:
+	cd sdk/js && npm ci --no-fund --no-audit && npm test && npm run build
+
+sdk-python:
+	python3 -m venv sdk/python/.venv
+	./sdk/python/.venv/bin/pip install -q -e './sdk/python[test]'
+	./sdk/python/.venv/bin/python -m pytest -q sdk/python/tests
+
+sdk-proto:
+	./hack/gen-sdk-proto.sh
+
+sdk-test: sdk-js sdk-python
+	go test ./tests/integration -run TestNativeSDKs -count=1 -v
+
 .PHONY: ui-test
 ui-test: build
 	chmod +x ./tests/ui/run.sh

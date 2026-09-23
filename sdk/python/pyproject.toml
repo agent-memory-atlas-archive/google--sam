@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-mesh"
+version = "0.1.0"
+description = "Native SDK for joining a SAM agent mesh from inside a Python agent process"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+dependencies = [
+    "cryptography>=42",
+    # py-libp2p (the next milestone) requires protobuf<7; stay co-installable.
+    "protobuf>=4.25,<7",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+]
+
+[project.urls]
+Homepage = "https://github.com/google/sam"
+Source = "https://github.com/google/sam/tree/main/sdk/python"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_mesh"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,39 @@
+{
+  "name": "@agent-mesh/sdk",
+  "version": "0.1.0",
+  "description": "Native SDK for joining a SAM agent mesh from inside a Node.js agent process",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/google/sam.git",
+    "directory": "sdk/js"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "tsc -p tsconfig.test.json",
+    "test": "node --test 'build/**/*.test.js'"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.15.0"
+  },
+  "devDependencies": {
+    "@bufbuild/protoc-gen-es": "^2.15.0",
+    "@types/node": "^22.19.0",
+    "typescript": "^5.9.3"
+  }
+}
