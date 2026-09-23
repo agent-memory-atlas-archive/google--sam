@@ -531,11 +531,11 @@ var ephemeralPortLow = func() int {
 
 // portCursor starts at a pid-derived offset so concurrent test processes
 // walk different parts of the range instead of racing for the same ports.
-var portCursor = func() *atomic.Int64 {
-	var cursor atomic.Int64
-	cursor.Store(int64(os.Getpid()))
-	return &cursor
-}()
+var portCursor atomic.Int64
+
+func init() {
+	portCursor.Store(int64(os.Getpid()))
+}
 
 func getFreePort(t *testing.T) int {
 	t.Helper()
