@@ -26,6 +26,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -507,15 +508,49 @@ func startRouter(t *testing.T, tmpDir string, cpPort int, mintToken func(map[str
 	}
 }
 
+// Test ports come from below the kernel's ephemeral range. A bind-and-close
+// probe on 127.0.0.1:0 returns an ephemeral port that is free for anyone the
+// moment it is released, including the process under test: a node enrolls
+// over HTTP first and binds its sidecar port last, so one of its own
+// connections could take the reserved port as its source port in between.
+// The kernel never assigns a source port below ephemeralPortLow on its own,
+// so a port from [reservedPortBase, ephemeralPortLow) is only ever contended
+// by another explicit listener, which the probe still detects.
+const reservedPortBase = 10000
+
+var ephemeralPortLow = func() int {
+	data, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range")
+	if err == nil {
+		var low, high int
+		if _, err := fmt.Sscan(string(data), &low, &high); err == nil && low > reservedPortBase {
+			return low
+		}
+	}
+	return 32768
+}()
+
+// portCursor starts at a pid-derived offset so concurrent test processes
+// walk different parts of the range instead of racing for the same ports.
+var portCursor atomic.Int64
+
+func init() {
+	portCursor.Store(int64(os.Getpid()))
+}
+
 func getFreePort(t *testing.T) int {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	span := int64(ephemeralPortLow - reservedPortBase)
+	for range span {
+		port := reservedPortBase + int(portCursor.Add(1)%span)
+		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			continue
+		}
+		_ = l.Close()
+		return port
 	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
-	return port
+	t.Fatalf("no free TCP port on 127.0.0.1 between %d and %d", reservedPortBase, ephemeralPortLow-1)
+	return 0
 }
 
 // adminStatus is the control plane's view of the mesh, in the types it
