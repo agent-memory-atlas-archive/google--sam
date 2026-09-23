@@ -39,6 +39,75 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// Enrollment hands out a biscuit signed by the current key and then learns
+// the full key set, grace key included. Neither step is a rotation the new
+// biscuit predates; a rotation that follows is.
+func TestEnrollmentPinsIdentityKeySet(t *testing.T) {
+	currentPub, currentPriv := mustGenerateKey(t)
+	gracePub, gracePriv := mustGenerateKey(t)
+	rotatedPub, _ := mustGenerateKey(t)
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	privateKey := GetOrGenerateKey(store)
+	peerID, err := peer.IDFromPrivateKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential := mintRoleBiscuit(t, currentPriv, peerID, api.RoleNode)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/register", protoHandler(t, &api.EnrollResponse{
+		BiscuitToken:          credential,
+		ControlPlanePublicKey: currentPub,
+		Expiration:            time.Now().Add(24 * time.Hour).Unix(),
+	}))
+	mux.HandleFunc("/keys", keysHandler(t, []ed25519.PublicKey{gracePub, currentPub}, []ed25519.PrivateKey{gracePriv, currentPriv}))
+	mux.HandleFunc("/info", protoHandler(t, &api.ControlPlaneInfoResponse{}))
+	mux.HandleFunc("/policies", protoHandler(t, &api.PolicyConfigGetResponse{}))
+	mux.HandleFunc("/refresh", func(w http.ResponseWriter, request *http.Request) {
+		t.Error("freshly enrolled credential must not be refreshed")
+		http.Error(w, "unexpected refresh", http.StatusInternalServerError)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	if err := store.SaveControlPlaneURL(server.URL); err != nil {
+		t.Fatal(err)
+	}
+	node := &SamNode{Store: store, BiscuitTimeout: time.Second, config: Options{RequiredRole: api.RoleNode}}
+	if _, err := node.enrollHTTP(context.Background(), server.URL, "test-jwt", peerID, privateKey); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(node.GetIdentity(), credential) || len(node.trustedKeys) != 2 {
+		t.Fatal("enrollment must adopt the credential and both trusted keys")
+	}
+	if node.identityPredatesRotation() {
+		t.Error("a freshly enrolled identity predates no rotation")
+	}
+	if err := node.SyncControlPlane(context.Background()); err != nil {
+		t.Fatalf("sync after enrollment: %v", err)
+	}
+	pinned, err := store.LoadIdentityKeySet()
+	if err != nil || len(pinned) != 2 {
+		t.Fatalf("identity key set = %d keys, err %v; want the grace and current keys", len(pinned), err)
+	}
+
+	node.handleKeyRotationEvent(&api.MeshEvent{NewPublicKey: rotatedPub})
+	if !node.identityPredatesRotation() {
+		t.Fatal("a key learned after issuance must mark the identity for refresh")
+	}
+	restarted := &SamNode{Store: store}
+	if stored, err := store.LoadTrustedKeys(); err != nil {
+		t.Fatal(err)
+	} else {
+		restarted.trustedKeys = stored
+	}
+	if !restarted.identityPredatesRotation() {
+		t.Fatal("the refresh decision must survive a restart")
+	}
+}
+
 // startMockRouterWithKey runs a minimal router whose auth response biscuit is
 // signed by the given CP key, so nodes trusting that key can authenticate.
 func startMockRouterWithKey(t *testing.T, cpPriv ed25519.PrivateKey, role string) string {

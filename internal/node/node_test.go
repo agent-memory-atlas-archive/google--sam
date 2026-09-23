@@ -202,6 +202,9 @@ func TestHandleKeyRotationEvent(t *testing.T) {
 	if len(node.trustedKeys) != 1 {
 		t.Errorf("Expected 1 trusted key, got %d", len(node.trustedKeys))
 	}
+	if node.identityPredatesRotation() {
+		t.Error("an unenrolled node has nothing to refresh")
+	}
 }
 
 // TestKeyRotationEventSurvivesRestart covers the offline/restart half of

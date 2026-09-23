@@ -30,7 +30,6 @@ import (
 
 	"github.com/google/sam/api"
 	lru "github.com/hashicorp/golang-lru/v2"
-	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 	"google.golang.org/protobuf/proto"
@@ -148,6 +147,9 @@ func TestSyncTrustedKeys(t *testing.T) {
 		}
 		if len(stored) != 2 {
 			t.Errorf("persisted %d keys, want 2", len(stored))
+		}
+		if n.identityPredatesRotation() {
+			t.Error("a node without an identity has nothing to refresh")
 		}
 	})
 
@@ -411,6 +413,21 @@ func TestSyncControlPlaneBeforeStart(t *testing.T) {
 	mux.HandleFunc("/keys", keysHandler(t, []ed25519.PublicKey{cpPub, gracePub}, []ed25519.PrivateKey{cpPriv, gracePriv}))
 	mux.HandleFunc("/info", protoHandler(t, &api.ControlPlaneInfoResponse{RouterAddresses: []string{freshRouter}}))
 	mux.HandleFunc("/policies", protoHandler(t, &api.PolicyConfigGetResponse{}))
+	mux.HandleFunc("/refresh", func(w http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		var refresh api.TokenRefreshRequest
+		if err != nil || proto.Unmarshal(body, &refresh) != nil {
+			t.Error("invalid refresh request")
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		peerID, err := peer.Decode(refresh.PeerId)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		writeRefreshResponse(t, w, mintRoleBiscuit(t, cpPriv, peerID, api.RoleNode))
+	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -434,7 +451,8 @@ func TestSyncControlPlaneBeforeStart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		priv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+		priv := GetOrGenerateKey(store)
+		peerID, err := peer.IDFromPrivateKey(priv)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -442,7 +460,11 @@ func TestSyncControlPlaneBeforeStart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		n.SetIdentityCache([]byte("identity"))
+		identity := mintRoleBiscuit(t, cpPriv, peerID, api.RoleNode)
+		if err := store.SaveIdentity(identity); err != nil {
+			t.Fatal(err)
+		}
+		n.SetIdentityCache(identity)
 		return n
 	}
 
@@ -597,6 +619,9 @@ func TestReportNodeCatalog(t *testing.T) {
 		}
 		if r.URL.Path != "/nodes/catalog" {
 			t.Errorf("Expected path /nodes/catalog, got %s", r.URL.Path)
+		}
+		if userAgent := r.UserAgent(); !strings.HasPrefix(userAgent, "sam-node/") || userAgent == "sam-node/" {
+			t.Errorf("Expected versioned sam-node User-Agent, got %q", userAgent)
 		}
 		gotAuth = r.Header.Get("Authorization")
 		gotContentType = r.Header.Get("Content-Type")

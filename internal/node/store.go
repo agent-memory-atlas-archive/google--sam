@@ -15,6 +15,7 @@
 package node
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +40,7 @@ const (
 	keyOidcClientID = "oidc_client_id"
 	keyOidcAudience = "oidc_audience"
 	keyTrustedKeys  = "trusted_keys"
+	keyIdentityKeys = "identity_key_set"
 )
 
 type Store struct {
@@ -263,6 +265,35 @@ func (s *Store) LoadTrustedKeys() ([]TrustedKey, error) {
 	return keys, err
 }
 
+// SaveIdentityKeySet records the control plane public keys known when the
+// stored identity was issued. A key that later appears outside this set is
+// a rotation the identity predates, which is why it survives restarts.
+func (s *Store) SaveIdentityKeySet(keys []ed25519.PublicKey) error {
+	data, err := json.Marshal(keys)
+	if err != nil {
+		return err
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(bucketIdentity))
+		return b.Put([]byte(keyIdentityKeys), data)
+	})
+}
+
+// LoadIdentityKeySet returns the set saved by SaveIdentityKeySet, or nil when
+// the identity was issued by a build that did not record it.
+func (s *Store) LoadIdentityKeySet() ([]ed25519.PublicKey, error) {
+	var keys []ed25519.PublicKey
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(bucketIdentity))
+		data := b.Get([]byte(keyIdentityKeys))
+		if len(data) == 0 {
+			return nil
+		}
+		return json.Unmarshal(data, &keys)
+	})
+	return keys, err
+}
+
 func (s *Store) LoadControlPlaneURL() (string, error) {
 	var val []byte
 	err := s.db.View(func(tx *bbolt.Tx) error {
@@ -288,6 +319,7 @@ func (s *Store) ResetMeshIdentity() error {
 			keyOidcClientID,
 			keyOidcAudience,
 			keyTrustedKeys,
+			keyIdentityKeys,
 			"control_plane_public_key",
 			"router_addresses",
 			"control_plane_url",

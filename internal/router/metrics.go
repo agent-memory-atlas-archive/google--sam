@@ -140,7 +140,7 @@ func (c *routerStateCollector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.dhtDesc, prometheus.GaugeValue, float64(r.DHT.RoutingTable().Size()))
 
 	r.keysMu.RLock()
-	expiry := r.biscuitExpiration
+	expiry := r.credential.expiration
 	r.keysMu.RUnlock()
 	if !expiry.IsZero() {
 		ch <- prometheus.MustNewConstMetric(c.biscuitExpiryDesc, prometheus.GaugeValue, float64(expiry.Unix()))

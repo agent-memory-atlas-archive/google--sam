@@ -17,7 +17,7 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w
+      - -s -w -X github.com/google/sam/internal/version.Version={{ .Tag }}
   - id: sam-control-plane
     main: ./cmd/sam-control-plane
     binary: sam-control-plane
@@ -45,7 +45,7 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w
+      - -s -w -X github.com/google/sam/internal/version.Version={{ .Tag }}
   - id: mcp-client
     main: ./cmd/mcp-client
     binary: mcp-client
@@ -101,7 +101,7 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w
+      - -s -w -X github.com/google/sam/internal/version.Version={{ .Tag }}
   - id: nano-init
     main: .
     # nano-init is its own module: it carries a userspace TCP stack, and that

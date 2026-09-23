@@ -45,6 +45,22 @@ make docker-build # container images tagged :local
 make proto        # regenerate api/sam.pb.go after editing sam.proto
 ```
 
+Node and router control-plane requests identify themselves as
+`sam-node/<version>` and `sam-router/<version>`, including the router inside
+`sam-one`. These headers contain the software component and build version.
+They are diagnostic metadata that a caller can spoof and are never used for
+authentication or authorization. They do not include peer IDs, credentials,
+or authorization roles. Publishing a version lets an observer identify the
+software release; keeping dependencies patched remains necessary.
+
+`make` derives the version from `git describe --tags --always --dirty`.
+You can override it with `make build VERSION=v0.1.0-custom` and inspect the
+node binary with `bin/sam-node --version`. Release binaries use the release
+tag, and published node, router and `sam-one` images use the tag or commit
+SHA. For direct Docker builds of those images, pass `--build-arg VERSION=...`;
+without it, the version is `devel`. Plain `go build` uses Go's embedded module
+or VCS metadata when available and falls back to `devel`.
+
 ## Test
 
 The suite is layered so that most coverage lives where it runs fastest.

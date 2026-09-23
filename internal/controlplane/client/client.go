@@ -14,8 +14,8 @@
 
 // Package client is how a mesh component reads from its control plane. Node
 // and router share it, so the body cap, the status handling and the signature
-// check on /keys are a single code path. It depends on api/ only: importing it
-// pulls in none of the control plane server.
+// check on /keys are a single code path. It depends on api/ and build metadata:
+// importing it pulls in none of the control plane server.
 package client
 
 import (
@@ -32,6 +32,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/google/sam/api"
+	"github.com/google/sam/internal/version"
 )
 
 // MaxBodyBytes caps every response body read from a control plane: a
@@ -66,22 +67,25 @@ func ReadBody(r io.Reader) ([]byte, error) {
 // choice after its clients exist.
 type transport struct {
 	allowInsecure func() bool
+	userAgent     string
 }
 
 func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err := api.ValidateControlPlaneTransport(req.URL.String(), t.allowInsecure()); err != nil {
 		return nil, err
 	}
-	return http.DefaultTransport.RoundTrip(req)
+	cloned := req.Clone(req.Context())
+	cloned.Header.Set("User-Agent", t.userAgent)
+	return http.DefaultTransport.RoundTrip(cloned)
 }
 
 // NewHTTPClient is the HTTP client for every request a mesh component makes
 // to its control plane. A nil allowInsecure never allows plaintext.
-func NewHTTPClient(timeout time.Duration, allowInsecure func() bool) *http.Client {
+func NewHTTPClient(timeout time.Duration, allowInsecure func() bool, component string) *http.Client {
 	if allowInsecure == nil {
 		allowInsecure = func() bool { return false }
 	}
-	return &http.Client{Timeout: timeout, Transport: transport{allowInsecure: allowInsecure}}
+	return &http.Client{Timeout: timeout, Transport: transport{allowInsecure: allowInsecure, userAgent: component + "/" + version.String()}}
 }
 
 // Client reads the pull side of the mesh protocol from one control plane.
