@@ -243,7 +243,7 @@ class AgentMesh:
     def join(self, **options):  # type: ignore[no-untyped-def]
         """Joins the mesh: connects to the routers in the credential, passes the
         auth handshake with them, reserves a relay slot and keeps the credential
-        fresh. An async context manager to use under trio:
+        and the reservation fresh. An async context manager to use under trio:
 
             async with mesh.join() as session: ...
         """
