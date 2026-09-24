@@ -30,6 +30,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/sam/api"
 )
 
 // sdkExampleLauncher starts one of the example programs the SDK READMEs and
@@ -75,22 +77,26 @@ var sdkExampleLaunchers = []sdkExampleLauncher{
 
 // sdkExampleServer is a running serve example.
 type sdkExampleServer struct {
-	name   string
-	peerID string
+	name string
+	// service is what it publishes, greeter-<lang>, as the testnet canaries do.
+	service string
+	peerID  string
 }
 
 var servingLine = regexp.MustCompile(`^serving (.*) as (\S+)$`)
 
 // TestNativeSDKExamples runs the programs the SDK READMEs and the Native
-// SDKs guide embed, unchanged, against a real mesh. Each SDK's serve
-// example publishes mcp://greeter, a2a://greeter and inference://ollama,
-// the last forwarding to a stand-in for Ollama this test runs. Each SDK's
-// call example then reaches the sam-node's mcp://calc and a greeter, which
-// is whichever serve example the DHT lists first when both toolchains are
-// present, naming providers only by what discover returned; the SDK finds
-// the path through the router by itself. The first run spends a bootstrap
-// token, the later runs resume from the state directory without one.
-// Cross-language calls with a fixed pairing are TestNativeSDKsMesh's job.
+// SDKs guide embed, unchanged, against a real mesh, configured as the
+// testnet canaries are (.github/k8s/sam-sdk-canary-template.yaml). Each
+// SDK's serve example enrolls with an OIDC token through SAM_JWT_PATH, the
+// way a Kubernetes workload does, and publishes mcp://greeter-<lang>,
+// a2a://greeter-<lang> and inference://ollama, the last forwarding to a
+// stand-in for Ollama this test runs. Each SDK's call example enrolls with
+// a bootstrap token, reaches the sam-node's mcp://calc and the other
+// language's greeter (its own when the other toolchain is missing), naming
+// providers only by what discover returned; the SDK finds the path through
+// the router by itself. The first run spends the token, the later runs
+// resume from the state directory without one.
 func TestNativeSDKExamples(t *testing.T) {
 	mesh := startSDKMesh(t)
 
@@ -107,7 +113,7 @@ func TestNativeSDKExamples(t *testing.T) {
 	var launchers []sdkExampleLauncher
 	var cmds []*exec.Cmd
 	for _, l := range sdkExampleLaunchers {
-		cmd, skip := l.cmd(context.Background(), mesh.root, "serve")
+		cmd, skip := l.cmd(context.Background(), mesh.root, "serve", "greeter-"+l.name)
 		if skip != "" {
 			t.Logf("%s SDK skipped: %s", l.name, skip)
 			continue
@@ -122,13 +128,14 @@ func TestNativeSDKExamples(t *testing.T) {
 	errs := make([]error, len(launchers))
 	var wg sync.WaitGroup
 	for i := range launchers {
-		tokenPath := filepath.Join(t.TempDir(), "join-token")
-		if err := os.WriteFile(tokenPath, []byte(mintBootstrapToken(t, mesh.baseURL, mesh.adminToken)+"\n"), 0o600); err != nil {
+		jwtPath := filepath.Join(t.TempDir(), "sam-token")
+		jwt := mesh.mintToken(map[string]interface{}{"sub": "mock-user", "roles": []string{api.RoleNode}})
+		if err := os.WriteFile(jwtPath, []byte(jwt+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		cmds[i].Env = append(os.Environ(),
 			"SAM_CONTROL_PLANE_URL="+mesh.baseURL,
-			"SAM_BOOTSTRAP_TOKEN_PATH="+tokenPath,
+			"SAM_JWT_PATH="+jwtPath,
 			"SAM_STATE_DIR="+filepath.Join(t.TempDir(), "state"),
 			"OLLAMA_URL="+ollama.URL,
 		)
@@ -136,7 +143,7 @@ func TestNativeSDKExamples(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			servers[i], errs[i] = startExampleServer(t, launchers[i].name, cmds[i])
+			servers[i], errs[i] = startExampleServer(t, launchers[i].name, "greeter-"+launchers[i].name, cmds[i])
 		}(i)
 	}
 	wg.Wait()
@@ -149,19 +156,26 @@ func TestNativeSDKExamples(t *testing.T) {
 		waitForPeerOnRouter(t, mesh.cpPort, mesh.adminToken, s.peerID, 5*time.Second)
 	}
 
-	servedBy := func(t *testing.T, out, service string) {
-		t.Helper()
-		got := expectLine(t, out, service+" is served by ")
+	// The greeter a caller of one language targets: the other language's,
+	// as the testnet probes do, or its own when it is the only one present.
+	peerServer := func(name string) *sdkExampleServer {
 		for _, s := range servers {
-			if s.peerID == got {
-				return
+			if s.name != name {
+				return s
 			}
 		}
-		t.Fatalf("%s is served by %s, which is none of the serve examples", service, got)
+		return servers[0]
+	}
+	servedBy := func(t *testing.T, out string, want *sdkExampleServer, serviceType string) {
+		t.Helper()
+		if got := expectLine(t, out, serviceType+"://"+want.service+" is served by "); got != want.peerID {
+			t.Fatalf("%s://%s is served by %s, want the %s serve example %s", serviceType, want.service, got, want.name, want.peerID)
+		}
 	}
 
 	for _, l := range launchers {
 		l := l
+		target := peerServer(l.name)
 		t.Run(l.name+"-calls", func(t *testing.T) {
 			t.Parallel()
 			stateDir := filepath.Join(t.TempDir(), "state")
@@ -187,11 +201,11 @@ func TestNativeSDKExamples(t *testing.T) {
 			if err := os.Remove(tokenPath); err != nil {
 				t.Fatal(err)
 			}
-			out = runExample(t, mesh, l, withoutToken, "a2a://greeter", "/card")
+			out = runExample(t, mesh, l, withoutToken, "a2a://"+target.service, "/card")
 			if got := expectLine(t, out, "on the mesh as "); got != caller {
 				t.Fatalf("second run joined as %s, want the identity of the first run %s", got, caller)
 			}
-			servedBy(t, out, "a2a://greeter")
+			servedBy(t, out, target, "a2a")
 			card := expectLine(t, out, "200 ")
 			if !strings.Contains(card, `"path": "/card"`) && !strings.Contains(card, `"path":"/card"`) {
 				t.Fatalf("a2a card %q does not echo the path", card)
@@ -200,7 +214,9 @@ func TestNativeSDKExamples(t *testing.T) {
 				t.Fatalf("a2a card %q does not name the verified caller %s", card, caller)
 			}
 			out = runExample(t, mesh, l, withoutToken, "inference://ollama", "/v1/models")
-			servedBy(t, out, "inference://ollama")
+			if got := expectLine(t, out, "inference://ollama is served by "); got != servers[0].peerID && (len(servers) < 2 || got != servers[1].peerID) {
+				t.Fatalf("inference://ollama is served by %s, which is none of the serve examples", got)
+			}
 			models := expectLine(t, out, "200 ")
 			if !strings.Contains(models, `"gemma3"`) || !strings.Contains(models, caller) {
 				t.Fatalf("models %q: want gemma3 owned by the caller %s", models, caller)
@@ -214,7 +230,7 @@ func TestNativeSDKExamples(t *testing.T) {
 				if other.name == l.name {
 					continue
 				}
-				out := runExample(t, mesh, other, withoutToken, "mcp://greeter", "greet", `{"name": "sam"}`)
+				out := runExample(t, mesh, other, withoutToken, "mcp://"+target.service, "greet", `{"name": "sam"}`)
 				if got := expectLine(t, out, "on the mesh as "); got != caller {
 					t.Fatalf("%s resumed %s's state directory as %s, want %s", other.name, l.name, got, caller)
 				}
@@ -227,10 +243,16 @@ func TestNativeSDKExamples(t *testing.T) {
 			importedAPI := importedNode.waitForAPI(t)
 			waitForPeerOnRouter(t, mesh.cpPort, mesh.adminToken, caller, 10*time.Second)
 			answer, err := callMCPAllowError(t, importedAPI, "imported-token", "call_remote_tool", map[string]any{
-				"peer_id": servers[0].peerID, "tool_name": "mcp://greeter/greet", "arguments": map[string]any{"name": "node"},
+				"peer_id": target.peerID, "tool_name": "mcp://" + target.service + "/greet", "arguments": map[string]any{"name": "node"},
 			})
 			if err != nil || !strings.Contains(answer, "hello node") {
-				t.Fatalf("sam-node running %s's identity could not call greeter: %v\n%s", l.name, err, answer)
+				t.Fatalf("sam-node running %s's identity could not call %s: %v\n%s", l.name, target.service, err, answer)
+			}
+			// The node's A2A egress path reaches the SDK's handler too, as the
+			// testnet's node probe expects.
+			status, body := egressGet(t, importedAPI, "imported-token", "/sam/"+target.peerID+"/a2a/"+target.service+"/card")
+			if status != 200 || !strings.Contains(body, `"caller"`) || !strings.Contains(body, caller) {
+				t.Fatalf("a2a card through the node: %d %s", status, body)
 			}
 		})
 	}
@@ -264,7 +286,7 @@ func importStateIntoNode(t *testing.T, mesh *sdkMesh, stateDir string) *backgrou
 // startExampleServer starts a configured serve example and waits for its
 // "serving ... as <peer>" line. Safe to call from several goroutines at
 // once, so it reports failures instead of ending the test.
-func startExampleServer(t *testing.T, name string, cmd *exec.Cmd) (*sdkExampleServer, error) {
+func startExampleServer(t *testing.T, name, service string, cmd *exec.Cmd) (*sdkExampleServer, error) {
 	stderr := &bytes.Buffer{}
 	cmd.Stderr = stderr
 	stdout, err := cmd.StdoutPipe()
@@ -306,12 +328,12 @@ func startExampleServer(t *testing.T, name string, cmd *exec.Cmd) (*sdkExampleSe
 			return nil, fmt.Errorf("%s serve example exited before serving\nstderr:\n%s", name, stderr.String())
 		}
 		m := servingLine.FindStringSubmatch(line)
-		for _, want := range []string{"mcp://greeter", "a2a://greeter", "inference://ollama"} {
+		for _, want := range []string{"mcp://" + service, "a2a://" + service, "inference://ollama"} {
 			if !strings.Contains(m[1], want) {
 				return nil, fmt.Errorf("%s serve example serves %q, want %s among them", name, m[1], want)
 			}
 		}
-		return &sdkExampleServer{name: name, peerID: m[2]}, nil
+		return &sdkExampleServer{name: name, service: service, peerID: m[2]}, nil
 	case <-time.After(30 * time.Second):
 		return nil, fmt.Errorf("%s serve example did not report serving within 30s\nstderr:\n%s", name, stderr.String())
 	}

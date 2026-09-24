@@ -67,6 +67,9 @@ type sdkMesh struct {
 	routerPeer string
 	samNode    *backgroundNode
 	nodeAPI    string
+	// mintToken mints an OIDC token the control plane accepts, as a platform's
+	// workload identity token would be.
+	mintToken func(map[string]interface{}) string
 }
 
 const sdkMeshAdminToken = "test-admin-token"
@@ -172,6 +175,7 @@ bindings:
 		routerPeer: extractPeerID(routerAddr),
 		samNode:    samNode,
 		nodeAPI:    samNode.waitForAPI(t),
+		mintToken:  mintToken,
 	}
 }
 

@@ -5,10 +5,11 @@ path of an inference or A2A service.
     python call.py a2a://greeter /card
     python call.py inference://ollama /v1/models
 
-SAM_CONTROL_PLANE_URL names the mesh. SAM_BOOTSTRAP_TOKEN_PATH is the file
-holding the token the mesh operator gave you; the first run spends it and
-keeps the identity and credential in SAM_STATE_DIR, later runs resume from
-there without it.
+SAM_CONTROL_PLANE_URL names the mesh. The first run enrolls with the file
+SAM_BOOTSTRAP_TOKEN_PATH (a token the mesh operator gave you) or SAM_JWT_PATH
+(a workload identity token your platform issues, such as a Kubernetes
+projected service account token), and keeps the identity and credential in
+SAM_STATE_DIR; later runs resume from there without it.
 """
 
 import json
@@ -26,7 +27,10 @@ args = json.loads(argv[2]) if len(argv) > 2 else {"name": "world"}
 mesh = AgentMesh.enroll(
     os.environ.get("SAM_CONTROL_PLANE_URL", "https://mesh.example.com"),
     bootstrap_token_path=os.environ.get("SAM_BOOTSTRAP_TOKEN_PATH"),
+    jwt_path=os.environ.get("SAM_JWT_PATH"),
     state_dir=os.environ.get("SAM_STATE_DIR", "~/.config/sam-mesh/caller"),
+    # A plaintext http:// control plane is otherwise accepted only on loopback.
+    allow_insecure=os.environ.get("SAM_INSECURE_CONTROL_PLANE") == "true",
 )
 
 

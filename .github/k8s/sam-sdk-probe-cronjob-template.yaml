@@ -1,0 +1,183 @@
+# The cold path through the SDKs, on a schedule: a fresh identity enrolls with
+# the control plane through each SDK, joins through a router, and calls out
+# across every implementation boundary a user can cross: an MCP service a
+# sam-node serves (the everything canary), and an MCP tool and an A2A endpoint
+# the other language's SDK serves (the sdk canaries). The programs are the
+# examples the READMEs embed, unchanged; the shell around them only retries
+# discovery, which a member that joined seconds ago can miss, and prints one
+# verdict line. Each run enrolls a fresh identity per language; the control
+# plane's --node-retention sweep reclaims the rows.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: sam-sdk-probe-${ENV_NAME}
+  namespace: sam-canary-${ENV_NAME}
+spec:
+  schedule: "7,22,37,52 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      # One attempt: a retry would hide exactly the flakiness this exists to
+      # measure. A failed Job is the signal; both containers must succeed.
+      backoffLimit: 0
+      # Three calls with up to 120s of discovery each, plus enrollment.
+      activeDeadlineSeconds: 480
+      template:
+        metadata:
+          labels:
+            app: sam-sdk-probe-${ENV_NAME}
+        spec:
+          # Bound to the sam-canary role by deploy.yaml's policy seed, which
+          # is what lets the probe call the canaries' services.
+          serviceAccountName: sam-node-sa
+          restartPolicy: Never
+          containers:
+          - name: js
+            image: ghcr.io/google/sam-sdk-js:${IMAGE_TAG}
+            env:
+            - name: SAM_CONTROL_PLANE_URL
+              value: "http://sam-control-plane-${ENV_NAME}.${NAMESPACE}.svc.cluster.local:8080"
+            - name: SAM_INSECURE_CONTROL_PLANE
+              value: "true"
+            - name: SAM_JWT_PATH
+              value: /var/run/secrets/tokens/sam-token
+            - name: SAM_STATE_DIR
+              value: /var/run/sam/js
+            - name: PROBE
+              value: sam-sdk-js
+            - name: CALL
+              value: "node build/examples/call.js"
+            - name: PEER_SERVICE
+              # The other SDK's canary (sam-sdk-canary-template.yaml).
+              value: greeter-py
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop: ["ALL"]
+            resources:
+              requests:
+                cpu: 50m
+                memory: 128Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+            volumeMounts:
+            - name: sam-token
+              mountPath: /var/run/secrets/tokens
+              readOnly: true
+            - name: sam-state
+              mountPath: /var/run/sam
+            - name: probe-script
+              mountPath: /etc/sam-probe
+              readOnly: true
+            command: ["/bin/sh", "/etc/sam-probe/probe.sh"]
+          - name: python
+            image: ghcr.io/google/sam-sdk-python:${IMAGE_TAG}
+            env:
+            - name: SAM_CONTROL_PLANE_URL
+              value: "http://sam-control-plane-${ENV_NAME}.${NAMESPACE}.svc.cluster.local:8080"
+            - name: SAM_INSECURE_CONTROL_PLANE
+              value: "true"
+            - name: SAM_JWT_PATH
+              value: /var/run/secrets/tokens/sam-token
+            - name: SAM_STATE_DIR
+              value: /var/run/sam/python
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: PROBE
+              value: sam-sdk-python
+            - name: CALL
+              value: "python examples/call.py"
+            - name: PEER_SERVICE
+              value: greeter-js
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop: ["ALL"]
+            resources:
+              requests:
+                cpu: 50m
+                memory: 128Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+            volumeMounts:
+            - name: sam-token
+              mountPath: /var/run/secrets/tokens
+              readOnly: true
+            - name: sam-state
+              mountPath: /var/run/sam
+            - name: probe-script
+              mountPath: /etc/sam-probe
+              readOnly: true
+            command: ["/bin/sh", "/etc/sam-probe/probe.sh"]
+          volumes:
+          - name: sam-state
+            emptyDir: {}
+          - name: probe-script
+            configMap:
+              name: sam-sdk-probe-script-${ENV_NAME}
+          - name: sam-token
+            projected:
+              sources:
+              - serviceAccountToken:
+                  path: sam-token
+                  expirationSeconds: 3600
+                  audience: "sam-control-plane-audience"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sam-sdk-probe-script-${ENV_NAME}
+  namespace: sam-canary-${ENV_NAME}
+data:
+  probe.sh: |
+    #!/bin/sh
+    # Runs the SDK's call example against three services and prints one JSON
+    # verdict line. PROBE names the run, CALL is the example's command line,
+    # PEER_SERVICE is the other SDK's canary. Discovery is retried: a member
+    # that joined seconds ago has a thin routing table, and a provider record
+    # can name a pod a rollout just replaced. The first call enrolls with the
+    # projected token; the later ones resume from SAM_STATE_DIR.
+    set -u
+    START=$(date +%s)
+
+    fail() {
+      printf '{"probe":"%s","ok":false,"stage":"%s","error":"%s","elapsed_s":%d}\n' \
+        "$PROBE" "$1" "$(printf '%s' "$2" | tr -d '"\n' | cut -c1-300)" "$(( $(date +%s) - START ))"
+      exit 1
+    }
+
+    # call <stage> <expected substring> <example arguments...>; sets PROVIDER.
+    call() {
+      stage=$1; want=$2; shift 2
+      stage_start=$(date +%s)
+      attempts=0
+      while :; do
+        attempts=$((attempts + 1))
+        out=$($CALL "$@" 2>&1); rc=$?
+        if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "$want"; then
+          PROVIDER=$(printf '%s' "$out" | grep -o 'is served by [^ ]*' | tail -1 | cut -d' ' -f4)
+          return 0
+        fi
+        [ $(( $(date +%s) - stage_start )) -ge 120 ] && fail "$stage" "no answer with '$want' in 120s ($attempts attempts; last: $(printf '%s' "$out" | tail -c 200))"
+        sleep 5
+      done
+    }
+
+    # 1. Enroll, join and call an MCP service a sam-node serves.
+    call node-mcp 'Echo: sam-sdk-probe' mcp://everything echo '{"message": "sam-sdk-probe"}'
+    NODE_PEER=$PROVIDER
+    NODE_S=$(( $(date +%s) - START ))
+
+    # 2. The other SDK's MCP tool, then its A2A endpoint over /libp2p-http.
+    SDK_START=$(date +%s)
+    call sdk-mcp 'hello sam-sdk-probe' "mcp://${PEER_SERVICE}" greet '{"name": "sam-sdk-probe"}'
+    SDK_PEER=$PROVIDER
+    call sdk-a2a '"caller"' "a2a://${PEER_SERVICE}" /card
+    SDK_S=$(( $(date +%s) - SDK_START ))
+
+    printf '{"probe":"%s","ok":true,"node_s":%d,"node_provider":"%s","sdk_s":%d,"sdk_provider":"%s","elapsed_s":%d}\n' \
+      "$PROBE" "$NODE_S" "$NODE_PEER" "$SDK_S" "$SDK_PEER" "$(( $(date +%s) - START ))"

@@ -208,6 +208,54 @@ jobs:
         tags: ${{ steps.meta-sam-one.outputs.tags }}
         labels: ${{ steps.meta-sam-one.outputs.labels }}
 
+    # The SDK images carry the example programs the docs embed, as the
+    # testnet canaries and probes run them. Built from the commit, not from
+    # npm or PyPI, so bananas exercises the SDK at the same commit as the
+    # Go components it talks to.
+    - name: Extract metadata for sam-sdk-js
+      id: meta-sdk-js
+      uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+      with:
+        images: ${{ env.REGISTRY }}/google/sam-sdk-js
+        tags: |
+          type=ref,event=branch
+          type=ref,event=tag
+          type=raw,value=${{ github.sha }}
+          type=raw,value=latest,enable={{is_default_branch}}
+          type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+    - name: Build and push sam-sdk-js image
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: .
+        file: Dockerfile.sam-sdk-js
+        platforms: ${{ github.ref_type == 'tag' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+        push: true
+        tags: ${{ steps.meta-sdk-js.outputs.tags }}
+        labels: ${{ steps.meta-sdk-js.outputs.labels }}
+
+    - name: Extract metadata for sam-sdk-python
+      id: meta-sdk-python
+      uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+      with:
+        images: ${{ env.REGISTRY }}/google/sam-sdk-python
+        tags: |
+          type=ref,event=branch
+          type=ref,event=tag
+          type=raw,value=${{ github.sha }}
+          type=raw,value=latest,enable={{is_default_branch}}
+          type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+    - name: Build and push sam-sdk-python image
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: .
+        file: Dockerfile.sam-sdk-python
+        platforms: ${{ github.ref_type == 'tag' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+        push: true
+        tags: ${{ steps.meta-sdk-python.outputs.tags }}
+        labels: ${{ steps.meta-sdk-python.outputs.labels }}
+
   deploy:
     name: Deploy to GKE
     runs-on: ubuntu-latest
@@ -758,6 +806,35 @@ jobs:
             exit 1
           }
 
+      # Two members with no sam-node: the SDK example servers, each
+      # publishing an MCP tool and an A2A endpoint. What the probes below
+      # reach from a node and from the other SDK.
+      - name: Deploy SDK Canaries
+        env:
+          VAR_ENV_NAME: ${{ vars.ENV_NAME }}
+          VAR_IMAGE_TAG: ${{ env.IMAGE_TAG }}
+        run: |
+          export ENV_NAME="${VAR_ENV_NAME}"
+          export CANARY_NAMESPACE="sam-canary-${ENV_NAME}"
+          export NAMESPACE="sam-${ENV_NAME}"
+          export IMAGE_TAG="${VAR_IMAGE_TAG}"
+
+          envsubst '${ENV_NAME} ${NAMESPACE} ${IMAGE_TAG}' < .github/k8s/sam-sdk-canary-template.yaml | kubectl apply -f -
+          for lang in js python; do
+            kubectl rollout status deployment/${lang}-canary-${ENV_NAME} -n ${CANARY_NAMESPACE} --timeout=180s || {
+              echo "${lang} SDK canary deployment failed!"
+              kubectl describe deployment/${lang}-canary-${ENV_NAME} -n ${CANARY_NAMESPACE} || true
+              kubectl get pods -n ${CANARY_NAMESPACE} -l app=${lang}-canary-${ENV_NAME} -o wide || true
+              kubectl describe pods -n ${CANARY_NAMESPACE} -l app=${lang}-canary-${ENV_NAME} || true
+              kubectl logs -n ${CANARY_NAMESPACE} -l app=${lang}-canary-${ENV_NAME} --tail=-1 || true
+
+              echo "Rolling back ${lang} SDK canary deployment..."
+              kubectl rollout undo deployment/${lang}-canary-${ENV_NAME} -n ${CANARY_NAMESPACE}
+              kubectl rollout status deployment/${lang}-canary-${ENV_NAME} -n ${CANARY_NAMESPACE} || true
+              exit 1
+            }
+          done
+
       - name: Deploy OpenRouter Node to Testnet
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -852,6 +929,50 @@ jobs:
               echo "Cold-path probe did not pass: a fresh node could not enroll, reach a router, or call a mesh service."
               echo "==== sam-node sidecar log ===="
               kubectl logs "job/${JOB}" -n "${CANARY_NAMESPACE}" -c sam-node --tail=200 || true
+              kubectl describe job "${JOB}" -n "${CANARY_NAMESPACE}" || true
+              exit 1
+              ;;
+          esac
+
+      # The same cold path through each SDK: a fresh identity enrolls with
+      # the JavaScript and the Python SDK, reaches the everything canary's
+      # MCP server (a sam-node) and the other SDK's canary, MCP and A2A. With
+      # the node probe above, every pair of implementations is crossed in
+      # both directions on every rollout and every 15 minutes after.
+      - name: Deploy and run the SDK cold-path probe
+        env:
+          VAR_ENV_NAME: ${{ vars.ENV_NAME }}
+          VAR_IMAGE_TAG: ${{ env.IMAGE_TAG }}
+        run: |
+          export ENV_NAME="${VAR_ENV_NAME}"
+          export CANARY_NAMESPACE="sam-canary-${ENV_NAME}"
+          export NAMESPACE="sam-${ENV_NAME}"
+          export IMAGE_TAG="${VAR_IMAGE_TAG}"
+          JOB="sam-sdk-probe-rollout-${ENV_NAME}"
+
+          envsubst '${ENV_NAME} ${NAMESPACE} ${IMAGE_TAG}' < .github/k8s/sam-sdk-probe-cronjob-template.yaml | kubectl apply -f -
+
+          kubectl delete job "${JOB}" -n "${CANARY_NAMESPACE}" --ignore-not-found
+          kubectl create job --from="cronjob/sam-sdk-probe-${ENV_NAME}" "${JOB}" -n "${CANARY_NAMESPACE}"
+
+          for _ in $(seq 1 96); do
+            status=$(kubectl get job "${JOB}" -n "${CANARY_NAMESPACE}" -o jsonpath='{range .status.conditions[*]}{.type}={.status}{"\n"}{end}')
+            case "${status}" in
+              *Complete=True*) break ;;
+              *Failed=True*) break ;;
+            esac
+            sleep 5
+          done
+
+          for lang in js python; do
+            echo "==== ${lang} SDK probe output ===="
+            kubectl logs "job/${JOB}" -n "${CANARY_NAMESPACE}" -c "${lang}" --tail=-1 || true
+          done
+
+          case "${status:-}" in
+            *Complete=True*) echo "SDK cold-path probe passed." ;;
+            *)
+              echo "SDK cold-path probe did not pass: an SDK could not enroll, reach a router, or call a service a node or the other SDK serves."
               kubectl describe job "${JOB}" -n "${CANARY_NAMESPACE}" || true
               exit 1
               ;;

@@ -51,6 +51,12 @@ export interface EnrollOptions extends AgentMeshOptions {
   bootstrapTokenPath?: string | undefined;
   /** An OIDC ID token, for meshes that enroll identities interactively. */
   jwt?: string | undefined;
+  /**
+   * Path of a file holding an OIDC ID token or a platform's workload identity
+   * token, such as a Kubernetes projected service account token. Preferred
+   * over a value; the file is read at enrollment.
+   */
+  jwtPath?: string | undefined;
   /** Bounds the wait for an operator to approve a pending enrollment. */
   signal?: AbortSignal;
   /** Overrides the control plane's suggested poll interval while pending. */
@@ -104,8 +110,8 @@ export class AgentMesh {
    * plane for the saved identity, that member is returned and no token is
    * needed, so a program can call enroll on every start and read the token
    * from its environment only on the first. Otherwise exactly one of
-   * bootstrapToken, bootstrapTokenPath or jwt must be given. Delete the
-   * state directory to enroll afresh, for instance with other labels.
+   * bootstrapToken, bootstrapTokenPath, jwt or jwtPath must be given. Delete
+   * the state directory to enroll afresh, for instance with other labels.
    */
   static async enroll(options: EnrollOptions): Promise<AgentMesh> {
     const saved = await loadIdentity(options.stateDir);
@@ -117,16 +123,17 @@ export class AgentMesh {
         return new AgentMesh(identity, controlPlane, credential, options.stateDir);
       }
     }
-    const given = [options.bootstrapToken, options.bootstrapTokenPath, options.jwt].filter((v) => v !== undefined).length;
+    const given = [options.bootstrapToken, options.bootstrapTokenPath, options.jwt, options.jwtPath].filter((v) => v !== undefined).length;
     if (given !== 1) {
       const where = options.stateDir !== undefined ? ` (no credential to resume in ${options.stateDir})` : "";
-      throw new Error(`exactly one of bootstrapToken, bootstrapTokenPath or jwt is required${where}`);
+      throw new Error(`exactly one of bootstrapToken, bootstrapTokenPath, jwt or jwtPath is required${where}`);
     }
     const role = options.role ?? ROLE_NODE;
 
     let enrollment: Enrollment;
-    if (options.jwt !== undefined) {
-      enrollment = await controlPlane.register({ identity, jwt: options.jwt, role, ...labelsOf(options) });
+    if (options.jwt !== undefined || options.jwtPath !== undefined) {
+      const jwt = options.jwtPath !== undefined ? (await readFile(options.jwtPath, "utf8")).trim() : (options.jwt as string);
+      enrollment = await controlPlane.register({ identity, jwt, role, ...labelsOf(options) });
     } else {
       const bootstrapToken = options.bootstrapTokenPath !== undefined ? (await readFile(options.bootstrapTokenPath, "utf8")).trim() : (options.bootstrapToken as string);
       enrollment = await controlPlane.enrollBootstrap({
