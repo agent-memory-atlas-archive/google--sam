@@ -108,7 +108,9 @@ same pod or on the same host:
 ```
 
 ```bash
-OPENROUTER_API_KEY=... litellm --model openrouter/auto --port 4000
+OPENROUTER_API_KEY=... \
+  LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
+  litellm --host 127.0.0.1 --model openrouter/auto --port 4000
 ```
 
 The key never leaves the proxy. Callers on the mesh authenticate with their
