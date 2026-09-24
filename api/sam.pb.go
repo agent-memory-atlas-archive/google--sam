@@ -1525,6 +1525,62 @@ func (x *PolicyBinding) GetMembers() []string {
 	return nil
 }
 
+// PolicyConfig is the mesh policy as the operator writes it: roles and
+// bindings. It is the body of POST /policies and the answer of
+// GET /admin/policy, both protojson. Only the control plane reads it, to
+// mint tokens and to render PolicyConfigGetResponse.
+type PolicyConfig struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Roles         []*PolicyRole          `protobuf:"bytes,1,rep,name=roles,proto3" json:"roles,omitempty"`
+	Bindings      []*PolicyBinding       `protobuf:"bytes,2,rep,name=bindings,proto3" json:"bindings,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PolicyConfig) Reset() {
+	*x = PolicyConfig{}
+	mi := &file_api_sam_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PolicyConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PolicyConfig) ProtoMessage() {}
+
+func (x *PolicyConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_api_sam_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PolicyConfig.ProtoReflect.Descriptor instead.
+func (*PolicyConfig) Descriptor() ([]byte, []int) {
+	return file_api_sam_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *PolicyConfig) GetRoles() []*PolicyRole {
+	if x != nil {
+		return x.Roles
+	}
+	return nil
+}
+
+func (x *PolicyConfig) GetBindings() []*PolicyBinding {
+	if x != nil {
+		return x.Bindings
+	}
+	return nil
+}
+
 type PolicyConfigGetRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1533,7 +1589,7 @@ type PolicyConfigGetRequest struct {
 
 func (x *PolicyConfigGetRequest) Reset() {
 	*x = PolicyConfigGetRequest{}
-	mi := &file_api_sam_proto_msgTypes[17]
+	mi := &file_api_sam_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1545,7 +1601,7 @@ func (x *PolicyConfigGetRequest) String() string {
 func (*PolicyConfigGetRequest) ProtoMessage() {}
 
 func (x *PolicyConfigGetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[17]
+	mi := &file_api_sam_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1558,20 +1614,23 @@ func (x *PolicyConfigGetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyConfigGetRequest.ProtoReflect.Descriptor instead.
 func (*PolicyConfigGetRequest) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{17}
+	return file_api_sam_proto_rawDescGZIP(), []int{18}
 }
 
+// PolicyConfigGetResponse answers GET /policies for a mesh member holding a
+// biscuit. It carries the policy only as Datalog text: this is the contract
+// every member evaluates, and none derives rules from roles and bindings.
 type PolicyConfigGetResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Roles         []*PolicyRole          `protobuf:"bytes,1,rep,name=roles,proto3" json:"roles,omitempty"`
-	Bindings      []*PolicyBinding       `protobuf:"bytes,2,rep,name=bindings,proto3" json:"bindings,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// One rule per entry, rendered by the control plane with api.BuildPolicyRules.
+	DatalogRules  []string `protobuf:"bytes,3,rep,name=datalog_rules,json=datalogRules,proto3" json:"datalog_rules,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PolicyConfigGetResponse) Reset() {
 	*x = PolicyConfigGetResponse{}
-	mi := &file_api_sam_proto_msgTypes[18]
+	mi := &file_api_sam_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1583,7 +1642,7 @@ func (x *PolicyConfigGetResponse) String() string {
 func (*PolicyConfigGetResponse) ProtoMessage() {}
 
 func (x *PolicyConfigGetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[18]
+	mi := &file_api_sam_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1596,71 +1655,12 @@ func (x *PolicyConfigGetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyConfigGetResponse.ProtoReflect.Descriptor instead.
 func (*PolicyConfigGetResponse) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{18}
-}
-
-func (x *PolicyConfigGetResponse) GetRoles() []*PolicyRole {
-	if x != nil {
-		return x.Roles
-	}
-	return nil
-}
-
-func (x *PolicyConfigGetResponse) GetBindings() []*PolicyBinding {
-	if x != nil {
-		return x.Bindings
-	}
-	return nil
-}
-
-type PolicyConfigUpdateRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Roles         []*PolicyRole          `protobuf:"bytes,1,rep,name=roles,proto3" json:"roles,omitempty"`
-	Bindings      []*PolicyBinding       `protobuf:"bytes,2,rep,name=bindings,proto3" json:"bindings,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PolicyConfigUpdateRequest) Reset() {
-	*x = PolicyConfigUpdateRequest{}
-	mi := &file_api_sam_proto_msgTypes[19]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PolicyConfigUpdateRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PolicyConfigUpdateRequest) ProtoMessage() {}
-
-func (x *PolicyConfigUpdateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[19]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PolicyConfigUpdateRequest.ProtoReflect.Descriptor instead.
-func (*PolicyConfigUpdateRequest) Descriptor() ([]byte, []int) {
 	return file_api_sam_proto_rawDescGZIP(), []int{19}
 }
 
-func (x *PolicyConfigUpdateRequest) GetRoles() []*PolicyRole {
+func (x *PolicyConfigGetResponse) GetDatalogRules() []string {
 	if x != nil {
-		return x.Roles
-	}
-	return nil
-}
-
-func (x *PolicyConfigUpdateRequest) GetBindings() []*PolicyBinding {
-	if x != nil {
-		return x.Bindings
+		return x.DatalogRules
 	}
 	return nil
 }
@@ -3152,14 +3152,13 @@ const file_api_sam_proto_rawDesc = "" +
 	"\x0eallowed_labels\x18\x06 \x03(\tR\rallowedLabels\"=\n" +
 	"\rPolicyBinding\x12\x12\n" +
 	"\x04role\x18\x01 \x01(\tR\x04role\x12\x18\n" +
-	"\amembers\x18\x02 \x03(\tR\amembers\"\x18\n" +
-	"\x16PolicyConfigGetRequest\"v\n" +
-	"\x17PolicyConfigGetResponse\x12(\n" +
+	"\amembers\x18\x02 \x03(\tR\amembers\"k\n" +
+	"\fPolicyConfig\x12(\n" +
 	"\x05roles\x18\x01 \x03(\v2\x12.sam.v1.PolicyRoleR\x05roles\x121\n" +
-	"\bbindings\x18\x02 \x03(\v2\x15.sam.v1.PolicyBindingR\bbindings\"x\n" +
-	"\x19PolicyConfigUpdateRequest\x12(\n" +
-	"\x05roles\x18\x01 \x03(\v2\x12.sam.v1.PolicyRoleR\x05roles\x121\n" +
-	"\bbindings\x18\x02 \x03(\v2\x15.sam.v1.PolicyBindingR\bbindings\"L\n" +
+	"\bbindings\x18\x02 \x03(\v2\x15.sam.v1.PolicyBindingR\bbindings\"\x18\n" +
+	"\x16PolicyConfigGetRequest\"[\n" +
+	"\x17PolicyConfigGetResponse\x12#\n" +
+	"\rdatalog_rules\x18\x03 \x03(\tR\fdatalogRulesJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03R\x05rolesR\bbindings\"L\n" +
 	"\x1aPolicyConfigUpdateResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"m\n" +
@@ -3307,9 +3306,9 @@ var file_api_sam_proto_goTypes = []any{
 	(*RouterLeaseResponse)(nil),        // 17: sam.v1.RouterLeaseResponse
 	(*PolicyRole)(nil),                 // 18: sam.v1.PolicyRole
 	(*PolicyBinding)(nil),              // 19: sam.v1.PolicyBinding
-	(*PolicyConfigGetRequest)(nil),     // 20: sam.v1.PolicyConfigGetRequest
-	(*PolicyConfigGetResponse)(nil),    // 21: sam.v1.PolicyConfigGetResponse
-	(*PolicyConfigUpdateRequest)(nil),  // 22: sam.v1.PolicyConfigUpdateRequest
+	(*PolicyConfig)(nil),               // 20: sam.v1.PolicyConfig
+	(*PolicyConfigGetRequest)(nil),     // 21: sam.v1.PolicyConfigGetRequest
+	(*PolicyConfigGetResponse)(nil),    // 22: sam.v1.PolicyConfigGetResponse
 	(*PolicyConfigUpdateResponse)(nil), // 23: sam.v1.PolicyConfigUpdateResponse
 	(*KeysResponse)(nil),               // 24: sam.v1.KeysResponse
 	(*TokenRefreshRequest)(nil),        // 25: sam.v1.TokenRefreshRequest
@@ -3349,24 +3348,22 @@ var file_api_sam_proto_depIdxs = []int32{
 	11, // 7: sam.v1.RegisterServiceRequest.command:type_name -> sam.v1.CommandBackend
 	1,  // 8: sam.v1.ServiceAnnounce.type:type_name -> sam.v1.ServiceType
 	48, // 9: sam.v1.ServiceAnnounce.labels:type_name -> sam.v1.ServiceAnnounce.LabelsEntry
-	18, // 10: sam.v1.PolicyConfigGetResponse.roles:type_name -> sam.v1.PolicyRole
-	19, // 11: sam.v1.PolicyConfigGetResponse.bindings:type_name -> sam.v1.PolicyBinding
-	18, // 12: sam.v1.PolicyConfigUpdateRequest.roles:type_name -> sam.v1.PolicyRole
-	19, // 13: sam.v1.PolicyConfigUpdateRequest.bindings:type_name -> sam.v1.PolicyBinding
-	10, // 14: sam.v1.NodeCatalogReport.services:type_name -> sam.v1.ServiceInfo
-	30, // 15: sam.v1.AgentEgress.secrets:type_name -> sam.v1.AgentSecret
-	1,  // 16: sam.v1.AgentIngress.type:type_name -> sam.v1.ServiceType
-	31, // 17: sam.v1.AgentBundle.egress:type_name -> sam.v1.AgentEgress
-	32, // 18: sam.v1.AgentBundle.ingress:type_name -> sam.v1.AgentIngress
-	33, // 19: sam.v1.AgentAttachRequest.bundle:type_name -> sam.v1.AgentBundle
-	32, // 20: sam.v1.AgentStatus.ingress:type_name -> sam.v1.AgentIngress
-	41, // 21: sam.v1.AgentStatusResponse.agents:type_name -> sam.v1.AgentStatus
-	49, // 22: sam.v1.PeerEvidenceResponse.labels:type_name -> sam.v1.PeerEvidenceResponse.LabelsEntry
-	23, // [23:23] is the sub-list for method output_type
-	23, // [23:23] is the sub-list for method input_type
-	23, // [23:23] is the sub-list for extension type_name
-	23, // [23:23] is the sub-list for extension extendee
-	0,  // [0:23] is the sub-list for field type_name
+	18, // 10: sam.v1.PolicyConfig.roles:type_name -> sam.v1.PolicyRole
+	19, // 11: sam.v1.PolicyConfig.bindings:type_name -> sam.v1.PolicyBinding
+	10, // 12: sam.v1.NodeCatalogReport.services:type_name -> sam.v1.ServiceInfo
+	30, // 13: sam.v1.AgentEgress.secrets:type_name -> sam.v1.AgentSecret
+	1,  // 14: sam.v1.AgentIngress.type:type_name -> sam.v1.ServiceType
+	31, // 15: sam.v1.AgentBundle.egress:type_name -> sam.v1.AgentEgress
+	32, // 16: sam.v1.AgentBundle.ingress:type_name -> sam.v1.AgentIngress
+	33, // 17: sam.v1.AgentAttachRequest.bundle:type_name -> sam.v1.AgentBundle
+	32, // 18: sam.v1.AgentStatus.ingress:type_name -> sam.v1.AgentIngress
+	41, // 19: sam.v1.AgentStatusResponse.agents:type_name -> sam.v1.AgentStatus
+	49, // 20: sam.v1.PeerEvidenceResponse.labels:type_name -> sam.v1.PeerEvidenceResponse.LabelsEntry
+	21, // [21:21] is the sub-list for method output_type
+	21, // [21:21] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_api_sam_proto_init() }

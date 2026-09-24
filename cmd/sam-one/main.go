@@ -196,7 +196,7 @@ func main() {
 	rootCmd.Flags().StringVar(&joinTokenPath, "token-path", "", "File containing the cluster join token (or env SAM_TOKEN; auto-generated and persisted in --data-dir if neither is set)")
 	rootCmd.Flags().BoolVar(&noJoinToken, "no-join-token", false, "Run without a standing join token; devices enroll only with minted bootstrap tokens (token create/qr) or OIDC")
 	rootCmd.Flags().StringVar(&adminTokenPath, "admin-token-path", "", "File containing the admin API bearer token (or env SAM_ADMIN_TOKEN; auto-generated and persisted in --data-dir if neither is set)")
-	rootCmd.Flags().StringVar(&policyFile, "policy-file", "", "Path to a protojson PolicyConfigUpdateRequest seeding the mesh policy on first boot only")
+	rootCmd.Flags().StringVar(&policyFile, "policy-file", "", "Path to a protojson PolicyConfig seeding the mesh policy on first boot only")
 	rootCmd.Flags().StringVar(&oidcIssuer, "issuer", "", "Optional external OIDC issuer URL (comma-separated)")
 	rootCmd.Flags().StringVar(&oidcClientID, "oidc-client-id", "", "OAuth client id advertised via /info (defaults to the first allowed audience)")
 	rootCmd.Flags().StringVar(&allowedAudiencesFlag, "allowed-audiences", api.DefaultAudience, "Comma-separated list of allowed OIDC audiences")

@@ -107,6 +107,7 @@ messages in `api/sam.proto`. Bodies are capped at 1 MiB on both sides.
 | `POST /register` | `EnrollRequest` | `EnrollResponse` | sign `sam:register:<peer_id>:<ts>` |
 | `POST /refresh` | `TokenRefreshRequest`, header `Authorization: Bearer <base64 biscuit>` | `TokenRefreshResponse` | sign `sam:refresh:<peer_id>:<ts>` |
 | `GET /keys` | — | `KeysResponse` | none; see below |
+| `GET /policies` | header `Authorization: Bearer <base64 biscuit>` | `PolicyConfigGetResponse{datalog_rules}` | none; the biscuit must belong to an admitted node |
 
 - `<ts>` is unix milliseconds and must be within 5 minutes of the control
   plane's clock (`challengeMaxAge`). Challenges are defined in
@@ -181,11 +182,30 @@ interest-scoped updates; the DHT is the source of truth.
 A node that serves a tool evaluates the caller's biscuit with an authorizer
 that has, in this order: the biscuit's own authority facts (`node`, `role`,
 `label`, `agent`), injected facts `service(<type>, <name>)`,
-`connection_peer_id(<peer>)` and optionally `agent(<claim>)`, the baseline
-checks, rules and policies from `api/datalog.go`, the facts from the
-provider's own biscuit, and the mesh policy rules the control plane
-publishes (`BuildPolicyRules` over `PolicyConfigGetResponse`). Deny by
-default.
+`connection_peer_id(<peer>)`, `time(<now>)` and optionally `agent(<claim>)`,
+the baseline checks, rules and policies from `api/datalog.go`, the
+`target_fact` facts derived from the provider's own biscuit, and the mesh
+policy rules. Deny by default.
+
+All of that Datalog is text every Biscuit implementation parses, and none
+of it is derived in the SDK:
+
+- The baseline (checks, rules, policies, fact names) is generated from
+  `api/datalog.go` by `hack/gen-sdk-datalog` into `sdk/js/src/gen/datalog.ts`
+  and `sdk/python/src/agent_mesh/_gen/datalog.json`;
+  `hack/verify-sdk-generated.sh` fails when they are stale.
+- The mesh policy arrives rendered: `GET /policies` answers
+  `PolicyConfigGetResponse{datalog_rules}`, one rule per entry, rendered by
+  the control plane with `api.BuildPolicyRules`. `sam-node` adds the same
+  text; no member compiles roles and bindings itself. An unparseable entry
+  rejects the whole response.
+- Presence-only facts carry the single term `true`
+  (`target_unrestricted(true)`, `granted_service_all_types(true)`,
+  `agent_authorized(true)`, …). biscuit-go accepts a predicate with no
+  terms; biscuit-rust, and so biscuit-python and biscuit-wasm, do not.
+- An unconditional rule is written `head <- true`, which every parser
+  accepts as a rule (`role("dev") <- true` for a
+  `sam:system:authenticated` binding).
 
 ## Plan
 
@@ -264,16 +284,21 @@ holds against the control plane's records.
 
 ### Milestone 4 — serve tools
 
+- Datalog as the contract (done, Go side): the baseline moved into a
+  generated artifact both SDKs embed, the control plane renders the mesh
+  policy as `datalog_rules`, and `sam-node` consumes that text like any
+  other member. See the authorization section above.
+- Provider authorizer in each SDK, built from the artifact and
+  `datalog_rules`, evaluated on every inbound `AuthFrame`.
 - `/sam/mcp/1.0.0` server: read the `AuthFrame`, run the authorizer, answer,
   then hand the stream to an in-process MCP server.
-- The authorizer needs the baseline Datalog from `api/datalog.go` and the
-  mesh policy from `GET /policies`. Before this milestone the baseline
-  Datalog moves out of Go string constants into a language-neutral artifact
-  that the Go build and both SDKs embed, so it is written once.
+- `/libp2p-http` ingress for inference and A2A backends, forwarding
+  authorized requests to a local URL, and the client side to call them.
 - DHT provide for each registered service, reprovided on the node's
   interval; `POST /nodes/catalog` self-report.
-- Test: a `sam-node` calls a tool served by the SDK member, and a denied
-  caller is refused at the `AuthResponse`.
+- Test: a `sam-node` calls a tool and an inference endpoint served by each
+  SDK member, the SDK members call each other, and a caller whose role
+  grants nothing is refused at the `AuthResponse`.
 
 ### Milestone 5 — parity and release
 
@@ -297,7 +322,8 @@ holds against the control plane's records.
 ## Working on the SDKs
 
 ```bash
-# Regenerate protobuf bindings after editing api/sam.proto
+# Regenerate protobuf bindings and the Datalog artifact after editing
+# api/sam.proto or api/datalog.go
 ./hack/gen-sdk-proto.sh
 
 # JavaScript

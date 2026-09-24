@@ -33,6 +33,7 @@ import (
 	"github.com/google/sam/internal/identity"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -86,7 +87,7 @@ func TestPolicyGrantsReachTheMintedToken(t *testing.T) {
 		AllowedAgents:   []string{"*.prod.acme.example"},
 		AllowedLabels:   []string{"region=*"},
 	}
-	policyBody, err := proto.Marshal(&api.PolicyConfigUpdateRequest{
+	policyBody, err := proto.Marshal(&api.PolicyConfig{
 		Roles: []*api.PolicyRole{wantRole},
 		Bindings: []*api.PolicyBinding{{
 			Role:    api.RoleNode,
@@ -114,23 +115,23 @@ func TestPolicyGrantsReachTheMintedToken(t *testing.T) {
 	}
 
 	t.Run("every grant survives the policy store", func(t *testing.T) {
-		req, err := http.NewRequest(http.MethodGet, baseURL+"/policies", nil)
+		req, err := http.NewRequest(http.MethodGet, baseURL+"/admin/policy", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		req.Header.Set("Authorization", "Bearer "+adminToken)
 		resp, err := client.Do(req)
 		if err != nil {
-			t.Fatalf("GET /policies: %v", err)
+			t.Fatalf("GET /admin/policy: %v", err)
 		}
 		body, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("GET /policies status %d: %s", resp.StatusCode, body)
+			t.Fatalf("GET /admin/policy status %d: %s", resp.StatusCode, body)
 		}
 
-		var got api.PolicyConfigGetResponse
-		if err := proto.Unmarshal(body, &got); err != nil {
+		var got api.PolicyConfig
+		if err := protojson.Unmarshal(body, &got); err != nil {
 			t.Fatalf("unmarshal policy: %v", err)
 		}
 		if len(got.Roles) != 1 {

@@ -268,8 +268,7 @@ func TestLargeAnswersArriveWhole(t *testing.T) {
 
 func TestFetchPolicy(t *testing.T) {
 	want := &api.PolicyConfigGetResponse{
-		Roles:    []*api.PolicyRole{{Name: "developer", AllowedServices: []string{"mcp://*"}}},
-		Bindings: []*api.PolicyBinding{{Role: "developer", Members: []string{"group:eng"}}},
+		DatalogRules: []string{`role("developer") <- group("eng")`, `granted_service_all("mcp") <- role("developer")`},
 	}
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

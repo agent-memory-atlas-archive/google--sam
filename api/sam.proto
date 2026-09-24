@@ -230,16 +230,27 @@ message PolicyBinding {
   repeated string members = 2;
 }
 
-message PolicyConfigGetRequest {}
-
-message PolicyConfigGetResponse {
+// PolicyConfig is the mesh policy as the operator writes it: roles and
+// bindings. It is the body of POST /policies and the answer of
+// GET /admin/policy, both protojson. Only the control plane reads it, to
+// mint tokens and to render PolicyConfigGetResponse.
+message PolicyConfig {
   repeated PolicyRole roles = 1;
   repeated PolicyBinding bindings = 2;
 }
 
-message PolicyConfigUpdateRequest {
-  repeated PolicyRole roles = 1;
-  repeated PolicyBinding bindings = 2;
+message PolicyConfigGetRequest {}
+
+// PolicyConfigGetResponse answers GET /policies for a mesh member holding a
+// biscuit. It carries the policy only as Datalog text: this is the contract
+// every member evaluates, and none derives rules from roles and bindings.
+message PolicyConfigGetResponse {
+  // roles and bindings once travelled here; they are the operator's document
+  // now (PolicyConfig). Reserved so an old sender is detected, not misread.
+  reserved 1, 2;
+  reserved "roles", "bindings";
+  // One rule per entry, rendered by the control plane with api.BuildPolicyRules.
+  repeated string datalog_rules = 3;
 }
 
 message PolicyConfigUpdateResponse {

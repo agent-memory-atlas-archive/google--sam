@@ -123,7 +123,7 @@ func startMockRouterWithKey(t *testing.T, cpPriv ed25519.PrivateKey, role string
 		{Predicate: biscuit.Predicate{Name: api.FactNode, IDs: []biscuit.Term{biscuit.String(h.ID().String())}}},
 		{Predicate: biscuit.Predicate{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(role)}}},
 		{Predicate: biscuit.Predicate{Name: api.FactExpiration, IDs: []biscuit.Term{biscuit.Date(time.Now().Add(24 * time.Hour))}}},
-		{Predicate: biscuit.Predicate{Name: api.FactTargetUnrestricted}},
+		api.MarkerFact(api.FactTargetUnrestricted),
 	} {
 		if err := builder.AddAuthorityFact(f); err != nil {
 			t.Fatalf("failed to add router fact: %v", err)

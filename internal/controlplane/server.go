@@ -245,6 +245,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	handle("/admin/nodes/", noStore(s.HandleAdminNodeAction))
 	handle("/admin/revoke", noStore(s.HandleAdminRevoke))
 	handle("/admin/status", noStore(s.HandleAdminStatus))
+	handle("/admin/policy", noStore(s.HandleAdminPolicy))
 	handle("/user/status", noStore(s.HandleUserStatus))
 	handle("/user/bootstrap-tokens", noStore(s.HandleUserBootstrapTokens))
 	handle("/user/revoke", noStore(s.HandleUserRevoke))
@@ -1152,36 +1153,13 @@ func (s *Server) HandleRouterLease(w http.ResponseWriter, r *http.Request) {
 
 // HandlePolicies HTTP GET/POST/PUT `/policies`
 func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
-	// Simple HTTP admin methods for policies
 	switch r.Method {
 	case http.MethodGet:
-		// Nodes fetch policies with their biscuit, admins with the admin token
-		// or an ID token. The biscuit is tried first: running OIDC
-		// verification on a biscuit logs a failure and would auto-register
-		// whoever's ID token lands here.
-		isNode := false
-		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
-			if biscuitBytes, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(authHeader, "Bearer ")); err == nil {
-				if trustedKeys, err := s.store.GetAllValidPublicKeys(r.Context()); err == nil {
-					if peerID, err := identity.VerifyAndExtractPeerID(trustedKeys, biscuitBytes, s.config.BiscuitTimeout); err == nil {
-						nodeRecord, nodeErr := s.store.GetNode(r.Context(), peerID.String())
-						if nodeErr == nil && nodeRecord != nil && nodeRecord.CheckAdmission(time.Now()) == nil {
-							isNode = true
-						}
-					}
-				}
-			}
-		}
-
-		isAdmin := false
-		if !isNode {
-			if user, err := s.authenticateUser(r); err == nil && user.Role == "admin" {
-				isAdmin = true
-			}
-		}
-
-		if !isAdmin && !isNode {
-			http.Error(w, "Unauthorized: Admin or Node authentication required", http.StatusUnauthorized)
+		// Mesh protocol: an admitted member fetches the policy with its biscuit
+		// and receives it as Datalog text only. Operators read the document at
+		// GET /admin/policy.
+		if !s.isAdmittedNodeRequest(r) {
+			http.Error(w, "Unauthorized: node credential required", http.StatusUnauthorized)
 			return
 		}
 
@@ -1192,11 +1170,11 @@ func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		resp := &api.PolicyConfigGetResponse{
-			Roles:    roles,
-			Bindings: bindings,
+		policyRules, warnings := api.BuildPolicyRules(roles, bindings)
+		for _, warning := range warnings {
+			logger.Warnf("mesh policy: %s", warning)
 		}
-		respData, _ := proto.Marshal(resp)
+		respData, _ := proto.Marshal(&api.PolicyConfigGetResponse{DatalogRules: api.PolicyRuleTexts(policyRules)})
 		w.Header().Set("Content-Type", "application/x-protobuf")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(respData)
@@ -1213,8 +1191,9 @@ func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
 		}
 		defer func() { _ = r.Body.Close() }()
 
-		req := &api.PolicyConfigUpdateRequest{}
-		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		req := &api.PolicyConfig{}
+		isJSON := strings.HasPrefix(r.Header.Get("Content-Type"), "application/json")
+		if isJSON {
 			// Strict: an unknown field here is a typo like "allowed_service", and
 			// discarding it would quietly drop the permission it was meant to grant.
 			if err := protojson.Unmarshal(body, req); err != nil {
@@ -1244,6 +1223,10 @@ func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
 		}
 
 		resp := &api.PolicyConfigUpdateResponse{Success: true}
+		if isJSON {
+			writeProtoJSON(w, resp)
+			return
+		}
 		respData, _ := proto.Marshal(resp)
 		w.Header().Set("Content-Type", "application/x-protobuf")
 		w.WriteHeader(http.StatusOK)
@@ -1252,6 +1235,64 @@ func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// isAdmittedNodeRequest reports whether the bearer credential is a biscuit of
+// an enrolled, admitted node. It never falls through to OIDC: running ID token
+// verification on a biscuit logs a failure and would auto-register whoever's
+// ID token lands here.
+func (s *Server) isAdmittedNodeRequest(r *http.Request) bool {
+	authHeader := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		return false
+	}
+	biscuitBytes, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(authHeader, "Bearer "))
+	if err != nil {
+		return false
+	}
+	trustedKeys, err := s.store.GetAllValidPublicKeys(r.Context())
+	if err != nil {
+		return false
+	}
+	peerID, err := identity.VerifyAndExtractPeerID(trustedKeys, biscuitBytes, s.config.BiscuitTimeout)
+	if err != nil {
+		return false
+	}
+	nodeRecord, err := s.store.GetNode(r.Context(), peerID.String())
+	return err == nil && nodeRecord != nil && nodeRecord.CheckAdmission(time.Now()) == nil
+}
+
+// HandleAdminPolicy HTTP GET `/admin/policy`: the mesh policy as the operator
+// wrote it, protojson of PolicyConfig, the same document POST /policies takes.
+func (s *Server) HandleAdminPolicy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.checkAdminAuth(w, r) {
+		return
+	}
+	roles, bindings, err := s.store.GetMeshPolicy(r.Context())
+	if err != nil && err != storage.ErrNotFound {
+		logger.Errorf("Failed to load policy: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	writeProtoJSON(w, &api.PolicyConfig{Roles: roles, Bindings: bindings})
+}
+
+// writeProtoJSON answers an operator-plane request with protojson of msg,
+// using the proto field names the console and the docs show.
+func writeProtoJSON(w http.ResponseWriter, msg proto.Message) {
+	out, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(msg)
+	if err != nil {
+		logger.Errorf("Failed to render %T: %v", msg, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(out)
 }
 
 // Close shuts down background loops and HTTP server.
@@ -2845,7 +2886,7 @@ func toStringSlice(val any) []string {
 // PolicyRole silently drops any field it forgets, which is how custom_datalog
 // went missing from the console for so long.
 func marshalPolicyJSON(roles []*api.PolicyRole, bindings []*api.PolicyBinding) (string, error) {
-	resp := &api.PolicyConfigGetResponse{Roles: roles, Bindings: bindings}
+	resp := &api.PolicyConfig{Roles: roles, Bindings: bindings}
 	marshaler := protojson.MarshalOptions{UseProtoNames: true, Multiline: true, Indent: "  "}
 	out, err := marshaler.Marshal(resp)
 	if err != nil {
@@ -2864,11 +2905,11 @@ const maxIdentityFactBudget = 900
 
 // ValidatePolicyConfig checks a mesh policy the way POST /policies does; any
 // other writer of the policy (e.g. a seed file) must run it too.
-func ValidatePolicyConfig(req *api.PolicyConfigUpdateRequest) error {
+func ValidatePolicyConfig(req *api.PolicyConfig) error {
 	return validatePolicyConfig(req)
 }
 
-func validatePolicyConfig(req *api.PolicyConfigUpdateRequest) error {
+func validatePolicyConfig(req *api.PolicyConfig) error {
 	roleNames := make(map[string]bool)
 	factBudget := 0
 	for _, r := range req.Roles {

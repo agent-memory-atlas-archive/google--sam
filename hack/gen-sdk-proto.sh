@@ -14,8 +14,9 @@
 # limitations under the License.
 
 # Regenerates the protobuf bindings the native SDKs under sdk/ ship for
-# api/sam.proto. The Go bindings are gen-proto.sh's job. Requires protoc
-# and, for JavaScript, an `npm install` in sdk/js (protoc-gen-es).
+# api/sam.proto, and the baseline Datalog artifact from api/datalog.go. The
+# Go bindings are gen-proto.sh's job. Requires protoc and, for JavaScript,
+# an `npm install` in sdk/js (protoc-gen-es).
 
 set -o errexit
 set -o nounset
@@ -26,6 +27,7 @@ cd "${REPO_ROOT}"
 
 JS_GEN_DIR="sdk/js/src/gen"
 PY_GEN_DIR="sdk/python/src/agent_mesh/_proto"
+PY_DATALOG_DIR="sdk/python/src/agent_mesh/_gen"
 PROTOC_GEN_ES="sdk/js/node_modules/.bin/protoc-gen-es"
 
 if [[ ! -x "${PROTOC_GEN_ES}" ]]; then
@@ -53,5 +55,9 @@ protoc -I sdk/python/proto \
   --python_out="${PY_GEN_DIR}" \
   --pyi_out="${PY_GEN_DIR}" \
   sdk/python/proto/circuit.proto
+
+echo "Generating baseline Datalog artifact..."
+mkdir -p "${PY_DATALOG_DIR}"
+go run ./hack/gen-sdk-datalog "${PY_DATALOG_DIR}/datalog.json" "${JS_GEN_DIR}/datalog.ts"
 
 echo "SDK protobuf generation complete."

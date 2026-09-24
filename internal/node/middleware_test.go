@@ -112,7 +112,7 @@ func TestAuthorize(t *testing.T) {
 	}
 
 	builder := biscuit.NewBuilder(priv)
-	_ = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{Name: "target_unrestricted"}})
+	_ = builder.AddAuthorityFact(api.MarkerFact(api.FactTargetUnrestricted))
 	dummyPeer := peer.ID("dummy-peer")
 
 	// Bind to peer
@@ -205,7 +205,7 @@ func TestAuthorizeRejectsExpiredBiscuit(t *testing.T) {
 	dummyPeer := peer.ID("dummy-peer")
 
 	builder := biscuit.NewBuilder(priv)
-	_ = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{Name: api.FactTargetUnrestricted}})
+	_ = builder.AddAuthorityFact(api.MarkerFact(api.FactTargetUnrestricted))
 	_ = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
 		Name: "node",
 		IDs:  []biscuit.Term{biscuit.String(dummyPeer.String())},
@@ -265,7 +265,7 @@ func TestAuthorizeRejectsAppendedPeerBinding(t *testing.T) {
 
 	builder := biscuit.NewBuilder(priv)
 	for _, f := range []biscuit.Fact{
-		{Predicate: biscuit.Predicate{Name: api.FactTargetUnrestricted}},
+		api.MarkerFact(api.FactTargetUnrestricted),
 		{Predicate: biscuit.Predicate{Name: api.FactNode, IDs: []biscuit.Term{biscuit.String(victim.String())}}},
 		{Predicate: biscuit.Predicate{Name: api.FactClientPeerID, IDs: []biscuit.Term{biscuit.String(attacker.String())}}},
 		{Predicate: biscuit.Predicate{Name: api.FactGrantedServiceExact, IDs: []biscuit.Term{biscuit.String(api.SystemNamespace), biscuit.String("/test/proto")}}},
@@ -359,7 +359,7 @@ func TestBaselineRules(t *testing.T) {
 		{
 			name: "Baseline Rule 2: Global Wildcard",
 			mintToken: func(t *testing.T, builder biscuit.Builder) {
-				factStr := fmt.Sprintf(`%s()`, api.FactGrantedServiceAllTypes)
+				factStr := fmt.Sprintf(`%s(true)`, api.FactGrantedServiceAllTypes)
 				fact, _ := parser.FromStringFact(factStr)
 				_ = builder.AddAuthorityFact(fact)
 			},
@@ -411,7 +411,7 @@ func TestBaselineRules(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			builder := biscuit.NewBuilder(priv)
-			_ = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{Name: "target_unrestricted"}})
+			_ = builder.AddAuthorityFact(api.MarkerFact(api.FactTargetUnrestricted))
 			_ = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
 				Name: "node",
 				IDs:  []biscuit.Term{biscuit.String(dummyPeer.String())},
@@ -501,7 +501,7 @@ func TestEnterprisePolicyEngine(t *testing.T) {
 		{
 			name: "Case 3 (Wildcard Access)",
 			mintToken: func(t *testing.T, builder biscuit.Builder) {
-				fact, err := parser.FromStringFact(fmt.Sprintf(`%s()`, api.FactGrantedServiceAllTypes))
+				fact, err := parser.FromStringFact(fmt.Sprintf(`%s(true)`, api.FactGrantedServiceAllTypes))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -515,7 +515,7 @@ func TestEnterprisePolicyEngine(t *testing.T) {
 		{
 			name: "Case 4 (Local Attenuation Override)",
 			mintToken: func(t *testing.T, builder biscuit.Builder) {
-				fact1, err := parser.FromStringFact(fmt.Sprintf(`%s()`, api.FactGrantedServiceAllTypes))
+				fact1, err := parser.FromStringFact(fmt.Sprintf(`%s(true)`, api.FactGrantedServiceAllTypes))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -544,7 +544,7 @@ attenuation:
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			builder := biscuit.NewBuilder(priv)
-			_ = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{Name: api.FactTargetUnrestricted}})
+			_ = builder.AddAuthorityFact(api.MarkerFact(api.FactTargetUnrestricted))
 
 			err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
 				Name: api.FactNode,
@@ -631,7 +631,7 @@ func TestRevocation(t *testing.T) {
 	dummyPeer := peer.ID("dummy-peer-id") // Must match mockStream.Conn().RemotePeer()
 
 	builder := biscuit.NewBuilder(priv)
-	_ = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{Name: "target_unrestricted"}})
+	_ = builder.AddAuthorityFact(api.MarkerFact(api.FactTargetUnrestricted))
 	err = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
 		Name: "node",
 		IDs:  []biscuit.Term{biscuit.String(dummyPeer.String())},
@@ -724,8 +724,8 @@ func TestWithBiscuitAuth_MutualBiscuit(t *testing.T) {
 	for _, f := range []biscuit.Fact{
 		{Predicate: biscuit.Predicate{Name: "node", IDs: []biscuit.Term{biscuit.String(clientPeer.String())}}},
 		{Predicate: biscuit.Predicate{Name: "client_peer_id", IDs: []biscuit.Term{biscuit.String(clientPeer.String())}}},
-		{Predicate: biscuit.Predicate{Name: "granted_service_all_types"}},
-		{Predicate: biscuit.Predicate{Name: "target_unrestricted"}},
+		api.MarkerFact(api.FactGrantedServiceAllTypes),
+		api.MarkerFact(api.FactTargetUnrestricted),
 		{Predicate: biscuit.Predicate{Name: api.FactExpiration, IDs: []biscuit.Term{biscuit.Date(time.Now().Add(time.Hour))}}},
 	} {
 		if err := builder.AddAuthorityFact(f); err != nil {

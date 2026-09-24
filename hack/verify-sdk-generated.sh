@@ -13,8 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Fails when the protobuf bindings the SDKs ship are stale relative to
-# api/sam.proto. Regenerates in place, so run it on a clean checkout.
+# Fails when the protobuf bindings or the baseline Datalog artifact the SDKs
+# ship are stale relative to api/. Regenerates in place, so run it on a
+# clean checkout.
 
 set -o errexit
 set -o nounset
@@ -23,13 +24,13 @@ set -o pipefail
 REPO_ROOT=$(git rev-parse --show-toplevel)
 cd "${REPO_ROOT}"
 
-GENERATED=(sdk/js/src/gen sdk/python/src/agent_mesh/_proto)
+GENERATED=(sdk/js/src/gen sdk/python/src/agent_mesh/_proto sdk/python/src/agent_mesh/_gen)
 
 ./hack/gen-sdk-proto.sh
 
 if ! git diff --exit-code -- "${GENERATED[@]}"; then
-  echo "ERROR: SDK protobuf bindings are not up to date."
+  echo "ERROR: SDK generated files are not up to date."
   echo "Run ./hack/gen-sdk-proto.sh and commit the result."
   exit 1
 fi
-echo "SDK protobuf bindings are up to date."
+echo "SDK generated files are up to date."

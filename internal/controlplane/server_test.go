@@ -593,7 +593,7 @@ func TestMarshalPolicyJSONRoundTrip(t *testing.T) {
 	}
 
 	// Exactly what the console posts back.
-	parsed := &api.PolicyConfigUpdateRequest{}
+	parsed := &api.PolicyConfig{}
 	if err := protojson.Unmarshal([]byte(rendered), parsed); err != nil {
 		t.Fatalf("parsing back the rendered policy: %v\n%s", err, rendered)
 	}
@@ -768,12 +768,34 @@ func TestPoliciesConfigurationREST(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 
-	// 3. Get policies with correct token (should return 404 since none exists)
+	// 3. The admin token is not a node credential: GET /policies is the mesh
+	// protocol, operators read the document at GET /admin/policy.
 	req, _ = http.NewRequest(http.MethodGet, baseURL+"/policies", nil)
 	req.Header.Set("Authorization", "Bearer super-secret-admin-token")
 	resp, err = client.Do(req)
 	if err != nil {
 		t.Fatalf("GET /policies failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401 for admin token at GET /policies, got %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	req, _ = http.NewRequest(http.MethodGet, baseURL+"/admin/policy", nil)
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /admin/policy failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401 for unauthenticated GET /admin/policy, got %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	req, _ = http.NewRequest(http.MethodGet, baseURL+"/admin/policy", nil)
+	req.Header.Set("Authorization", "Bearer super-secret-admin-token")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /admin/policy failed: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200 for empty policy, got %d", resp.StatusCode)
@@ -781,7 +803,7 @@ func TestPoliciesConfigurationREST(t *testing.T) {
 	_ = resp.Body.Close()
 
 	// 4. Put policies (should succeed)
-	updateReq := &api.PolicyConfigUpdateRequest{
+	updateReq := &api.PolicyConfig{
 		Roles: []*api.PolicyRole{
 			{
 				Name:            "dev",
@@ -807,29 +829,32 @@ func TestPoliciesConfigurationREST(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 
-	// 5. Get policies again with correct token (verify content)
-	req, _ = http.NewRequest(http.MethodGet, baseURL+"/policies", nil)
+	// 5. Read the document back as the operator sees it: protojson of
+	// PolicyConfig, which is exactly what POST /policies accepts.
+	req, _ = http.NewRequest(http.MethodGet, baseURL+"/admin/policy", nil)
 	req.Header.Set("Authorization", "Bearer super-secret-admin-token")
 	resp, err = client.Do(req)
 	if err != nil {
-		t.Fatalf("GET /policies failed: %v", err)
+		t.Fatalf("GET /admin/policy failed: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /policies status failed: %s", resp.Status)
+		t.Fatalf("GET /admin/policy status failed: %s", resp.Status)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+		t.Errorf("GET /admin/policy Content-Type = %q, want application/json", ct)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 
-	var getResp api.PolicyConfigGetResponse
-	if err := proto.Unmarshal(body, &getResp); err != nil {
-		t.Fatalf("failed to unmarshal PolicyConfigGetResponse: %v", err)
+	var getResp api.PolicyConfig
+	if err := protojson.Unmarshal(body, &getResp); err != nil {
+		t.Fatalf("failed to unmarshal PolicyConfig: %v\n%s", err, body)
 	}
-
-	if len(getResp.Roles) == 0 || getResp.Roles[0].Name != "dev" {
-		t.Errorf("returned policy content mismatch: %+v", getResp.Roles)
+	if !strings.Contains(string(body), "allowed_services") {
+		t.Errorf("GET /admin/policy does not use proto field names:\n%s", body)
 	}
-	if len(getResp.Bindings) == 0 || getResp.Bindings[0].Members[0] != "group:developers" {
-		t.Errorf("returned policy content mismatch: %+v", getResp.Bindings)
+	if !proto.Equal(&getResp, updateReq) {
+		t.Errorf("GET /admin/policy = %v, want the posted document %v", &getResp, updateReq)
 	}
 }
 

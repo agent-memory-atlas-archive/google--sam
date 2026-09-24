@@ -481,7 +481,7 @@ func TestMintBiscuitToken_WithPolicyRoles(t *testing.T) {
 
 		// Verify target_unrestricted and granted_service_all_types are NOT present
 		authorizer.AddCheck(biscuit.Check{Queries: []biscuit.Rule{
-			{Body: []biscuit.Predicate{{Name: api.FactTargetUnrestricted, IDs: []biscuit.Term{}}}},
+			{Body: []biscuit.Predicate{api.MarkerFact(api.FactTargetUnrestricted).Predicate}},
 		}})
 		authorizer.AddPolicy(api.AllowIfTruePolicy)
 

@@ -93,7 +93,7 @@ func TestPolicyScale(t *testing.T) {
 				Members: []string{"node:" + nodePeer.String()},
 			})
 		}
-		req := &api.PolicyConfigUpdateRequest{Roles: roles, Bindings: bindings}
+		req := &api.PolicyConfig{Roles: roles, Bindings: bindings}
 
 		start := time.Now()
 		if err := validatePolicyConfig(req); err != nil {
@@ -194,7 +194,7 @@ func TestPolicyScaleSetEncoding(t *testing.T) {
 		// admin-time fact budget guard, since Set-based encoding collapses it
 		// to a couple of facts regardless of entry count.
 		bindings := []*api.PolicyBinding{{Role: "bulk-role", Members: []string{"node:" + nodePeer.String()}}}
-		if err := validatePolicyConfig(&api.PolicyConfigUpdateRequest{Roles: roles, Bindings: bindings}); err != nil {
+		if err := validatePolicyConfig(&api.PolicyConfig{Roles: roles, Bindings: bindings}); err != nil {
 			t.Fatalf("validatePolicyConfig unexpectedly rejected a single bulk role with n=%d exact entries: %v", n, err)
 		}
 
@@ -242,7 +242,7 @@ func TestValidatePolicyConfigFactBudget(t *testing.T) {
 
 	t.Run("rejects a config that could push a single identity over the fact budget", func(t *testing.T) {
 		roles, bindings := newRoles(500)
-		err := validatePolicyConfig(&api.PolicyConfigUpdateRequest{Roles: roles, Bindings: bindings})
+		err := validatePolicyConfig(&api.PolicyConfig{Roles: roles, Bindings: bindings})
 		if err == nil {
 			t.Fatal("expected validatePolicyConfig to reject an over-budget config, got nil error")
 		}
@@ -253,7 +253,7 @@ func TestValidatePolicyConfigFactBudget(t *testing.T) {
 
 	t.Run("accepts a config comfortably under the fact budget", func(t *testing.T) {
 		roles, bindings := newRoles(50)
-		if err := validatePolicyConfig(&api.PolicyConfigUpdateRequest{Roles: roles, Bindings: bindings}); err != nil {
+		if err := validatePolicyConfig(&api.PolicyConfig{Roles: roles, Bindings: bindings}); err != nil {
 			t.Errorf("expected a small config to pass validation, got: %v", err)
 		}
 	})

@@ -2303,13 +2303,22 @@ func (n *SamNode) syncMeshPolicy(ctx context.Context) error {
 		return fmt.Errorf("failed to fetch mesh policy: %w", err)
 	}
 
-	rules := BuildPolicyRules(policyResp.Roles, policyResp.Bindings)
+	// The rendered text is the contract every member evaluates; a node does
+	// not derive rules from roles and bindings itself. A control plane that
+	// still sends those fields predates the contract.
+	if len(policyResp.ProtoReflect().GetUnknown()) > 0 {
+		return fmt.Errorf("control plane %s predates datalog_rules in its policy response; upgrade the control plane", controlPlaneURL)
+	}
+	rules, err := api.ParseDatalogRules(policyResp.DatalogRules)
+	if err != nil {
+		return fmt.Errorf("mesh policy carries an unparseable rule: %w", err)
+	}
 
 	n.MeshPolicyMu.Lock()
 	n.MeshPolicyRules = rules
 	n.MeshPolicyMu.Unlock()
 
-	logger.Infof("Successfully synchronized mesh policy (generated %d rules)", len(rules))
+	logger.Infof("Successfully synchronized mesh policy (%d rules)", len(rules))
 	return nil
 }
 

@@ -7,9 +7,9 @@ aliases:
 ---
 
 The mesh policy is one document held by the control plane: a list of roles
-and a list of bindings. It is posted as JSON (protojson of
-`PolicyConfigUpdateRequest` in `api/sam.proto`) to `POST /policies`, edited
-in the console, or given to `sam-one --policy-file` for first boot.
+and a list of bindings. It is posted as JSON (protojson of `PolicyConfig` in
+`api/sam.proto`) to `POST /policies`, read back from `GET /admin/policy`,
+edited in the console, or given to `sam-one --policy-file` for first boot.
 
 ```json
 {
@@ -60,7 +60,12 @@ notice.
 | `mcp://*.internal` | `granted_service_suffix("mcp", ".internal")` | `a.internal` and `b.c.internal`, but not `xinternal` |
 | `mcp://build.*` | `granted_service_prefix("mcp", "build.")` | `build.runner`, but not `builder` |
 | `mcp://*` | `granted_service_all("mcp")` | every MCP service |
-| `*` | `granted_service_all_types()` | every service |
+| `*` | `granted_service_all_types(true)` | every service |
+
+A fact whose only meaning is that a grant exists carries the single term
+`true`, because the Biscuit grammar requires at least one term per predicate.
+The same holds for `target_unrestricted(true)`, `granted_agent_all(true)` and
+`agent_authorized(true)` below.
 
 `system://sam.catalog` is the built-in discovery service that every node
 runs. A role that should be able to list the tools of a node needs it.
@@ -144,25 +149,29 @@ must be on the role itself.
 
 At enrollment and at refresh, the control plane resolves the identity's roles
 from the bindings and mints into the credential one `role()` fact per role
-and the compiled `granted_*` facts of every role. Nodes also fetch the policy
-(`--control-plane-sync-interval`, 15 minutes) and compile it into rules such as
+and the compiled `granted_*` facts of every role. The control plane also
+renders the policy as Datalog rules such as
 `role("developer") <- group("engineering")` and
-`granted_service_exact("mcp","code-reviewer") <- role("developer")`. These
-rules run at verification time. Additions therefore reach nodes within the
-sync interval, and removals within the credential TTL.
+`granted_service_exact("mcp","code-reviewer") <- role("developer")`, served
+as `datalog_rules` at `GET /policies`. Nodes fetch this text
+(`--control-plane-sync-interval`, 15 minutes) and add it to their authorizer
+as it arrives; no member derives rules from roles and bindings itself, so a
+node written in any language evaluates the same rules. These rules run at
+verification time. Additions therefore reach nodes within the sync interval,
+and removals within the credential TTL.
 
 At the destination node, in this order:
 
 1. Facts for the request: `service($type, $name)`, `connection_peer_id($id)`,
    `time($now)`, and `agent($id)` if a claim was made.
 2. Checks that always apply: `client_peer_id($id), connection_peer_id($id)`,
-   `time($t), expiration($e), $t <= $e`, and `agent_authorized()` when an
+   `time($t), expiration($e), $t <= $e`, and `agent_authorized(true)` when an
    agent was named.
 3. The node's own identity as `target_fact($name, $value)` facts.
 4. The node's `attenuation` rules, checks and policies.
 5. Baseline policies: `allow if service($t,$n), granted_service_exact($t,$n)`
    and the set, prefix, suffix, per-type and global variants; the check
-   `allow_network_target($f,$v) or target_unrestricted()`.
+   `allow_network_target($f,$v) or target_unrestricted(true)`.
 6. The synced mesh policy rules.
 
 All checks must hold, and the first matching policy decides. Without a

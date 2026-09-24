@@ -569,7 +569,7 @@ func TestNoPolicyMintsNoGrants(t *testing.T) {
 	}
 	for _, open := range []string{api.FactGrantedServiceAllTypes, api.FactTargetUnrestricted} {
 		if authorityHasFact(t, data, open+"(") {
-			t.Errorf("token minted under an empty policy carries %s()", open)
+			t.Errorf("token minted under an empty policy carries %s(true)", open)
 		}
 	}
 	if !authorityHasFact(t, data, api.FactRole+`("`+api.RoleNode+`")`) {

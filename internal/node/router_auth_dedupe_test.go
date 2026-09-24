@@ -58,7 +58,7 @@ func newFakeRouter(t *testing.T, listenAddrs ...string) *fakeRouter {
 			{Predicate: biscuit.Predicate{Name: api.FactNode, IDs: []biscuit.Term{biscuit.String(peerID)}}},
 			{Predicate: biscuit.Predicate{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(role)}}},
 			{Predicate: biscuit.Predicate{Name: api.FactExpiration, IDs: []biscuit.Term{biscuit.Date(time.Now().Add(24 * time.Hour))}}},
-			{Predicate: biscuit.Predicate{Name: api.FactTargetUnrestricted}},
+			api.MarkerFact(api.FactTargetUnrestricted),
 		} {
 			if err := b.AddAuthorityFact(f); err != nil {
 				t.Fatal(err)

@@ -71,9 +71,7 @@ func startMockRouter(t *testing.T) (peer.ID, string) {
 		Name: api.FactExpiration,
 		IDs:  []biscuit.Term{biscuit.Date(time.Now().Add(24 * time.Hour))},
 	}})
-	_ = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
-		Name: api.FactTargetUnrestricted,
-	}})
+	_ = builder.AddAuthorityFact(api.MarkerFact(api.FactTargetUnrestricted))
 	tok, err := builder.Build()
 	if err != nil {
 		t.Fatalf("failed to build mock router biscuit: %v", err)

@@ -365,25 +365,23 @@ class PolicyBinding(_message.Message):
     role: str
     def __init__(self, role: _Optional[str] = ..., members: _Optional[_Iterable[str]] = ...) -> None: ...
 
+class PolicyConfig(_message.Message):
+    __slots__ = ["bindings", "roles"]
+    BINDINGS_FIELD_NUMBER: _ClassVar[int]
+    ROLES_FIELD_NUMBER: _ClassVar[int]
+    bindings: _containers.RepeatedCompositeFieldContainer[PolicyBinding]
+    roles: _containers.RepeatedCompositeFieldContainer[PolicyRole]
+    def __init__(self, roles: _Optional[_Iterable[_Union[PolicyRole, _Mapping]]] = ..., bindings: _Optional[_Iterable[_Union[PolicyBinding, _Mapping]]] = ...) -> None: ...
+
 class PolicyConfigGetRequest(_message.Message):
     __slots__ = []
     def __init__(self) -> None: ...
 
 class PolicyConfigGetResponse(_message.Message):
-    __slots__ = ["bindings", "roles"]
-    BINDINGS_FIELD_NUMBER: _ClassVar[int]
-    ROLES_FIELD_NUMBER: _ClassVar[int]
-    bindings: _containers.RepeatedCompositeFieldContainer[PolicyBinding]
-    roles: _containers.RepeatedCompositeFieldContainer[PolicyRole]
-    def __init__(self, roles: _Optional[_Iterable[_Union[PolicyRole, _Mapping]]] = ..., bindings: _Optional[_Iterable[_Union[PolicyBinding, _Mapping]]] = ...) -> None: ...
-
-class PolicyConfigUpdateRequest(_message.Message):
-    __slots__ = ["bindings", "roles"]
-    BINDINGS_FIELD_NUMBER: _ClassVar[int]
-    ROLES_FIELD_NUMBER: _ClassVar[int]
-    bindings: _containers.RepeatedCompositeFieldContainer[PolicyBinding]
-    roles: _containers.RepeatedCompositeFieldContainer[PolicyRole]
-    def __init__(self, roles: _Optional[_Iterable[_Union[PolicyRole, _Mapping]]] = ..., bindings: _Optional[_Iterable[_Union[PolicyBinding, _Mapping]]] = ...) -> None: ...
+    __slots__ = ["datalog_rules"]
+    DATALOG_RULES_FIELD_NUMBER: _ClassVar[int]
+    datalog_rules: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, datalog_rules: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class PolicyConfigUpdateResponse(_message.Message):
     __slots__ = ["error", "success"]

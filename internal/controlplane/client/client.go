@@ -131,7 +131,7 @@ func (c *Client) FetchKeys(ctx context.Context, trusted []ed25519.PublicKey) ([]
 }
 
 // FetchPolicy is GET /policies, authenticated with the caller's biscuit: the
-// roles and bindings a node compiles into its authorization rules.
+// mesh policy as the Datalog rules a member adds to its authorizer.
 func (c *Client) FetchPolicy(ctx context.Context, biscuit []byte) (*api.PolicyConfigGetResponse, error) {
 	var policy api.PolicyConfigGetResponse
 	if err := c.get(ctx, "/policies", biscuit, &policy); err != nil {
