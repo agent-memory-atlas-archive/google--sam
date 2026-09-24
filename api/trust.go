@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // ErrInsecureControlPlaneURL marks a plaintext control-plane URL to a host
@@ -67,21 +68,21 @@ func isLoopbackHost(host string) bool {
 const KeysResponseFreshness = 5 * time.Minute
 
 // KeysResponsePayload is the bytes each signature in a KeysResponse covers:
-// the key set and the timestamp, deterministically encoded, signatures
+// the key set and the signing time, deterministically encoded, signatures
 // cleared.
 func KeysResponsePayload(resp *KeysResponse) ([]byte, error) {
-	unsigned := &KeysResponse{PublicKeys: resp.PublicKeys, Timestamp: resp.Timestamp}
+	unsigned := &KeysResponse{PublicKeys: resp.PublicKeys, SignTime: resp.SignTime}
 	return proto.MarshalOptions{Deterministic: true}.Marshal(unsigned)
 }
 
-// SignKeysResponse sets Timestamp and one signature per key pair, so a
+// SignKeysResponse sets SignTime and one signature per key pair, so a
 // receiver that trusts any key still valid on the control plane can verify
 // the set. Private keys must be in the same order as resp.PublicKeys.
 func SignKeysResponse(resp *KeysResponse, privateKeys []ed25519.PrivateKey, now time.Time) error {
 	if len(privateKeys) != len(resp.PublicKeys) {
 		return fmt.Errorf("keys response has %d public keys but %d signing keys", len(resp.PublicKeys), len(privateKeys))
 	}
-	resp.Timestamp = now.UnixMilli()
+	resp.SignTime = timestamppb.New(now)
 	payload, err := KeysResponsePayload(resp)
 	if err != nil {
 		return err
@@ -109,9 +110,12 @@ func VerifyKeysResponse(resp *KeysResponse, trusted []ed25519.PublicKey, now tim
 	if len(resp.Signatures) != len(resp.PublicKeys) {
 		return nil, fmt.Errorf("keys response carries %d signatures for %d keys", len(resp.Signatures), len(resp.PublicKeys))
 	}
-	issued := time.UnixMilli(resp.Timestamp)
+	if resp.SignTime == nil {
+		return nil, errors.New("keys response carries no sign_time")
+	}
+	issued := resp.SignTime.AsTime()
 	if now.Sub(issued) > KeysResponseFreshness || issued.Sub(now) > KeysResponseFreshness {
-		return nil, fmt.Errorf("keys response timestamp %s is outside the freshness window", issued.UTC().Format(time.RFC3339))
+		return nil, fmt.Errorf("keys response sign_time %s is outside the freshness window", issued.UTC().Format(time.RFC3339))
 	}
 	payload, err := KeysResponsePayload(resp)
 	if err != nil {

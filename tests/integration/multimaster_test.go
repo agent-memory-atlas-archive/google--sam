@@ -295,7 +295,7 @@ func enrollClientOnControlPlane(t *testing.T, cpPort int, clientID peer.ID, priv
 		PeerId:             clientID.String(),
 		PublicKey:          pubBytes,
 		RequestedRole:      api.RoleNode,
-		Timestamp:          ts,
+		ChallengeUnixMs:    ts,
 		ChallengeSignature: sig,
 	}
 	reqBytes, err := proto.Marshal(req)

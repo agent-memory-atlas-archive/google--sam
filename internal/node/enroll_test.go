@@ -37,6 +37,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-msgio"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Enrollment hands out a biscuit signed by the current key and then learns
@@ -61,7 +62,7 @@ func TestEnrollmentPinsIdentityKeySet(t *testing.T) {
 	mux.HandleFunc("/register", protoHandler(t, &api.EnrollResponse{
 		BiscuitToken:          credential,
 		ControlPlanePublicKey: currentPub,
-		Expiration:            time.Now().Add(24 * time.Hour).Unix(),
+		ExpireTime:            timestamppb.New(time.Now().Add(24 * time.Hour)),
 	}))
 	mux.HandleFunc("/keys", keysHandler(t, []ed25519.PublicKey{gracePub, currentPub}, []ed25519.PrivateKey{gracePriv, currentPriv}))
 	mux.HandleFunc("/info", protoHandler(t, &api.ControlPlaneInfoResponse{}))
@@ -249,7 +250,7 @@ func TestStartRecoversStaleIdentityViaRefreshToken(t *testing.T) {
 			BiscuitToken:          mint(cpPriv, req.PeerId),
 			ControlPlanePublicKey: cpPub,
 			RouterAddresses:       []string{routerAddr},
-			Expiration:            time.Now().Add(24 * time.Hour).Unix(),
+			ExpireTime:            timestamppb.New(time.Now().Add(24 * time.Hour)),
 		}
 		data, _ := proto.Marshal(resp)
 		w.Header().Set("Content-Type", "application/x-protobuf")
@@ -400,14 +401,14 @@ func TestStartRecoversStaleIdentityViaAutonomousRefresh(t *testing.T) {
 			http.Error(w, "Invalid biscuit", http.StatusUnauthorized)
 			return
 		}
-		ok, err := privKey.GetPublic().Verify(api.RefreshChallenge(req.PeerId, req.Timestamp), req.ChallengeSignature)
+		ok, err := privKey.GetPublic().Verify(api.RefreshChallenge(req.PeerId, req.ChallengeUnixMs), req.ChallengeSignature)
 		if err != nil || !ok {
 			http.Error(w, "Challenge verification failed", http.StatusUnauthorized)
 			return
 		}
 		data, err := proto.Marshal(&api.TokenRefreshResponse{
 			BiscuitToken: mint(cpPriv, req.PeerId),
-			ExpiresAt:    time.Now().Add(24 * time.Hour).Unix(),
+			ExpireTime:   timestamppb.New(time.Now().Add(24 * time.Hour)),
 		})
 		if err != nil {
 			t.Errorf("marshal TokenRefreshResponse: %v", err)
@@ -558,7 +559,7 @@ func TestEnroll_InvalidControlPlanePublicKeySize(t *testing.T) {
 		}
 		resp := &api.EnrollResponse{
 			BiscuitToken:          []byte("mock-token"),
-			Expiration:            time.Now().Add(1 * time.Hour).Unix(),
+			ExpireTime:            timestamppb.New(time.Now().Add(1 * time.Hour)),
 			ControlPlanePublicKey: invalidKey,
 			RouterAddresses:       []string{"/ip4/127.0.0.1/tcp/4001"},
 		}
@@ -644,7 +645,7 @@ func TestEnrollTrustsRouterSignedByGraceKey(t *testing.T) {
 			BiscuitToken:          mintRoleBiscuit(t, currentPriv, peerID, api.RoleNode),
 			ControlPlanePublicKey: currentPub,
 			RouterAddresses:       []string{routerAddr},
-			Expiration:            time.Now().Add(24 * time.Hour).Unix(),
+			ExpireTime:            timestamppb.New(time.Now().Add(24 * time.Hour)),
 		})(w, r)
 	})
 	mux.HandleFunc("/keys", keysHandler(t, []ed25519.PublicKey{retiredPub, currentPub}, []ed25519.PrivateKey{retiredPriv, currentPriv}))

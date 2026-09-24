@@ -34,6 +34,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // A router pointed at a plaintext control plane on another host has no way
@@ -125,7 +126,7 @@ func TestSyncKeysRequiresTrustedSignature(t *testing.T) {
 	})
 
 	t.Run("empty set preserves trusted keys", func(t *testing.T) {
-		body = marshal(&api.KeysResponse{Timestamp: time.Now().UnixMilli()})
+		body = marshal(&api.KeysResponse{SignTime: timestamppb.Now()})
 		router := newRouter()
 		if err := router.syncKeys(); err == nil {
 			t.Fatal("an empty /keys answer must not be adopted")
@@ -259,7 +260,7 @@ func TestSyncKeysRefreshesOnRotation(t *testing.T) {
 				http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
 				return
 			}
-			response = &api.TokenRefreshResponse{BiscuitToken: fresh, ExpiresAt: time.Now().Add(24 * time.Hour).Unix()}
+			response = &api.TokenRefreshResponse{BiscuitToken: fresh, ExpireTime: timestamppb.New(time.Now().Add(24 * time.Hour))}
 		default:
 			t.Errorf("unexpected request to %s", request.URL.Path)
 			http.NotFound(w, request)
@@ -346,7 +347,7 @@ func TestRouterConcurrentRefreshesAreSerialized(t *testing.T) {
 			return
 		}
 		lastIssued = mintRouterBiscuit(t, cpPriv, peerID, api.RoleRouter)
-		body, err := proto.Marshal(&api.TokenRefreshResponse{BiscuitToken: lastIssued, ExpiresAt: time.Now().Add(time.Hour).Unix()})
+		body, err := proto.Marshal(&api.TokenRefreshResponse{BiscuitToken: lastIssued, ExpireTime: timestamppb.New(time.Now().Add(time.Hour))})
 		if err != nil {
 			t.Error(err)
 			return
@@ -441,7 +442,7 @@ func TestRouterRefreshEnrollmentHardening(t *testing.T) {
 	}
 	tokenResponse := func(token []byte) func(http.ResponseWriter) {
 		return func(w http.ResponseWriter) {
-			data, err := proto.Marshal(&api.TokenRefreshResponse{BiscuitToken: token, ExpiresAt: time.Now().Add(time.Hour).Unix()})
+			data, err := proto.Marshal(&api.TokenRefreshResponse{BiscuitToken: token, ExpireTime: timestamppb.New(time.Now().Add(time.Hour))})
 			if err != nil {
 				t.Fatal(err)
 			}

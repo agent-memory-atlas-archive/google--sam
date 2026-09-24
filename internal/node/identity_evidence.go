@@ -31,6 +31,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type trustedKeySnapshot struct {
@@ -248,10 +249,10 @@ func (n *SamNode) buildIdentityEvidence(checkedAt time.Time) (*api.IdentityEvide
 	return &api.IdentityEvidenceResponse{
 		PeerId:                  n.Host.ID().String(),
 		Biscuit:                 append([]byte(nil), biscuitBytes...),
-		BiscuitExpiresAt:        claims.Expiration.Unix(),
+		BiscuitExpireTime:       timestamppb.New(claims.Expiration),
 		ControlPlaneUrl:         controlPlaneURL,
 		TrustedControlPlaneKeys: keyEvidence,
-		CheckedAt:               checkedAt.Unix(),
+		CheckTime:               timestamppb.New(checkedAt),
 	}, nil
 }
 
@@ -289,9 +290,9 @@ func (n *SamNode) buildPeerEvidence(requested peer.ID, observation peerBiscuitOb
 		VerifyingKey:  append([]byte(nil), selected.SPKIDER...),
 		Roles:         append([]string(nil), claims.Roles...),
 		Labels:        claims.Labels,
-		Expiration:    claims.Expiration.Unix(),
+		ExpireTime:    timestamppb.New(claims.Expiration),
 		RevocationIds: revocationIDs,
-		CheckedAt:     checkedAt.Unix(),
+		CheckTime:     timestamppb.New(checkedAt),
 	}, nil
 }
 

@@ -1150,7 +1150,7 @@ func (n *SamNode) RefreshEnrollment(ctx context.Context) error {
 	// server-side); it is cross-checked against the biscuit otherwise.
 	req := &api.TokenRefreshRequest{
 		ChallengeSignature: sig,
-		Timestamp:          timestamp,
+		ChallengeUnixMs:    timestamp,
 		PeerId:             peerID.String(),
 	}
 	reqData, err := proto.Marshal(req)
@@ -1229,7 +1229,7 @@ func (n *SamNode) RefreshEnrollment(ctx context.Context) error {
 		return fmt.Errorf("failed to save refreshed identity: %w", err)
 	}
 	n.SetIdentityCache(refreshResp.BiscuitToken)
-	if err := n.Store.SaveIdentityExpiration(refreshResp.ExpiresAt); err != nil {
+	if err := n.Store.SaveIdentityExpiration(expireUnix(refreshResp.ExpireTime)); err != nil {
 		return fmt.Errorf("failed to save refreshed expiration: %w", err)
 	}
 	n.recordIdentityKeySet()
@@ -1376,22 +1376,23 @@ func (n *SamNode) handleBannedEvent(event *api.MeshEvent) {
 	}
 	canonicalID := p.String()
 
+	eventMs := event.GetEventTime().AsTime().UnixMilli()
 	n.mu.Lock()
 	if n.peerLastEventTime == nil {
 		n.peerLastEventTime = make(map[string]int64)
 	}
-	if event.Timestamp < n.peerLastEventTime[canonicalID] {
-		logger.Warnf("[Mesh Event] Dropping out-of-order BANNED event for peer %s (event timestamp: %d, last processed: %d)", canonicalID, event.Timestamp, n.peerLastEventTime[canonicalID])
+	if eventMs < n.peerLastEventTime[canonicalID] {
+		logger.Warnf("[Mesh Event] Dropping out-of-order BANNED event for peer %s (event time: %d, last processed: %d)", canonicalID, eventMs, n.peerLastEventTime[canonicalID])
 		n.mu.Unlock()
 		return
 	}
-	n.peerLastEventTime[canonicalID] = event.Timestamp
+	n.peerLastEventTime[canonicalID] = eventMs
 	n.mu.Unlock()
 
 	logger.Infow("[Mesh Event] peer banned", "event", meshEventBanned, "peer", canonicalID)
 	// Not written to disk: a restarted node picks the ban back up from the
 	// control plane's ban set in /info, which is also how an unban reaches it.
-	n.banPeer(p, event.Timestamp)
+	n.banPeer(p, eventMs)
 }
 
 func containsTrustedKey(keys []TrustedKey, key ed25519.PublicKey) bool {
@@ -1527,9 +1528,13 @@ func (n *SamNode) validateMeshEvent(_ context.Context, from peer.ID, msg *pubsub
 		logger.Warnw("[Mesh Event] potential spoofing attempt: invalid event signature", "event", meshEventSpoofingAttempt, "peer", from.String())
 		return pubsub.ValidationReject
 	}
-	eventTime := time.UnixMilli(event.Timestamp)
+	if event.EventTime == nil {
+		logger.Warnw("[Mesh Event] dropping event without event_time", "event", meshEventStaleEvent, "peer", from.String())
+		return pubsub.ValidationReject
+	}
+	eventTime := event.EventTime.AsTime()
 	if time.Since(eventTime) > FreshnessThreshold || time.Until(eventTime) > FreshnessThreshold {
-		logger.Warnw("[Mesh Event] dropping stale or future event", "event", meshEventStaleEvent, "peer", from.String(), "timestamp", event.Timestamp)
+		logger.Warnw("[Mesh Event] dropping stale or future event", "event", meshEventStaleEvent, "peer", from.String(), "event_time", eventTime.UTC().Format(time.RFC3339))
 		return pubsub.ValidationIgnore
 	}
 	return pubsub.ValidationAccept

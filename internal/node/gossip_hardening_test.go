@@ -33,13 +33,14 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // signedMeshEvent returns a BANNED event for target signed by cpPriv, as the
 // control plane would publish it.
 func signedMeshEvent(t *testing.T, cpPriv ed25519.PrivateKey, target peer.ID, at time.Time) []byte {
 	t.Helper()
-	event := &api.MeshEvent{Type: api.MeshEvent_BANNED, PeerId: target.String(), Timestamp: at.UnixMilli()}
+	event := &api.MeshEvent{Type: api.MeshEvent_BANNED, PeerId: target.String(), EventTime: timestamppb.New(at)}
 	unsigned, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
 	if err != nil {
 		t.Fatal(err)

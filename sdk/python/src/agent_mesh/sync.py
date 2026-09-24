@@ -85,6 +85,6 @@ def verify_mesh_event(data: bytes, trusted_keys: Sequence[bytes], now_ms: Option
     if not any(verify_ed25519(key, payload, signature) for key in trusted_keys):
         return None
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
-    if abs(now_ms - event.timestamp) > EVENT_FRESHNESS_MS:
+    if not event.HasField("event_time") or abs(now_ms - event.event_time.ToMilliseconds()) > EVENT_FRESHNESS_MS:
         return None
     return event

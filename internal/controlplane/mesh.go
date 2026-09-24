@@ -29,6 +29,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/storage"
@@ -272,7 +273,7 @@ func (p *P2PMeshAdapter) PublishEvent(ctx context.Context, eventType api.MeshEve
 	event := &api.MeshEvent{
 		Type:         eventType,
 		PeerId:       canonical,
-		Timestamp:    time.Now().UnixMilli(),
+		EventTime:    timestamppb.Now(),
 		NewPublicKey: payload,
 	}
 

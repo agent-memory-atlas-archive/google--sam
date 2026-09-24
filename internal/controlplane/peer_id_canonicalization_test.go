@@ -147,7 +147,7 @@ func TestBannedNodeCannotRegisterUnderAnAlias(t *testing.T) {
 			PeerId:             peerID,
 			PublicKey:          pubBytes,
 			RequestedRole:      api.RoleNode,
-			Timestamp:          ts,
+			ChallengeUnixMs:    ts,
 			ChallengeSignature: sig,
 		})
 		if err != nil {

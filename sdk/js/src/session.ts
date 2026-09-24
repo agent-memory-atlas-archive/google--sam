@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import type { Connection } from "@libp2p/interface";
+import { timestampMs } from "@bufbuild/protobuf/wkt";
 import { TopicValidatorResult } from "@libp2p/gossipsub";
 import { peerIdFromString } from "@libp2p/peer-id";
 import { isMultiaddr, multiaddr, type Multiaddr } from "@multiformats/multiaddr";
@@ -382,7 +383,7 @@ export class MeshSession {
       switch (event.type) {
         case MeshEvent_Type.BANNED:
           // Not persisted: a restarted member picks the ban back up from /info.
-          if (this.banned.add(event.peerId, Number(event.timestamp))) {
+          if (this.banned.add(event.peerId, timestampMs(event.eventTime))) {
             void this.#evict(event.peerId);
           }
           break;

@@ -49,6 +49,7 @@ import (
 	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var logger = golog.Logger("sam-control-plane")
@@ -555,7 +556,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "peer_id is not derived from public_key", http.StatusBadRequest)
 		return
 	}
-	if err := verifyFreshChallenge(enrolleeKey, api.RegisterChallenge(canonical, req.Timestamp), req.Timestamp, req.ChallengeSignature); err != nil {
+	if err := verifyFreshChallenge(enrolleeKey, api.RegisterChallenge(canonical, req.ChallengeUnixMs), req.ChallengeUnixMs, req.ChallengeSignature); err != nil {
 		logger.Warnw("Register challenge verification failed", "peer_id", canonical, "error", err)
 		http.Error(w, "Invalid registration challenge: "+err.Error(), http.StatusUnauthorized)
 		return
@@ -710,7 +711,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		BiscuitToken:          biscuitData,
 		ControlPlanePublicKey: pubKey,
 		RouterAddresses:       routerAddrs, // routers nodes multiaddresses
-		Expiration:            biscuitExpiry.Unix(),
+		ExpireTime:            timestamppb.New(biscuitExpiry),
 	}
 
 	respData, err := proto.Marshal(resp)
@@ -840,7 +841,7 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := verifyFreshChallenge(pubKey, api.RefreshChallenge(canonical, req.Timestamp), req.Timestamp, req.ChallengeSignature); err != nil {
+	if err := verifyFreshChallenge(pubKey, api.RefreshChallenge(canonical, req.ChallengeUnixMs), req.ChallengeUnixMs, req.ChallengeSignature); err != nil {
 		logger.Warnw("Refresh challenge verification failed", "peer_id", canonical, "error", err)
 		unauthorized("Challenge verification failed: " + err.Error())
 		return
@@ -953,7 +954,7 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 	// Write response
 	resp := &api.TokenRefreshResponse{
 		BiscuitToken: biscuitBytes,
-		ExpiresAt:    biscuitExpiry.Unix(),
+		ExpireTime:   timestamppb.New(biscuitExpiry),
 	}
 
 	respData, err := proto.Marshal(resp)
@@ -1097,7 +1098,7 @@ func (s *Server) HandleRouterLease(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	if err := verifyFreshChallenge(routerKey, api.RouterLeaseChallenge(canonical, req.Timestamp), req.Timestamp, req.ChallengeSignature); err != nil {
+	if err := verifyFreshChallenge(routerKey, api.RouterLeaseChallenge(canonical, req.ChallengeUnixMs), req.ChallengeUnixMs, req.ChallengeSignature); err != nil {
 		logger.Warnw("Router lease challenge verification failed", "peer_id", canonical, "error", err)
 		http.Error(w, "Invalid lease challenge: "+err.Error(), http.StatusUnauthorized)
 		return
@@ -1136,8 +1137,8 @@ func (s *Server) HandleRouterLease(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := &api.RouterLeaseResponse{
-		Success:   true,
-		ExpiresAt: expiresAt.Unix(),
+		Success:    true,
+		ExpireTime: timestamppb.New(expiresAt),
 	}
 
 	respData, err := proto.Marshal(resp)
@@ -1450,7 +1451,7 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "peer_id is not derived from public_key")
 		return
 	}
-	if err := verifyFreshChallenge(enrolleeKey, api.EnrollChallenge(canonical, req.Timestamp), req.Timestamp, req.ChallengeSignature); err != nil {
+	if err := verifyFreshChallenge(enrolleeKey, api.EnrollChallenge(canonical, req.ChallengeUnixMs), req.ChallengeUnixMs, req.ChallengeSignature); err != nil {
 		logger.Warnw("Enroll challenge verification failed", "peer_id", canonical, "error", err)
 		s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "Invalid enrollment challenge: "+err.Error())
 		return
@@ -2446,9 +2447,9 @@ func (s *Server) buildApprovedBootstrapEnrollResponse(ctx context.Context, biscu
 		routerAddrs = append(routerAddrs, r.Addresses...)
 	}
 
-	expiration := time.Now().Add(s.config.BiscuitTTL).Unix()
+	expiration := time.Now().Add(s.config.BiscuitTTL)
 	if resolvedAt != nil {
-		expiration = resolvedAt.Add(s.config.BiscuitTTL).Unix()
+		expiration = resolvedAt.Add(s.config.BiscuitTTL)
 	}
 
 	return &api.BootstrapEnrollResponse{
@@ -2456,7 +2457,7 @@ func (s *Server) buildApprovedBootstrapEnrollResponse(ctx context.Context, biscu
 		BiscuitToken:          biscuitToken,
 		ControlPlanePublicKey: pubKey,
 		RouterAddresses:       routerAddrs,
-		Expiration:            expiration,
+		ExpireTime:            timestamppb.New(expiration),
 	}, nil
 }
 

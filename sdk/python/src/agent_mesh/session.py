@@ -335,7 +335,7 @@ class MeshSession:
                 continue
             if event.type == pb.MeshEvent.BANNED:
                 # Not persisted: a restarted member picks the ban back up from /info.
-                if self.banned.add(event.peer_id, event.timestamp):
+                if self.banned.add(event.peer_id, event.event_time.ToMilliseconds()):
                     logger.info("peer %s banned by the control plane", event.peer_id)
                     await self._evict(event.peer_id)
             elif event.type == pb.MeshEvent.KEY_ROTATION:

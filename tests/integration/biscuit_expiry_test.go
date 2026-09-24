@@ -54,7 +54,7 @@ const expiryMargin = 2 * time.Second
 // expiration check reads.
 //
 // It also pins the second half of the fix: the biscuit's lifetime is the
-// admin-configured --biscuit-ttl, and EnrollResponse.Expiration (which drives
+// admin-configured --biscuit-ttl, and EnrollResponse.expire_time (which drives
 // the node's proactive refresh) reports that same instant rather than the OIDC
 // token's own, much later, expiry.
 func TestBiscuitExpiryIsEnforcedOnEveryPath(t *testing.T) {
@@ -110,9 +110,9 @@ func TestBiscuitExpiryIsEnforcedOnEveryPath(t *testing.T) {
 	cpPubKey := ed25519.PublicKey(enrollResp.ControlPlanePublicKey)
 
 	// The advertised expiration is the biscuit's, not the OIDC token's (1h).
-	reported := time.Unix(enrollResp.Expiration, 0)
+	reported := enrollResp.GetExpireTime().AsTime()
 	if skew := reported.Sub(mintedAt.Add(testBiscuitTTL)); skew < -2*time.Second || skew > 2*time.Second {
-		t.Errorf("EnrollResponse.Expiration is %v, want ~%v (--biscuit-ttl %v after minting)",
+		t.Errorf("EnrollResponse.expire_time is %v, want ~%v (--biscuit-ttl %v after minting)",
 			reported, mintedAt.Add(testBiscuitTTL), testBiscuitTTL)
 	}
 
@@ -170,7 +170,7 @@ func registerOnControlPlane(t *testing.T, cpPort int, clientID peer.ID, privKey 
 		PeerId:             clientID.String(),
 		PublicKey:          pubBytes,
 		RequestedRole:      api.RoleNode,
-		Timestamp:          ts,
+		ChallengeUnixMs:    ts,
 		ChallengeSignature: sig,
 	})
 	if err != nil {

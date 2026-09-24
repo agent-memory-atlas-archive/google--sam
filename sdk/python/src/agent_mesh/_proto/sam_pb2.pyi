@@ -90,14 +90,14 @@ class AgentRefreshRequest(_message.Message):
     def __init__(self, agent_id: _Optional[str] = ..., credential_path: _Optional[str] = ...) -> None: ...
 
 class AgentRefreshResponse(_message.Message):
-    __slots__ = ["error", "expires_at", "success"]
+    __slots__ = ["error", "expire_time", "success"]
     ERROR_FIELD_NUMBER: _ClassVar[int]
-    EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
+    EXPIRE_TIME_FIELD_NUMBER: _ClassVar[int]
     SUCCESS_FIELD_NUMBER: _ClassVar[int]
     error: str
-    expires_at: int
+    expire_time: _timestamp_pb2.Timestamp
     success: bool
-    def __init__(self, success: bool = ..., error: _Optional[str] = ..., expires_at: _Optional[int] = ...) -> None: ...
+    def __init__(self, success: bool = ..., error: _Optional[str] = ..., expire_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class AgentSecret(_message.Message):
     __slots__ = ["header_name", "host", "kind", "value_path"]
@@ -112,16 +112,16 @@ class AgentSecret(_message.Message):
     def __init__(self, host: _Optional[str] = ..., kind: _Optional[str] = ..., header_name: _Optional[str] = ..., value_path: _Optional[str] = ...) -> None: ...
 
 class AgentStatus(_message.Message):
-    __slots__ = ["agent_id", "attached", "credential_expires_at", "ingress"]
+    __slots__ = ["agent_id", "attached", "credential_expire_time", "ingress"]
     AGENT_ID_FIELD_NUMBER: _ClassVar[int]
     ATTACHED_FIELD_NUMBER: _ClassVar[int]
-    CREDENTIAL_EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
+    CREDENTIAL_EXPIRE_TIME_FIELD_NUMBER: _ClassVar[int]
     INGRESS_FIELD_NUMBER: _ClassVar[int]
     agent_id: str
     attached: bool
-    credential_expires_at: int
+    credential_expire_time: _timestamp_pb2.Timestamp
     ingress: _containers.RepeatedCompositeFieldContainer[AgentIngress]
-    def __init__(self, agent_id: _Optional[str] = ..., attached: bool = ..., ingress: _Optional[_Iterable[_Union[AgentIngress, _Mapping]]] = ..., credential_expires_at: _Optional[int] = ...) -> None: ...
+    def __init__(self, agent_id: _Optional[str] = ..., attached: bool = ..., ingress: _Optional[_Iterable[_Union[AgentIngress, _Mapping]]] = ..., credential_expire_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class AgentStatusRequest(_message.Message):
     __slots__ = ["agent_id"]
@@ -158,7 +158,7 @@ class AuthResponse(_message.Message):
     def __init__(self, success: bool = ..., error: _Optional[str] = ..., biscuit: _Optional[bytes] = ...) -> None: ...
 
 class BootstrapEnrollRequest(_message.Message):
-    __slots__ = ["bootstrap_token", "challenge_signature", "labels", "peer_id", "public_key", "requested_role", "timestamp"]
+    __slots__ = ["bootstrap_token", "challenge_signature", "challenge_unix_ms", "labels", "peer_id", "public_key", "requested_role"]
     class LabelsEntry(_message.Message):
         __slots__ = ["key", "value"]
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -168,37 +168,37 @@ class BootstrapEnrollRequest(_message.Message):
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     BOOTSTRAP_TOKEN_FIELD_NUMBER: _ClassVar[int]
     CHALLENGE_SIGNATURE_FIELD_NUMBER: _ClassVar[int]
+    CHALLENGE_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     LABELS_FIELD_NUMBER: _ClassVar[int]
     PEER_ID_FIELD_NUMBER: _ClassVar[int]
     PUBLIC_KEY_FIELD_NUMBER: _ClassVar[int]
     REQUESTED_ROLE_FIELD_NUMBER: _ClassVar[int]
-    TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
     bootstrap_token: str
     challenge_signature: bytes
+    challenge_unix_ms: int
     labels: _containers.ScalarMap[str, str]
     peer_id: str
     public_key: bytes
     requested_role: str
-    timestamp: int
-    def __init__(self, bootstrap_token: _Optional[str] = ..., peer_id: _Optional[str] = ..., public_key: _Optional[bytes] = ..., requested_role: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ..., timestamp: _Optional[int] = ..., challenge_signature: _Optional[bytes] = ...) -> None: ...
+    def __init__(self, bootstrap_token: _Optional[str] = ..., peer_id: _Optional[str] = ..., public_key: _Optional[bytes] = ..., requested_role: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ..., challenge_unix_ms: _Optional[int] = ..., challenge_signature: _Optional[bytes] = ...) -> None: ...
 
 class BootstrapEnrollResponse(_message.Message):
-    __slots__ = ["biscuit_token", "control_plane_public_key", "error_message", "expiration", "poll_interval_seconds", "router_addresses", "status"]
+    __slots__ = ["biscuit_token", "control_plane_public_key", "error_message", "expire_time", "poll_interval_seconds", "router_addresses", "status"]
     BISCUIT_TOKEN_FIELD_NUMBER: _ClassVar[int]
     CONTROL_PLANE_PUBLIC_KEY_FIELD_NUMBER: _ClassVar[int]
     ERROR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
-    EXPIRATION_FIELD_NUMBER: _ClassVar[int]
+    EXPIRE_TIME_FIELD_NUMBER: _ClassVar[int]
     POLL_INTERVAL_SECONDS_FIELD_NUMBER: _ClassVar[int]
     ROUTER_ADDRESSES_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
     biscuit_token: bytes
     control_plane_public_key: bytes
     error_message: str
-    expiration: int
+    expire_time: _timestamp_pb2.Timestamp
     poll_interval_seconds: int
     router_addresses: _containers.RepeatedScalarFieldContainer[str]
     status: EnrollmentStatus
-    def __init__(self, status: _Optional[_Union[EnrollmentStatus, str]] = ..., biscuit_token: _Optional[bytes] = ..., poll_interval_seconds: _Optional[int] = ..., error_message: _Optional[str] = ..., control_plane_public_key: _Optional[bytes] = ..., router_addresses: _Optional[_Iterable[str]] = ..., expiration: _Optional[int] = ...) -> None: ...
+    def __init__(self, status: _Optional[_Union[EnrollmentStatus, str]] = ..., biscuit_token: _Optional[bytes] = ..., poll_interval_seconds: _Optional[int] = ..., error_message: _Optional[str] = ..., control_plane_public_key: _Optional[bytes] = ..., router_addresses: _Optional[_Iterable[str]] = ..., expire_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class CommandBackend(_message.Message):
     __slots__ = ["command", "env"]
@@ -242,7 +242,7 @@ class DiscoveredProvider(_message.Message):
     def __init__(self, peer_id: _Optional[str] = ..., local_proxy_url: _Optional[str] = ..., srv_name: _Optional[str] = ..., srv_description: _Optional[str] = ...) -> None: ...
 
 class EnrollRequest(_message.Message):
-    __slots__ = ["challenge_signature", "jwt", "labels", "peer_id", "public_key", "requested_role", "timestamp"]
+    __slots__ = ["challenge_signature", "challenge_unix_ms", "jwt", "labels", "peer_id", "public_key", "requested_role"]
     class LabelsEntry(_message.Message):
         __slots__ = ["key", "value"]
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -251,60 +251,60 @@ class EnrollRequest(_message.Message):
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     CHALLENGE_SIGNATURE_FIELD_NUMBER: _ClassVar[int]
+    CHALLENGE_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     JWT_FIELD_NUMBER: _ClassVar[int]
     LABELS_FIELD_NUMBER: _ClassVar[int]
     PEER_ID_FIELD_NUMBER: _ClassVar[int]
     PUBLIC_KEY_FIELD_NUMBER: _ClassVar[int]
     REQUESTED_ROLE_FIELD_NUMBER: _ClassVar[int]
-    TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
     challenge_signature: bytes
+    challenge_unix_ms: int
     jwt: str
     labels: _containers.ScalarMap[str, str]
     peer_id: str
     public_key: bytes
     requested_role: str
-    timestamp: int
-    def __init__(self, jwt: _Optional[str] = ..., peer_id: _Optional[str] = ..., public_key: _Optional[bytes] = ..., requested_role: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ..., timestamp: _Optional[int] = ..., challenge_signature: _Optional[bytes] = ...) -> None: ...
+    def __init__(self, jwt: _Optional[str] = ..., peer_id: _Optional[str] = ..., public_key: _Optional[bytes] = ..., requested_role: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ..., challenge_unix_ms: _Optional[int] = ..., challenge_signature: _Optional[bytes] = ...) -> None: ...
 
 class EnrollResponse(_message.Message):
-    __slots__ = ["biscuit_token", "control_plane_public_key", "error_message", "expiration", "router_addresses"]
+    __slots__ = ["biscuit_token", "control_plane_public_key", "error_message", "expire_time", "router_addresses"]
     BISCUIT_TOKEN_FIELD_NUMBER: _ClassVar[int]
     CONTROL_PLANE_PUBLIC_KEY_FIELD_NUMBER: _ClassVar[int]
     ERROR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
-    EXPIRATION_FIELD_NUMBER: _ClassVar[int]
+    EXPIRE_TIME_FIELD_NUMBER: _ClassVar[int]
     ROUTER_ADDRESSES_FIELD_NUMBER: _ClassVar[int]
     biscuit_token: bytes
     control_plane_public_key: bytes
     error_message: str
-    expiration: int
+    expire_time: _timestamp_pb2.Timestamp
     router_addresses: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, biscuit_token: _Optional[bytes] = ..., error_message: _Optional[str] = ..., control_plane_public_key: _Optional[bytes] = ..., router_addresses: _Optional[_Iterable[str]] = ..., expiration: _Optional[int] = ...) -> None: ...
+    def __init__(self, biscuit_token: _Optional[bytes] = ..., error_message: _Optional[str] = ..., control_plane_public_key: _Optional[bytes] = ..., router_addresses: _Optional[_Iterable[str]] = ..., expire_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class IdentityEvidenceResponse(_message.Message):
-    __slots__ = ["biscuit", "biscuit_expires_at", "checked_at", "control_plane_url", "peer_id", "trusted_control_plane_keys"]
-    BISCUIT_EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ["biscuit", "biscuit_expire_time", "check_time", "control_plane_url", "peer_id", "trusted_control_plane_keys"]
+    BISCUIT_EXPIRE_TIME_FIELD_NUMBER: _ClassVar[int]
     BISCUIT_FIELD_NUMBER: _ClassVar[int]
-    CHECKED_AT_FIELD_NUMBER: _ClassVar[int]
+    CHECK_TIME_FIELD_NUMBER: _ClassVar[int]
     CONTROL_PLANE_URL_FIELD_NUMBER: _ClassVar[int]
     PEER_ID_FIELD_NUMBER: _ClassVar[int]
     TRUSTED_CONTROL_PLANE_KEYS_FIELD_NUMBER: _ClassVar[int]
     biscuit: bytes
-    biscuit_expires_at: int
-    checked_at: int
+    biscuit_expire_time: _timestamp_pb2.Timestamp
+    check_time: _timestamp_pb2.Timestamp
     control_plane_url: str
     peer_id: str
     trusted_control_plane_keys: _containers.RepeatedScalarFieldContainer[bytes]
-    def __init__(self, peer_id: _Optional[str] = ..., biscuit: _Optional[bytes] = ..., biscuit_expires_at: _Optional[int] = ..., control_plane_url: _Optional[str] = ..., trusted_control_plane_keys: _Optional[_Iterable[bytes]] = ..., checked_at: _Optional[int] = ...) -> None: ...
+    def __init__(self, peer_id: _Optional[str] = ..., biscuit: _Optional[bytes] = ..., biscuit_expire_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ..., control_plane_url: _Optional[str] = ..., trusted_control_plane_keys: _Optional[_Iterable[bytes]] = ..., check_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class KeysResponse(_message.Message):
-    __slots__ = ["public_keys", "signatures", "timestamp"]
+    __slots__ = ["public_keys", "sign_time", "signatures"]
     PUBLIC_KEYS_FIELD_NUMBER: _ClassVar[int]
     SIGNATURES_FIELD_NUMBER: _ClassVar[int]
-    TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
+    SIGN_TIME_FIELD_NUMBER: _ClassVar[int]
     public_keys: _containers.RepeatedScalarFieldContainer[bytes]
+    sign_time: _timestamp_pb2.Timestamp
     signatures: _containers.RepeatedScalarFieldContainer[bytes]
-    timestamp: int
-    def __init__(self, public_keys: _Optional[_Iterable[bytes]] = ..., timestamp: _Optional[int] = ..., signatures: _Optional[_Iterable[bytes]] = ...) -> None: ...
+    def __init__(self, public_keys: _Optional[_Iterable[bytes]] = ..., sign_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ..., signatures: _Optional[_Iterable[bytes]] = ...) -> None: ...
 
 class MemberCredential(_message.Message):
     __slots__ = ["biscuit", "control_plane_url", "expire_time", "issued_under_keys", "oidc_session", "router_addresses", "trusted_keys"]
@@ -325,23 +325,23 @@ class MemberCredential(_message.Message):
     def __init__(self, control_plane_url: _Optional[str] = ..., biscuit: _Optional[bytes] = ..., expire_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ..., trusted_keys: _Optional[_Iterable[_Union[TrustedSigningKey, _Mapping]]] = ..., issued_under_keys: _Optional[_Iterable[bytes]] = ..., router_addresses: _Optional[_Iterable[str]] = ..., oidc_session: _Optional[_Union[OIDCSession, _Mapping]] = ...) -> None: ...
 
 class MeshEvent(_message.Message):
-    __slots__ = ["new_public_key", "peer_id", "signature", "timestamp", "type"]
+    __slots__ = ["event_time", "new_public_key", "peer_id", "signature", "type"]
     class Type(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
         __slots__ = []
     BANNED: MeshEvent.Type
+    EVENT_TIME_FIELD_NUMBER: _ClassVar[int]
     KEY_ROTATION: MeshEvent.Type
     NEW_PUBLIC_KEY_FIELD_NUMBER: _ClassVar[int]
     PEER_ID_FIELD_NUMBER: _ClassVar[int]
     POLICY_UPDATE: MeshEvent.Type
     SIGNATURE_FIELD_NUMBER: _ClassVar[int]
-    TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
     TYPE_FIELD_NUMBER: _ClassVar[int]
+    event_time: _timestamp_pb2.Timestamp
     new_public_key: bytes
     peer_id: str
     signature: bytes
-    timestamp: int
     type: MeshEvent.Type
-    def __init__(self, type: _Optional[_Union[MeshEvent.Type, str]] = ..., peer_id: _Optional[str] = ..., timestamp: _Optional[int] = ..., new_public_key: _Optional[bytes] = ..., signature: _Optional[bytes] = ...) -> None: ...
+    def __init__(self, type: _Optional[_Union[MeshEvent.Type, str]] = ..., peer_id: _Optional[str] = ..., event_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ..., new_public_key: _Optional[bytes] = ..., signature: _Optional[bytes] = ...) -> None: ...
 
 class NodeCatalogReport(_message.Message):
     __slots__ = ["services"]
@@ -362,7 +362,7 @@ class OIDCSession(_message.Message):
     def __init__(self, issuer: _Optional[str] = ..., client_id: _Optional[str] = ..., audience: _Optional[str] = ..., refresh_token: _Optional[str] = ...) -> None: ...
 
 class PeerEvidenceResponse(_message.Message):
-    __slots__ = ["biscuit", "checked_at", "expiration", "labels", "peer_id", "revocation_ids", "roles", "verifying_key"]
+    __slots__ = ["biscuit", "check_time", "expire_time", "labels", "peer_id", "revocation_ids", "roles", "verifying_key"]
     class LabelsEntry(_message.Message):
         __slots__ = ["key", "value"]
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -371,22 +371,22 @@ class PeerEvidenceResponse(_message.Message):
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     BISCUIT_FIELD_NUMBER: _ClassVar[int]
-    CHECKED_AT_FIELD_NUMBER: _ClassVar[int]
-    EXPIRATION_FIELD_NUMBER: _ClassVar[int]
+    CHECK_TIME_FIELD_NUMBER: _ClassVar[int]
+    EXPIRE_TIME_FIELD_NUMBER: _ClassVar[int]
     LABELS_FIELD_NUMBER: _ClassVar[int]
     PEER_ID_FIELD_NUMBER: _ClassVar[int]
     REVOCATION_IDS_FIELD_NUMBER: _ClassVar[int]
     ROLES_FIELD_NUMBER: _ClassVar[int]
     VERIFYING_KEY_FIELD_NUMBER: _ClassVar[int]
     biscuit: bytes
-    checked_at: int
-    expiration: int
+    check_time: _timestamp_pb2.Timestamp
+    expire_time: _timestamp_pb2.Timestamp
     labels: _containers.ScalarMap[str, str]
     peer_id: str
     revocation_ids: _containers.RepeatedScalarFieldContainer[str]
     roles: _containers.RepeatedScalarFieldContainer[str]
     verifying_key: bytes
-    def __init__(self, peer_id: _Optional[str] = ..., biscuit: _Optional[bytes] = ..., verifying_key: _Optional[bytes] = ..., roles: _Optional[_Iterable[str]] = ..., labels: _Optional[_Mapping[str, str]] = ..., expiration: _Optional[int] = ..., revocation_ids: _Optional[_Iterable[str]] = ..., checked_at: _Optional[int] = ...) -> None: ...
+    def __init__(self, peer_id: _Optional[str] = ..., biscuit: _Optional[bytes] = ..., verifying_key: _Optional[bytes] = ..., roles: _Optional[_Iterable[str]] = ..., labels: _Optional[_Mapping[str, str]] = ..., expire_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ..., revocation_ids: _Optional[_Iterable[str]] = ..., check_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class PolicyBinding(_message.Message):
     __slots__ = ["members", "role"]
@@ -449,35 +449,35 @@ class RegisterServiceRequest(_message.Message):
     def __init__(self, service: _Optional[_Union[ServiceInfo, _Mapping]] = ..., target_url: _Optional[str] = ..., command: _Optional[_Union[CommandBackend, _Mapping]] = ...) -> None: ...
 
 class RouterLeaseRequest(_message.Message):
-    __slots__ = ["addresses", "biscuit", "challenge_signature", "connected_peers", "dht_size", "peer_id", "timestamp"]
+    __slots__ = ["addresses", "biscuit", "challenge_signature", "challenge_unix_ms", "connected_peers", "dht_size", "peer_id"]
     ADDRESSES_FIELD_NUMBER: _ClassVar[int]
     BISCUIT_FIELD_NUMBER: _ClassVar[int]
     CHALLENGE_SIGNATURE_FIELD_NUMBER: _ClassVar[int]
+    CHALLENGE_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     CONNECTED_PEERS_FIELD_NUMBER: _ClassVar[int]
     DHT_SIZE_FIELD_NUMBER: _ClassVar[int]
     PEER_ID_FIELD_NUMBER: _ClassVar[int]
-    TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
     addresses: _containers.RepeatedScalarFieldContainer[str]
     biscuit: bytes
     challenge_signature: bytes
+    challenge_unix_ms: int
     connected_peers: _containers.RepeatedScalarFieldContainer[str]
     dht_size: int
     peer_id: str
-    timestamp: int
-    def __init__(self, peer_id: _Optional[str] = ..., addresses: _Optional[_Iterable[str]] = ..., biscuit: _Optional[bytes] = ..., connected_peers: _Optional[_Iterable[str]] = ..., dht_size: _Optional[int] = ..., timestamp: _Optional[int] = ..., challenge_signature: _Optional[bytes] = ...) -> None: ...
+    def __init__(self, peer_id: _Optional[str] = ..., addresses: _Optional[_Iterable[str]] = ..., biscuit: _Optional[bytes] = ..., connected_peers: _Optional[_Iterable[str]] = ..., dht_size: _Optional[int] = ..., challenge_unix_ms: _Optional[int] = ..., challenge_signature: _Optional[bytes] = ...) -> None: ...
 
 class RouterLeaseResponse(_message.Message):
-    __slots__ = ["error", "expires_at", "success"]
+    __slots__ = ["error", "expire_time", "success"]
     ERROR_FIELD_NUMBER: _ClassVar[int]
-    EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
+    EXPIRE_TIME_FIELD_NUMBER: _ClassVar[int]
     SUCCESS_FIELD_NUMBER: _ClassVar[int]
     error: str
-    expires_at: int
+    expire_time: _timestamp_pb2.Timestamp
     success: bool
-    def __init__(self, success: bool = ..., error: _Optional[str] = ..., expires_at: _Optional[int] = ...) -> None: ...
+    def __init__(self, success: bool = ..., error: _Optional[str] = ..., expire_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class ServiceAnnounce(_message.Message):
-    __slots__ = ["active_requests", "keys", "labels", "latency_ewma_ms", "peer_id", "service_name", "timestamp", "type"]
+    __slots__ = ["active_requests", "announce_time", "keys", "labels", "latency_ewma_ms", "peer_id", "service_name", "type"]
     class LabelsEntry(_message.Message):
         __slots__ = ["key", "value"]
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -486,22 +486,22 @@ class ServiceAnnounce(_message.Message):
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     ACTIVE_REQUESTS_FIELD_NUMBER: _ClassVar[int]
+    ANNOUNCE_TIME_FIELD_NUMBER: _ClassVar[int]
     KEYS_FIELD_NUMBER: _ClassVar[int]
     LABELS_FIELD_NUMBER: _ClassVar[int]
     LATENCY_EWMA_MS_FIELD_NUMBER: _ClassVar[int]
     PEER_ID_FIELD_NUMBER: _ClassVar[int]
     SERVICE_NAME_FIELD_NUMBER: _ClassVar[int]
-    TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
     TYPE_FIELD_NUMBER: _ClassVar[int]
     active_requests: int
+    announce_time: _timestamp_pb2.Timestamp
     keys: _containers.RepeatedScalarFieldContainer[str]
     labels: _containers.ScalarMap[str, str]
     latency_ewma_ms: float
     peer_id: str
     service_name: str
-    timestamp: int
     type: ServiceType
-    def __init__(self, peer_id: _Optional[str] = ..., type: _Optional[_Union[ServiceType, str]] = ..., service_name: _Optional[str] = ..., keys: _Optional[_Iterable[str]] = ..., labels: _Optional[_Mapping[str, str]] = ..., active_requests: _Optional[int] = ..., latency_ewma_ms: _Optional[float] = ..., timestamp: _Optional[int] = ...) -> None: ...
+    def __init__(self, peer_id: _Optional[str] = ..., type: _Optional[_Union[ServiceType, str]] = ..., service_name: _Optional[str] = ..., keys: _Optional[_Iterable[str]] = ..., labels: _Optional[_Mapping[str, str]] = ..., active_requests: _Optional[int] = ..., latency_ewma_ms: _Optional[float] = ..., announce_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class ServiceInfo(_message.Message):
     __slots__ = ["description", "name", "type"]
@@ -514,24 +514,24 @@ class ServiceInfo(_message.Message):
     def __init__(self, type: _Optional[_Union[ServiceType, str]] = ..., name: _Optional[str] = ..., description: _Optional[str] = ...) -> None: ...
 
 class TokenRefreshRequest(_message.Message):
-    __slots__ = ["challenge_signature", "peer_id", "timestamp"]
+    __slots__ = ["challenge_signature", "challenge_unix_ms", "peer_id"]
     CHALLENGE_SIGNATURE_FIELD_NUMBER: _ClassVar[int]
+    CHALLENGE_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     PEER_ID_FIELD_NUMBER: _ClassVar[int]
-    TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
     challenge_signature: bytes
+    challenge_unix_ms: int
     peer_id: str
-    timestamp: int
-    def __init__(self, challenge_signature: _Optional[bytes] = ..., timestamp: _Optional[int] = ..., peer_id: _Optional[str] = ...) -> None: ...
+    def __init__(self, challenge_signature: _Optional[bytes] = ..., challenge_unix_ms: _Optional[int] = ..., peer_id: _Optional[str] = ...) -> None: ...
 
 class TokenRefreshResponse(_message.Message):
-    __slots__ = ["biscuit_token", "error_message", "expires_at"]
+    __slots__ = ["biscuit_token", "error_message", "expire_time"]
     BISCUIT_TOKEN_FIELD_NUMBER: _ClassVar[int]
     ERROR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
-    EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
+    EXPIRE_TIME_FIELD_NUMBER: _ClassVar[int]
     biscuit_token: bytes
     error_message: str
-    expires_at: int
-    def __init__(self, biscuit_token: _Optional[bytes] = ..., expires_at: _Optional[int] = ..., error_message: _Optional[str] = ...) -> None: ...
+    expire_time: _timestamp_pb2.Timestamp
+    def __init__(self, biscuit_token: _Optional[bytes] = ..., expire_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ..., error_message: _Optional[str] = ...) -> None: ...
 
 class TokenRevokeRequest(_message.Message):
     __slots__ = ["peer_id"]

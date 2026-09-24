@@ -102,7 +102,7 @@ func (h *lifecycleHarness) register(sub string) (crypto.PrivKey, peer.ID) {
 	ts, sig := registerPoP(h.t, priv, id.String())
 	data, err := proto.Marshal(&api.EnrollRequest{
 		Jwt: h.mintToken(map[string]interface{}{"sub": sub}), PeerId: id.String(), PublicKey: pub,
-		RequestedRole: api.RoleNode, Timestamp: ts, ChallengeSignature: sig,
+		RequestedRole: api.RoleNode, ChallengeUnixMs: ts, ChallengeSignature: sig,
 	})
 	if err != nil {
 		h.t.Fatal(err)
@@ -133,7 +133,7 @@ func (h *lifecycleHarness) enroll(token string) (api.EnrollmentStatus, int, stri
 	ts, sig := enrollPoP(h.t, priv, id.String())
 	data, err := proto.Marshal(&api.BootstrapEnrollRequest{
 		BootstrapToken: token, PeerId: id.String(), PublicKey: pub, RequestedRole: api.RoleNode,
-		Timestamp: ts, ChallengeSignature: sig,
+		ChallengeUnixMs: ts, ChallengeSignature: sig,
 	})
 	if err != nil {
 		h.t.Fatal(err)
@@ -510,7 +510,7 @@ func TestUnverifiedEmailAndIssuerCollision(t *testing.T) {
 		claims["sub"] = id.String() // distinct subjects, so only the email can bind
 		data, err := proto.Marshal(&api.EnrollRequest{
 			Jwt: h.mintToken(claims), PeerId: id.String(), PublicKey: pub,
-			RequestedRole: api.RoleNode, Timestamp: ts, ChallengeSignature: sig,
+			RequestedRole: api.RoleNode, ChallengeUnixMs: ts, ChallengeSignature: sig,
 		})
 		if err != nil {
 			t.Fatal(err)

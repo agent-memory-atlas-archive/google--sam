@@ -63,4 +63,4 @@ export {
   type ServiceSpec,
 } from "./serve.ts";
 export { BASELINE_DATALOG } from "./gen/datalog.ts";
-export { BanSet, EVENT_FRESHNESS_MS, GOSSIP_EVENTS_TOPIC, verifyMeshEvent } from "./sync.ts";
+export { BanSet, EVENT_FRESHNESS_MS, GOSSIP_EVENTS_TOPIC, verifyMeshEvent, type VerifiedMeshEvent } from "./sync.ts";

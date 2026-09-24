@@ -42,6 +42,19 @@ from agent_mesh.controlplane import ROLE_NODE
 from agent_mesh.identity import Identity
 from agent_mesh.mesh import AgentMesh
 from agent_mesh.relay import HOP_PROTOCOL as RELAY_HOP_PROTOCOL
+from google.protobuf.timestamp_pb2 import Timestamp
+
+
+def _ts_ms(ms: int) -> Timestamp:
+    t = Timestamp()
+    t.FromMilliseconds(int(ms))
+    return t
+
+
+def _ts_s(seconds: int) -> Timestamp:
+    t = Timestamp()
+    t.FromSeconds(int(seconds))
+    return t
 
 CP = ba.KeyPair()
 CP_KEY = CP.public_key.to_bytes()
@@ -65,11 +78,11 @@ def fake_control_plane(router_addresses):
                 biscuit_token=mint(req.peer_id, ROLE_NODE),
                 control_plane_public_key=CP_KEY,
                 router_addresses=router_addresses,
-                expiration=int(time.time()) + 3600,
+                expire_time=_ts_s(int(time.time()) + 3600),
             ).SerializeToString()
         if (method, path) == ("GET", "/keys"):
             # Unsigned: the client keeps the enrollment key when /keys cannot be verified.
-            return 200, pb.KeysResponse(public_keys=[CP_KEY], timestamp=int(time.time() * 1000)).SerializeToString()
+            return 200, pb.KeysResponse(public_keys=[CP_KEY], sign_time=_ts_ms(int(time.time() * 1000))).SerializeToString()
         return 404, f"no route for {method} {path}".encode()
 
     return transport

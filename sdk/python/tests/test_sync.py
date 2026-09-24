@@ -38,6 +38,19 @@ from agent_mesh.relay import HOP_PROTOCOL as RELAY_HOP_PROTOCOL
 from agent_mesh.sync import EVENT_FRESHNESS_MS, BanSet, verify_mesh_event
 
 from .test_session import hop_handler, libp2p_host
+from google.protobuf.timestamp_pb2 import Timestamp
+
+
+def _ts_ms(ms: int) -> Timestamp:
+    t = Timestamp()
+    t.FromMilliseconds(int(ms))
+    return t
+
+
+def _ts_s(seconds: int) -> Timestamp:
+    t = Timestamp()
+    t.FromSeconds(int(seconds))
+    return t
 
 
 class SigningKey:
@@ -77,12 +90,12 @@ class FakeControlPlane:
                 biscuit_token=self.current.mint(req.peer_id, ROLE_NODE),
                 control_plane_public_key=self.current.pub,
                 router_addresses=[self.router_addr],
-                expiration=int(time.time()) + 3600,
+                expire_time=_ts_s(int(time.time()) + 3600),
             ).SerializeToString()
         if (method, path) == ("GET", "/keys"):
-            unsigned = pb.KeysResponse(public_keys=[k.pub for k in self.keys], timestamp=int(time.time() * 1000))
+            unsigned = pb.KeysResponse(public_keys=[k.pub for k in self.keys], sign_time=_ts_ms(int(time.time() * 1000)))
             payload = unsigned.SerializeToString(deterministic=True)
-            return 200, pb.KeysResponse(public_keys=[k.pub for k in self.keys], timestamp=unsigned.timestamp, signatures=[k.identity.sign(payload) for k in self.keys]).SerializeToString()
+            return 200, pb.KeysResponse(public_keys=[k.pub for k in self.keys], sign_time=unsigned.sign_time, signatures=[k.identity.sign(payload) for k in self.keys]).SerializeToString()
         if (method, path) == ("GET", "/info"):
             return 200, pb.ControlPlaneInfoResponse(router_addresses=[self.router_addr], banned_peer_ids=self.banned).SerializeToString()
         if (method, path) == ("POST", "/refresh"):
@@ -93,7 +106,7 @@ class FakeControlPlane:
                     verified = verify_peer_biscuit_any(presented, key.pub)
                 except Exception:  # noqa: BLE001 - try the next key
                     continue
-                return 200, pb.TokenRefreshResponse(biscuit_token=self.current.mint(verified, ROLE_NODE), expires_at=int(time.time()) + 7200).SerializeToString()
+                return 200, pb.TokenRefreshResponse(biscuit_token=self.current.mint(verified, ROLE_NODE), expire_time=_ts_s(int(time.time()) + 7200)).SerializeToString()
             return 401, b"unverifiable biscuit"
         return 404, f"no route for {method} {path}".encode()
 
@@ -151,13 +164,13 @@ def test_mesh_event_verifies_only_under_a_trusted_key_and_only_when_fresh():
         return event.SerializeToString(deterministic=True)
 
     now_ms = int(time.time() * 1000)
-    banned = sign(pb.MeshEvent(type=pb.MeshEvent.BANNED, peer_id="12D3KooWx", timestamp=now_ms))
+    banned = sign(pb.MeshEvent(type=pb.MeshEvent.BANNED, peer_id="12D3KooWx", event_time=_ts_ms(now_ms)))
     assert verify_mesh_event(banned, [key.pub], now_ms).peer_id == "12D3KooWx"
     assert verify_mesh_event(banned, [SigningKey().pub], now_ms) is None
     tampered = bytearray(banned)
     tampered[-1] ^= 1
     assert verify_mesh_event(bytes(tampered), [key.pub], now_ms) is None
-    stale = sign(pb.MeshEvent(type=pb.MeshEvent.BANNED, peer_id="12D3KooWx", timestamp=now_ms - EVENT_FRESHNESS_MS - 1))
+    stale = sign(pb.MeshEvent(type=pb.MeshEvent.BANNED, peer_id="12D3KooWx", event_time=_ts_ms(now_ms - EVENT_FRESHNESS_MS - 1)))
     assert verify_mesh_event(stale, [key.pub], now_ms) is None
     assert verify_mesh_event(b"\x01\x02\x03", [key.pub], now_ms) is None
 

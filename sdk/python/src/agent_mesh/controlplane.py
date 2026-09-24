@@ -27,6 +27,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional, Sequence
 
+from google.protobuf.timestamp_pb2 import Timestamp
 from google.protobuf.unknown_fields import UnknownFieldSet
 
 from . import challenges
@@ -123,11 +124,14 @@ def verify_keys_response(resp: pb.KeysResponse, trusted: Sequence[bytes], now_ms
     if len(resp.signatures) != len(resp.public_keys):
         raise ValueError(f"keys response carries {len(resp.signatures)} signatures for {len(resp.public_keys)} keys")
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
-    if abs(now_ms - resp.timestamp) > KEYS_RESPONSE_FRESHNESS_MS:
-        raise ValueError(f"keys response timestamp {resp.timestamp} is outside the freshness window")
-    # Each signature covers the set and the timestamp, deterministically
+    if not resp.HasField("sign_time"):
+        raise ValueError("keys response carries no sign_time")
+    issued_ms = resp.sign_time.ToMilliseconds()
+    if abs(now_ms - issued_ms) > KEYS_RESPONSE_FRESHNESS_MS:
+        raise ValueError(f"keys response sign_time {resp.sign_time.ToJsonString()} is outside the freshness window")
+    # Each signature covers the set and the signing time, deterministically
     # encoded with the signatures cleared.
-    payload = pb.KeysResponse(public_keys=list(resp.public_keys), timestamp=resp.timestamp).SerializeToString(deterministic=True)
+    payload = pb.KeysResponse(public_keys=list(resp.public_keys), sign_time=resp.sign_time).SerializeToString(deterministic=True)
     keys: list[bytes] = []
     verified = False
     for pub, sig in zip(resp.public_keys, resp.signatures):
@@ -194,7 +198,7 @@ class ControlPlaneClient:
             public_key=identity.libp2p_public_key,
             requested_role=role,
             labels=dict(labels or {}),
-            timestamp=ts,
+            challenge_unix_ms=ts,
             challenge_signature=identity.sign(challenges.enroll_challenge(identity.peer_id, ts)),
         )
         resp = pb.BootstrapEnrollResponse.FromString(self._request("POST", "/enroll", req.SerializeToString()))
@@ -237,19 +241,17 @@ class ControlPlaneClient:
             public_key=identity.libp2p_public_key,
             requested_role=role,
             labels=dict(labels or {}),
-            timestamp=ts,
+            challenge_unix_ms=ts,
             challenge_signature=identity.sign(challenges.register_challenge(identity.peer_id, ts)),
         )
         resp = pb.EnrollResponse.FromString(self._request("POST", "/register", req.SerializeToString()))
         if resp.error_message:
             raise EnrollmentRejectedError(f"enrollment failed: {resp.error_message}")
         return _checked_enrollment(
-            Enrollment(
-                biscuit=resp.biscuit_token,
-                expiration=resp.expiration,
-                control_plane_public_key=resp.control_plane_public_key,
-                router_addresses=list(resp.router_addresses),
-            )
+            biscuit=resp.biscuit_token,
+            expire_time=resp.expire_time if resp.HasField("expire_time") else None,
+            control_plane_public_key=resp.control_plane_public_key,
+            router_addresses=list(resp.router_addresses),
         )
 
     def refresh(self, identity: Identity, biscuit: bytes) -> RefreshResult:
@@ -257,7 +259,7 @@ class ControlPlaneClient:
         spent by this call; callers must persist the result before using it."""
         ts = _now_ms()
         req = pb.TokenRefreshRequest(
-            timestamp=ts,
+            challenge_unix_ms=ts,
             challenge_signature=identity.sign(challenges.refresh_challenge(identity.peer_id, ts)),
             peer_id=identity.peer_id,
         )
@@ -272,7 +274,9 @@ class ControlPlaneClient:
             raise EnrollmentRejectedError(f"refresh failed: {resp.error_message}")
         if not resp.biscuit_token:
             raise ValueError("refresh returned an empty biscuit")
-        return RefreshResult(biscuit=resp.biscuit_token, expiration=resp.expires_at)
+        if not resp.HasField("expire_time"):
+            raise ValueError("refresh response carries no expire_time")
+        return RefreshResult(biscuit=resp.biscuit_token, expiration=resp.expire_time.ToSeconds())
 
     def policy_rules(self, biscuit: bytes) -> list[str]:
         """GET /policies: the mesh policy as the Datalog rules a provider adds
@@ -316,23 +320,31 @@ def _now_ms() -> int:
 def _enrollment_from_bootstrap_response(resp: pb.BootstrapEnrollResponse) -> Enrollment:
     if resp.status == pb.ENROLLMENT_STATUS_APPROVED:
         return _checked_enrollment(
-            Enrollment(
-                biscuit=resp.biscuit_token,
-                expiration=resp.expiration,
-                control_plane_public_key=resp.control_plane_public_key,
-                router_addresses=list(resp.router_addresses),
-            )
+            biscuit=resp.biscuit_token,
+            expire_time=resp.expire_time if resp.HasField("expire_time") else None,
+            control_plane_public_key=resp.control_plane_public_key,
+            router_addresses=list(resp.router_addresses),
         )
     if resp.status == pb.ENROLLMENT_STATUS_REJECTED:
         raise EnrollmentRejectedError(f"enrollment rejected: {resp.error_message or 'no reason given'}")
     raise ValueError(f"unexpected enrollment status {resp.status}: {resp.error_message}")
 
 
-def _checked_enrollment(e: Enrollment) -> Enrollment:
-    if not e.biscuit:
+def _checked_enrollment(
+    *, biscuit: bytes, expire_time: Optional[Timestamp], control_plane_public_key: bytes, router_addresses: list[str]
+) -> Enrollment:
+    if not biscuit:
         raise ValueError("received empty biscuit token")
-    if len(e.control_plane_public_key) != PUBLIC_KEY_SIZE:
+    if len(control_plane_public_key) != PUBLIC_KEY_SIZE:
         raise ValueError(
-            f"received invalid control plane public key size: {len(e.control_plane_public_key)} bytes (expected {PUBLIC_KEY_SIZE})"
+            f"received invalid control plane public key size: {len(control_plane_public_key)} bytes (expected {PUBLIC_KEY_SIZE})"
         )
-    return e
+    # A biscuit of unknown lifetime cannot be kept fresh; the control plane must say when it expires.
+    if expire_time is None:
+        raise ValueError("enrollment response carries no expire_time")
+    return Enrollment(
+        biscuit=biscuit,
+        expiration=expire_time.ToSeconds(),
+        control_plane_public_key=control_plane_public_key,
+        router_addresses=router_addresses,
+    )

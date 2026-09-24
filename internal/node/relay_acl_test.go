@@ -22,6 +22,7 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestNodeRelayACL_AllowConnect(t *testing.T) {
@@ -125,7 +126,7 @@ func TestBannedPeerLosesRelayRights(t *testing.T) {
 	node.handleBannedEvent(&api.MeshEvent{
 		Type:      api.MeshEvent_BANNED,
 		PeerId:    peerID.String(),
-		Timestamp: time.Now().UnixMilli(),
+		EventTime: timestamppb.Now(),
 	})
 
 	if acl.AllowReserve(peerID, addr) {

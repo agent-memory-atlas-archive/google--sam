@@ -33,6 +33,7 @@ import (
 	"github.com/google/sam/api"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // refreshHarness is a node with a stored identity and a mock control plane
@@ -113,7 +114,7 @@ func newRefreshHarness(t *testing.T, refresh http.HandlerFunc) *refreshHarness {
 
 func writeRefreshResponse(t *testing.T, w http.ResponseWriter, token []byte) {
 	t.Helper()
-	data, err := proto.Marshal(&api.TokenRefreshResponse{BiscuitToken: token, ExpiresAt: time.Now().Add(24 * time.Hour).Unix()})
+	data, err := proto.Marshal(&api.TokenRefreshResponse{BiscuitToken: token, ExpireTime: timestamppb.New(time.Now().Add(24 * time.Hour))})
 	if err != nil {
 		t.Fatal(err)
 	}

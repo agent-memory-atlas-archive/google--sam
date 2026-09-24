@@ -162,9 +162,13 @@ messages in `api/sam.proto`. Bodies are capped at 1 MiB on both sides.
 | `GET /policies` | header `Authorization: Bearer <base64 biscuit>` | `PolicyConfigGetResponse{datalog_rules}` | none; the biscuit must belong to an admitted node |
 | `POST /nodes/catalog` | `NodeCatalogReport`, header `Authorization: Bearer <base64 biscuit>` | `204` | none; the reporting peer is read from the biscuit |
 
-- `<ts>` is unix milliseconds and must be within 5 minutes of the control
-  plane's clock (`challengeMaxAge`). Challenges are defined in
-  `api/network.go`.
+- `<ts>` is the request's `challenge_unix_ms`, unix milliseconds, and must
+  be within 5 minutes of the control plane's clock (`challengeMaxAge`).
+  Challenges are defined in `api/network.go`. It is the one instant on the
+  wire that is an `int64`: it is the number in the signed text. Every other
+  instant (`expire_time`, `sign_time`, `event_time`, `announce_time`) is a
+  `google.protobuf.Timestamp`, and a receiver rejects a message whose
+  required instant is unset.
 - A bootstrap enrollment answers `PENDING` until an operator approves it,
   unless the control plane runs with auto-approval. The client polls
   `/enroll/status` at the returned `poll_interval_seconds`.
@@ -172,9 +176,9 @@ messages in `api/sam.proto`. Bodies are capped at 1 MiB on both sides.
   peer. A client must persist the new biscuit before using it; losing it
   means re-enrolling.
 - `/keys` signatures cover the deterministic protobuf encoding of
-  `KeysResponse{public_keys, timestamp}` with `signatures` cleared, one
+  `KeysResponse{public_keys, sign_time}` with `signatures` cleared, one
   signature per key by that key. The receiver accepts the set when a key it
-  already trusts (the enrollment key) vouches for it and the timestamp is
+  already trusts (the enrollment key) vouches for it and `sign_time` is
   within 5 minutes (`api/trust.go`). Rotation keeps several keys valid, so
   a member must trust the whole set to verify peers enrolled under a
   retiring key.

@@ -17,6 +17,7 @@
 // the gossip events that bring the next pull forward.
 
 import { fromBinary, toBinary } from "@bufbuild/protobuf";
+import { timestampMs, type Timestamp } from "@bufbuild/protobuf/wkt";
 import { verifyEd25519 } from "./identity.ts";
 import { MeshEvent_Type, MeshEventSchema, type MeshEvent } from "./gen/sam_pb.ts";
 
@@ -81,13 +82,16 @@ export class BanSet {
   }
 }
 
+/** A MeshEvent that verified: signed by a trusted key and carrying a fresh event_time. */
+export type VerifiedMeshEvent = MeshEvent & { eventTime: Timestamp };
+
 /**
  * Verifies a MeshEvent as sam-node's verifyEvent does: the signature covers
  * the deterministic encoding of the event with the signature cleared, under
  * any trusted control plane key. Returns the event, or undefined when it
  * does not verify or is not fresh.
  */
-export function verifyMeshEvent(data: Uint8Array, trustedKeys: Uint8Array[], now: Date = new Date()): MeshEvent | undefined {
+export function verifyMeshEvent(data: Uint8Array, trustedKeys: Uint8Array[], now: Date = new Date()): VerifiedMeshEvent | undefined {
   let event: MeshEvent;
   try {
     event = fromBinary(MeshEventSchema, data);
@@ -99,11 +103,14 @@ export function verifyMeshEvent(data: Uint8Array, trustedKeys: Uint8Array[], now
   if (!trustedKeys.some((key) => verifyEd25519(key, unsigned, signature))) {
     return undefined;
   }
-  const skew = Math.abs(now.getTime() - Number(event.timestamp));
+  if (event.eventTime === undefined) {
+    return undefined;
+  }
+  const skew = Math.abs(now.getTime() - timestampMs(event.eventTime));
   if (skew > EVENT_FRESHNESS_MS) {
     return undefined;
   }
-  return event;
+  return event as VerifiedMeshEvent;
 }
 
 export { MeshEvent_Type };

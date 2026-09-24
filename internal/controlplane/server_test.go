@@ -332,7 +332,7 @@ func TestNodeAndRouterRegistrationFlow(t *testing.T) {
 		PeerId:             nodePeer.String(),
 		PublicKey:          nodePubKeyBytes,
 		RequestedRole:      api.RoleNode,
-		Timestamp:          nodeTS,
+		ChallengeUnixMs:    nodeTS,
 		ChallengeSignature: nodeSig,
 	}
 	reqData, _ := proto.Marshal(enrollNodeReq)
@@ -379,7 +379,7 @@ func TestNodeAndRouterRegistrationFlow(t *testing.T) {
 		PeerId:             routerPeer.String(),
 		PublicKey:          routerPubKeyBytes,
 		RequestedRole:      api.RoleRouter,
-		Timestamp:          routerTS,
+		ChallengeUnixMs:    routerTS,
 		ChallengeSignature: routerSig,
 	}
 	reqData, _ = proto.Marshal(enrollRouterReq)
@@ -409,7 +409,7 @@ func TestNodeAndRouterRegistrationFlow(t *testing.T) {
 		PeerId:             routerPeer.String(),
 		Addresses:          routerAddresses,
 		Biscuit:            enrollRouterResp.BiscuitToken,
-		Timestamp:          leaseTS,
+		ChallengeUnixMs:    leaseTS,
 		ChallengeSignature: leaseSig,
 	}
 	reqData, _ = proto.Marshal(leaseReq)
@@ -460,7 +460,7 @@ func TestNodeAndRouterRegistrationFlow(t *testing.T) {
 			PeerId:             routerPeer.String(),
 			Addresses:          []string{badAddr},
 			Biscuit:            enrollRouterResp.BiscuitToken,
-			Timestamp:          badTS,
+			ChallengeUnixMs:    badTS,
 			ChallengeSignature: badSig,
 		}
 		reqData, _ = proto.Marshal(badLease)
@@ -480,7 +480,7 @@ func TestNodeAndRouterRegistrationFlow(t *testing.T) {
 		PeerId:             nodePeer.String(),
 		Addresses:          []string{"/ip4/127.0.0.1/tcp/6001/p2p/" + nodePeer.String()},
 		Biscuit:            enrollNodeResp.BiscuitToken, // Node biscuit doesn't have router role
-		Timestamp:          rogueTS,
+		ChallengeUnixMs:    rogueTS,
 		ChallengeSignature: rogueSig,
 	}
 	reqData, _ = proto.Marshal(rogueLeaseReq)
@@ -509,7 +509,7 @@ func TestNodeAndRouterRegistrationFlow(t *testing.T) {
 				PeerId:             routerPeer.String(),
 				Addresses:          []string{"/ip4/203.0.113.66/tcp/4001/p2p/" + routerPeer.String()},
 				Biscuit:            enrollRouterResp.BiscuitToken,
-				Timestamp:          ts,
+				ChallengeUnixMs:    ts,
 				ChallengeSignature: sig,
 			}
 		}(),
@@ -523,7 +523,7 @@ func TestNodeAndRouterRegistrationFlow(t *testing.T) {
 				PeerId:             routerPeer.String(),
 				Addresses:          []string{},
 				Biscuit:            enrollRouterResp.BiscuitToken,
-				Timestamp:          ts,
+				ChallengeUnixMs:    ts,
 				ChallengeSignature: sig,
 			}
 		}(),
@@ -919,7 +919,7 @@ func TestEnrollmentWorkflow(t *testing.T) {
 		PeerId:             pID.String(),
 		PublicKey:          pubBytes,
 		RequestedRole:      api.RoleRouter,
-		Timestamp:          enrollTS,
+		ChallengeUnixMs:    enrollTS,
 		ChallengeSignature: enrollSig,
 	}
 	enrollReqData, _ := proto.Marshal(enrollReq)
@@ -1050,7 +1050,7 @@ func TestEnrollmentWorkflow(t *testing.T) {
 		PeerId:             pID2.String(),
 		PublicKey:          pubBytes2,
 		RequestedRole:      api.RoleRouter,
-		Timestamp:          enrollTS2,
+		ChallengeUnixMs:    enrollTS2,
 		ChallengeSignature: enrollSig2,
 	}
 	enrollReqData2, _ := proto.Marshal(enrollReq2)
@@ -1178,7 +1178,7 @@ func TestRegisterRequiresProofOfPossession(t *testing.T) {
 	ts, sig := registerPoP(t, victimPriv, victimID.String())
 	if status, body := post(&api.EnrollRequest{
 		Jwt: mintToken(map[string]interface{}{"sub": "victim"}), PeerId: victimID.String(), PublicKey: victimPub,
-		RequestedRole: api.RoleNode, Timestamp: ts, ChallengeSignature: sig,
+		RequestedRole: api.RoleNode, ChallengeUnixMs: ts, ChallengeSignature: sig,
 	}); status != http.StatusOK {
 		t.Fatalf("victim registration: got %d (%s), want 200", status, body)
 	}
@@ -1202,14 +1202,14 @@ func TestRegisterRequiresProofOfPossession(t *testing.T) {
 		"victim peer_id and public key, challenge signed by the attacker": {
 			req: func() *api.EnrollRequest {
 				ts, sig := registerPoP(t, attackerPriv, victimID.String())
-				return &api.EnrollRequest{Jwt: attackerJWT, PeerId: victimID.String(), PublicKey: victimPub, RequestedRole: api.RoleNode, Timestamp: ts, ChallengeSignature: sig}
+				return &api.EnrollRequest{Jwt: attackerJWT, PeerId: victimID.String(), PublicKey: victimPub, RequestedRole: api.RoleNode, ChallengeUnixMs: ts, ChallengeSignature: sig}
 			}(),
 			want: http.StatusUnauthorized,
 		},
 		"own key, challenge for another endpoint": {
 			req: func() *api.EnrollRequest {
 				ts, sig := enrollPoP(t, attackerPriv, attackerID.String())
-				return &api.EnrollRequest{Jwt: attackerJWT, PeerId: attackerID.String(), PublicKey: attackerPub, RequestedRole: api.RoleNode, Timestamp: ts, ChallengeSignature: sig}
+				return &api.EnrollRequest{Jwt: attackerJWT, PeerId: attackerID.String(), PublicKey: attackerPub, RequestedRole: api.RoleNode, ChallengeUnixMs: ts, ChallengeSignature: sig}
 			}(),
 			want: http.StatusUnauthorized,
 		},
@@ -1220,7 +1220,7 @@ func TestRegisterRequiresProofOfPossession(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				return &api.EnrollRequest{Jwt: attackerJWT, PeerId: attackerID.String(), PublicKey: attackerPub, RequestedRole: api.RoleNode, Timestamp: ts, ChallengeSignature: sig}
+				return &api.EnrollRequest{Jwt: attackerJWT, PeerId: attackerID.String(), PublicKey: attackerPub, RequestedRole: api.RoleNode, ChallengeUnixMs: ts, ChallengeSignature: sig}
 			}(),
 			want: http.StatusUnauthorized,
 		},
@@ -1252,7 +1252,7 @@ func TestRegisterRequiresProofOfPossession(t *testing.T) {
 	ts, sig = registerPoP(t, attackerPriv, attackerID.String())
 	if status, body := post(&api.EnrollRequest{
 		Jwt: attackerJWT, PeerId: attackerID.String(), PublicKey: attackerPub,
-		RequestedRole: api.RoleNode, Timestamp: ts, ChallengeSignature: sig,
+		RequestedRole: api.RoleNode, ChallengeUnixMs: ts, ChallengeSignature: sig,
 	}); status != http.StatusOK {
 		t.Fatalf("honest registration: got %d (%s), want 200", status, body)
 	}
@@ -1305,7 +1305,7 @@ func TestBootstrapEnrollmentRequiresProofOfPossession(t *testing.T) {
 		PeerId:             pID.String(),
 		PublicKey:          pubBytes,
 		RequestedRole:      api.RoleRouter,
-		Timestamp:          enrollTS,
+		ChallengeUnixMs:    enrollTS,
 		ChallengeSignature: enrollSig,
 	})
 	resp, err = client.Post(baseURL+"/enroll", "application/x-protobuf", bytes.NewReader(enrollData))
@@ -1390,7 +1390,7 @@ func TestBootstrapEnrollmentRequiresProofOfPossession(t *testing.T) {
 			PeerId:             pID.String(),
 			PublicKey:          pubBytes,
 			RequestedRole:      api.RoleRouter,
-			Timestamp:          crossTS,
+			ChallengeUnixMs:    crossTS,
 			ChallengeSignature: crossSig,
 		},
 		"peer_id not derived from public_key": {
@@ -1398,7 +1398,7 @@ func TestBootstrapEnrollmentRequiresProofOfPossession(t *testing.T) {
 			PeerId:             pID.String(),
 			PublicKey:          otherPubBytes,
 			RequestedRole:      api.RoleRouter,
-			Timestamp:          crossTS,
+			ChallengeUnixMs:    crossTS,
 			ChallengeSignature: crossSig,
 		},
 		"missing challenge": {
@@ -1425,7 +1425,7 @@ func TestBootstrapEnrollmentRequiresProofOfPossession(t *testing.T) {
 		PeerId:             pID.String(),
 		PublicKey:          pubBytes,
 		RequestedRole:      api.RoleRouter,
-		Timestamp:          retryTS,
+		ChallengeUnixMs:    retryTS,
 		ChallengeSignature: retrySig,
 	})
 	r := postEnroll("enrollee retry", retryData)
@@ -1455,7 +1455,7 @@ func TestBootstrapEnrollmentRequiresProofOfPossession(t *testing.T) {
 		PeerId:             pID.String(),
 		PublicKey:          pubBytes,
 		RequestedRole:      api.RoleRouter,
-		Timestamp:          crossEndpointTS,
+		ChallengeUnixMs:    crossEndpointTS,
 		ChallengeSignature: statusSig, // valid /enroll/status signature, wrong endpoint
 	})
 	if r := postEnroll("cross-endpoint replay", replayData); r.Status != api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED || len(r.BiscuitToken) != 0 {
@@ -1563,7 +1563,7 @@ func TestRouterLeaseRevocation(t *testing.T) {
 			PeerId:             routerPeer.String(),
 			Addresses:          []string{"/ip4/127.0.0.1/tcp/4001/p2p/" + routerPeer.String()},
 			Biscuit:            routerBiscuit,
-			Timestamp:          ts,
+			ChallengeUnixMs:    ts,
 			ChallengeSignature: sig,
 		})
 		resp, err := client.Post(baseURL+"/routers/lease", "application/x-protobuf", bytes.NewReader(leaseData))
@@ -1667,7 +1667,7 @@ func TestRouterLeaseUnderRotatedKey(t *testing.T) {
 		PeerId:             routerPeer.String(),
 		Addresses:          []string{"/ip4/127.0.0.1/tcp/4001/p2p/" + routerPeer.String()},
 		Biscuit:            routerBiscuit,
-		Timestamp:          leaseTS,
+		ChallengeUnixMs:    leaseTS,
 		ChallengeSignature: leaseSig,
 	})
 	if err != nil {
@@ -1750,7 +1750,7 @@ func signedRefreshRequest(t *testing.T, priv crypto.PrivKey, timestamp int64) []
 	}
 	data, err := proto.Marshal(&api.TokenRefreshRequest{
 		ChallengeSignature: sig,
-		Timestamp:          timestamp,
+		ChallengeUnixMs:    timestamp,
 	})
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -1906,7 +1906,7 @@ func TestTokenRefreshAndRevocation(t *testing.T) {
 		PeerId:             nodePeer.String(),
 		PublicKey:          nodePubKeyBytes,
 		RequestedRole:      api.RoleNode,
-		Timestamp:          nodeTS,
+		ChallengeUnixMs:    nodeTS,
 		ChallengeSignature: nodeSig,
 	}
 	reqData, _ := proto.Marshal(enrollNodeReq)
@@ -1939,7 +1939,7 @@ func TestTokenRefreshAndRevocation(t *testing.T) {
 
 	refreshReq := &api.TokenRefreshRequest{
 		ChallengeSignature: challengeSig,
-		Timestamp:          timestamp,
+		ChallengeUnixMs:    timestamp,
 	}
 	refreshData, _ := proto.Marshal(refreshReq)
 
@@ -2045,7 +2045,7 @@ func TestNodeProactiveTokenRefresh(t *testing.T) {
 		PeerId:             nodePeer.String(),
 		PublicKey:          nodePubKeyBytes,
 		RequestedRole:      api.RoleNode,
-		Timestamp:          nodeTS,
+		ChallengeUnixMs:    nodeTS,
 		ChallengeSignature: nodeSig,
 	}
 	reqData, _ := proto.Marshal(enrollNodeReq)
@@ -2088,7 +2088,7 @@ func TestNodeProactiveTokenRefresh(t *testing.T) {
 	if err := nStore.SaveIdentity(biscuitToken); err != nil {
 		t.Fatalf("failed to save initial identity: %v", err)
 	}
-	if err := nStore.SaveIdentityExpiration(enrollNodeResp.Expiration); err != nil {
+	if err := nStore.SaveIdentityExpiration(enrollNodeResp.GetExpireTime().AsTime().Unix()); err != nil {
 		t.Fatalf("failed to save initial expiration: %v", err)
 	}
 
@@ -2123,8 +2123,8 @@ func TestNodeProactiveTokenRefresh(t *testing.T) {
 	if bytes.Equal(refreshedToken, biscuitToken) {
 		t.Error("biscuit token did not change after refresh")
 	}
-	if refreshedExpiration <= enrollNodeResp.Expiration {
-		t.Errorf("expected refreshed expiration %d to be after initial expiration %d", refreshedExpiration, enrollNodeResp.Expiration)
+	if refreshedExpiration <= enrollNodeResp.GetExpireTime().AsTime().Unix() {
+		t.Errorf("expected refreshed expiration %d to be after initial expiration %d", refreshedExpiration, enrollNodeResp.GetExpireTime().AsTime().Unix())
 	}
 }
 
@@ -2500,7 +2500,7 @@ func TestAuthDenialPaths(t *testing.T) {
 			PeerId:             pID.String(),
 			PublicKey:          pubBytes,
 			RequestedRole:      api.RoleNode,
-			Timestamp:          ts,
+			ChallengeUnixMs:    ts,
 			ChallengeSignature: sig,
 		})
 		return reqData
@@ -2651,7 +2651,7 @@ func TestOIDCSessionTTLIsConfigurable(t *testing.T) {
 		PeerId:             nodePeer.String(),
 		PublicKey:          pubBytes,
 		RequestedRole:      api.RoleNode,
-		Timestamp:          regTS,
+		ChallengeUnixMs:    regTS,
 		ChallengeSignature: regSig,
 	})
 	resp, err := client.Post(baseURL+"/register", "application/x-protobuf", bytes.NewReader(reqData))
@@ -2677,7 +2677,7 @@ func TestOIDCSessionTTLIsConfigurable(t *testing.T) {
 	if skew := nodeRecord.ExpiresAt.Sub(enrolledAt.Add(sessionTTL)); skew < -2*time.Second || skew > 2*time.Second {
 		t.Errorf("session ExpiresAt is %v, want ~%v", nodeRecord.ExpiresAt, enrolledAt.Add(sessionTTL))
 	}
-	if reported := time.Unix(enrollResp.Expiration, 0); reported.After(nodeRecord.ExpiresAt.Add(2 * time.Second)) {
+	if reported := enrollResp.GetExpireTime().AsTime(); reported.After(nodeRecord.ExpiresAt.Add(2 * time.Second)) {
 		t.Errorf("biscuit expiration %v outlives the session %v", reported, nodeRecord.ExpiresAt)
 	}
 
@@ -2692,7 +2692,7 @@ func TestOIDCSessionTTLIsConfigurable(t *testing.T) {
 	}
 	refreshData, _ := proto.Marshal(&api.TokenRefreshRequest{
 		ChallengeSignature: challengeSig,
-		Timestamp:          timestamp,
+		ChallengeUnixMs:    timestamp,
 	})
 	req, _ := http.NewRequest("POST", baseURL+"/refresh", bytes.NewReader(refreshData))
 	req.Header.Set("Authorization", "Bearer "+base64.StdEncoding.EncodeToString(enrollResp.BiscuitToken))
@@ -2746,7 +2746,7 @@ func TestBanSurvivesKeypairRegeneration(t *testing.T) {
 			PeerId:             pID.String(),
 			PublicKey:          pubBytes,
 			RequestedRole:      api.RoleNode,
-			Timestamp:          ts,
+			ChallengeUnixMs:    ts,
 			ChallengeSignature: sig,
 		})
 		resp, err := client.Post(baseURL+"/register", "application/x-protobuf", bytes.NewReader(reqData))
@@ -2926,7 +2926,7 @@ func TestBootstrapTokenOwnerPropagatesToNode(t *testing.T) {
 		PeerId:             pID.String(),
 		PublicKey:          pubBytes,
 		RequestedRole:      api.RoleNode,
-		Timestamp:          ownerTS,
+		ChallengeUnixMs:    ownerTS,
 		ChallengeSignature: ownerSig,
 	})
 	resp, err = client.Post(baseURL+"/enroll", "application/x-protobuf", bytes.NewBuffer(enrollData))
@@ -3255,7 +3255,7 @@ func bootstrapEnroll(t *testing.T, baseURL, token string, priv crypto.PrivKey, p
 		PublicKey:          pubBytes,
 		RequestedRole:      role,
 		Labels:             labels,
-		Timestamp:          ts,
+		ChallengeUnixMs:    ts,
 		ChallengeSignature: sig,
 	})
 	if err != nil {
@@ -3820,7 +3820,7 @@ func TestAutonomousRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		reqData, err := proto.Marshal(&api.TokenRefreshRequest{Timestamp: ts, ChallengeSignature: sig, PeerId: f.pID.String()})
+		reqData, err := proto.Marshal(&api.TokenRefreshRequest{ChallengeUnixMs: ts, ChallengeSignature: sig, PeerId: f.pID.String()})
 		if err != nil {
 			t.Fatal(err)
 		}

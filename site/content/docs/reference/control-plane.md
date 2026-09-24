@@ -61,10 +61,12 @@ Responses that carry credentials are sent with `Cache-Control: no-store`.
 
 ### Enrollment and refresh
 
-Every request below carries a `timestamp` and a `challenge_signature`. The
-enrollee signs `sam:<endpoint>:<peer_id>:<unix-millis>` with its key, and the
-control plane accepts the signature within five minutes. This proves that the
-caller holds the key behind the peer ID it names.
+Every request below carries a `challenge_unix_ms` and a `challenge_signature`.
+The enrollee signs `sam:<endpoint>:<peer_id>:<challenge_unix_ms>` with its
+key, and the control plane accepts the signature within five minutes of that
+instant. This proves that the caller holds the key behind the peer ID it
+names. Every instant in a response (`expire_time` and the like) is a
+`google.protobuf.Timestamp`, an RFC 3339 string in JSON.
 
 | Route | Body | Purpose |
 |---|---|---|

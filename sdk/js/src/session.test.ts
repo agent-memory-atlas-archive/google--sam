@@ -18,6 +18,7 @@
 // plane are exercised by tests/integration/sdk_join_test.go.
 
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import { timestampFromMs } from "@bufbuild/protobuf/wkt";
 import { yamux } from "@chainsafe/libp2p-yamux";
 import { circuitRelayServer, circuitRelayTransport } from "@libp2p/circuit-relay-v2";
 import { privateKeyFromProtobuf } from "@libp2p/crypto/keys";
@@ -72,14 +73,14 @@ function fakeControlPlane(routerAddresses: string[]): typeof fetch {
             biscuitToken: mint(enroll.peerId, ROLE_NODE),
             controlPlanePublicKey: cpKey,
             routerAddresses,
-            expiration: BigInt(Math.floor(Date.now() / 1000) + 3600),
+            expireTime: timestampFromMs(Date.now() + 3600_000),
           }),
         ),
       );
     }
     if (req.method === "GET" && path === "/keys") {
       // Unsigned: the client keeps the enrollment key when /keys cannot be verified.
-      return proto(toBinary(KeysResponseSchema, create(KeysResponseSchema, { publicKeys: [cpKey], timestamp: BigInt(Date.now()) })));
+      return proto(toBinary(KeysResponseSchema, create(KeysResponseSchema, { publicKeys: [cpKey], signTime: timestampFromMs(Date.now()) })));
     }
     return new Response(`no route for ${req.method} ${path}`, { status: 404 });
   }) as typeof fetch;

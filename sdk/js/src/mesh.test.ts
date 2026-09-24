@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import { timestampFromMs } from "@bufbuild/protobuf/wkt";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -41,7 +42,7 @@ function proto(bytes: Uint8Array): Response {
 function fakeControlPlane(keysOk = true): { fetch: typeof fetch; issued: number } {
   const state = { issued: 0 };
   const signedKeys = () => {
-    const unsigned = create(KeysResponseSchema, { publicKeys: [cpKey.publicKeyRaw], timestamp: BigInt(Date.now()) });
+    const unsigned = create(KeysResponseSchema, { publicKeys: [cpKey.publicKeyRaw], signTime: timestampFromMs(Date.now()) });
     return create(KeysResponseSchema, { ...unsigned, signatures: [cpKey.sign(toBinary(KeysResponseSchema, unsigned))] });
   };
   const fetch: typeof globalThis.fetch = (async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
@@ -58,13 +59,13 @@ function fakeControlPlane(keysOk = true): { fetch: typeof fetch; issued: number 
               biscuitToken: text(`biscuit-${state.issued}`),
               controlPlanePublicKey: cpKey.publicKeyRaw,
               routerAddresses: ["/dns4/router.example/tcp/4001/p2p/12D3KooWP8iKhDf3iCMo2H3butNVfdTUtYwYWYQ75jTGnynXPFMp"],
-              expiration: BigInt(Math.floor(Date.now() / 1000) + 3600),
+              expireTime: timestampFromMs(Date.now() + 3600_000),
             }),
           ),
         );
       case "POST /refresh":
         state.issued++;
-        return proto(toBinary(TokenRefreshResponseSchema, create(TokenRefreshResponseSchema, { biscuitToken: text(`biscuit-${state.issued}`), expiresAt: BigInt(Math.floor(Date.now() / 1000) + 7200) })));
+        return proto(toBinary(TokenRefreshResponseSchema, create(TokenRefreshResponseSchema, { biscuitToken: text(`biscuit-${state.issued}`), expireTime: timestampFromMs(Date.now() + 7200_000) })));
       case "GET /keys":
         return keysOk ? proto(toBinary(KeysResponseSchema, signedKeys())) : new Response("boom", { status: 500 });
       default:

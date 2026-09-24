@@ -41,6 +41,7 @@ import (
 	"github.com/libp2p/go-msgio"
 	"github.com/multiformats/go-multiaddr"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type mockConn struct {
@@ -812,7 +813,7 @@ func TestVerifyEvent(t *testing.T) {
 	event := &api.MeshEvent{
 		Type:      api.MeshEvent_BANNED,
 		PeerId:    "attacker-peer",
-		Timestamp: time.Now().UnixMilli(),
+		EventTime: timestamppb.Now(),
 	}
 
 	// Sign it

@@ -182,7 +182,7 @@ func TestPolicyGrantsReachTheMintedToken(t *testing.T) {
 			PublicKey:          pubBytes,
 			RequestedRole:      api.RoleNode,
 			Labels:             labels,
-			Timestamp:          ts,
+			ChallengeUnixMs:    ts,
 			ChallengeSignature: sig,
 		})
 		if err != nil {

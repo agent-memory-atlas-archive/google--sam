@@ -71,7 +71,7 @@ func TestPoliciesRequiresAnAdmissibleNode(t *testing.T) {
 		PeerId:             nodePeer.String(),
 		PublicKey:          nodePubKeyBytes,
 		RequestedRole:      api.RoleNode,
-		Timestamp:          ts,
+		ChallengeUnixMs:    ts,
 		ChallengeSignature: sig,
 	}
 	reqData, err := proto.Marshal(enrollReq)

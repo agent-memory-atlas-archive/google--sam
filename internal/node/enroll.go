@@ -35,9 +35,20 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var logger = golog.Logger("sam-node")
+
+// expireUnix is the unix seconds of a control plane's expire_time for the
+// store; an unset one is 0, an already-expired credential, so the node
+// refreshes at once instead of trusting a token of unknown lifetime.
+func expireUnix(t *timestamppb.Timestamp) int64 {
+	if t == nil {
+		return 0
+	}
+	return t.AsTime().Unix()
+}
 
 // GetOrGenerateKey retrieves a persistent private key or creates one if it's the first run
 func GetOrGenerateKey(s *Store) crypto.PrivKey {
@@ -107,7 +118,7 @@ func (n *SamNode) enrollHTTP(ctx context.Context, controlPlaneURL, jwt string, p
 		PublicKey:          pubBytes,
 		RequestedRole:      n.config.RequiredRole,
 		Labels:             n.labels(),
-		Timestamp:          ts,
+		ChallengeUnixMs:    ts,
 		ChallengeSignature: sig,
 	}
 	data, err := proto.Marshal(req)
@@ -204,7 +215,7 @@ func (n *SamNode) processEnrollResponse(resp *http.Response) (*api.EnrollRespons
 	}
 	n.SetIdentityCache(enrollResp.BiscuitToken)
 
-	if err := n.Store.SaveIdentityExpiration(enrollResp.Expiration); err != nil {
+	if err := n.Store.SaveIdentityExpiration(expireUnix(enrollResp.ExpireTime)); err != nil {
 		return nil, fmt.Errorf("failed to save identity expiration: %v", err)
 	}
 	if err := n.Store.SaveMeshConfig(enrollResp.ControlPlanePublicKey, enrollResp.RouterAddresses); err != nil {
@@ -259,7 +270,7 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, b
 		PublicKey:          pubBytes,
 		RequestedRole:      n.config.RequiredRole,
 		Labels:             n.labels(),
-		Timestamp:          enrollTS,
+		ChallengeUnixMs:    enrollTS,
 		ChallengeSignature: enrollSig,
 	}
 	data, err := proto.Marshal(req)
@@ -397,7 +408,7 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, b
 	}
 	n.SetIdentityCache(enrollResp.BiscuitToken)
 
-	if err := n.Store.SaveIdentityExpiration(enrollResp.Expiration); err != nil {
+	if err := n.Store.SaveIdentityExpiration(expireUnix(enrollResp.ExpireTime)); err != nil {
 		return fmt.Errorf("failed to save identity expiration: %v", err)
 	}
 

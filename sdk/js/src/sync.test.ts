@@ -19,6 +19,7 @@
 // router are exercised by tests/integration/sdk_mesh_test.go.
 
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import { timestampFromMs } from "@bufbuild/protobuf/wkt";
 import { yamux } from "@chainsafe/libp2p-yamux";
 import { circuitRelayServer, circuitRelayTransport } from "@libp2p/circuit-relay-v2";
 import { privateKeyFromProtobuf } from "@libp2p/crypto/keys";
@@ -101,14 +102,14 @@ class FakeControlPlane {
               biscuitToken: this.current.mint(enroll.peerId, ROLE_NODE),
               controlPlanePublicKey: this.current.pub,
               routerAddresses: [routerAddr],
-              expiration: BigInt(Math.floor(Date.now() / 1000) + 3600),
+              expireTime: timestampFromMs(Date.now() + 3600_000),
             }),
           ),
         );
       }
       if (req.method === "GET" && path === "/keys") {
         // Signed as api.VerifyKeysResponse expects: each key over the set with signatures cleared.
-        const unsigned = create(KeysResponseSchema, { publicKeys: this.keys.map((k) => k.pub), timestamp: BigInt(Date.now()) });
+        const unsigned = create(KeysResponseSchema, { publicKeys: this.keys.map((k) => k.pub), signTime: timestampFromMs(Date.now()) });
         const payload = toBinary(KeysResponseSchema, unsigned);
         return proto(toBinary(KeysResponseSchema, create(KeysResponseSchema, { ...unsigned, signatures: this.keys.map((k) => k.identity.sign(payload)) })));
       }
@@ -138,7 +139,7 @@ class FakeControlPlane {
         return proto(
           toBinary(
             TokenRefreshResponseSchema,
-            create(TokenRefreshResponseSchema, { biscuitToken: this.current.mint(peerId, ROLE_NODE), expiresAt: BigInt(Math.floor(Date.now() / 1000) + 7200) }),
+            create(TokenRefreshResponseSchema, { biscuitToken: this.current.mint(peerId, ROLE_NODE), expireTime: timestampFromMs(Date.now() + 7200_000) }),
           ),
         );
       }
@@ -189,13 +190,13 @@ test("a mesh event verifies only under a trusted key and only when fresh", () =>
     return toBinary(MeshEventSchema, { ...event, signature: key.identity.sign(unsigned) });
   };
   const now = new Date();
-  const banned = sign(create(MeshEventSchema, { type: MeshEvent_Type.BANNED, peerId: "12D3KooWx", timestamp: BigInt(now.getTime()) }));
+  const banned = sign(create(MeshEventSchema, { type: MeshEvent_Type.BANNED, peerId: "12D3KooWx", eventTime: timestampFromMs(now.getTime()) }));
   assert.equal(verifyMeshEvent(banned, [key.pub], now)?.peerId, "12D3KooWx");
   assert.equal(verifyMeshEvent(banned, [new SigningKey().pub], now), undefined, "untrusted key");
   const tampered = new Uint8Array(banned);
   tampered[tampered.length - 1] = (tampered[tampered.length - 1] ?? 0) ^ 1;
   assert.equal(verifyMeshEvent(tampered, [key.pub], now), undefined, "tampered signature");
-  const stale = sign(create(MeshEventSchema, { type: MeshEvent_Type.BANNED, peerId: "12D3KooWx", timestamp: BigInt(now.getTime() - EVENT_FRESHNESS_MS - 1) }));
+  const stale = sign(create(MeshEventSchema, { type: MeshEvent_Type.BANNED, peerId: "12D3KooWx", eventTime: timestampFromMs(now.getTime() - EVENT_FRESHNESS_MS - 1) }));
   assert.equal(verifyMeshEvent(stale, [key.pub], now), undefined, "stale");
   assert.equal(verifyMeshEvent(new Uint8Array([1, 2, 3]), [key.pub], now), undefined, "garbage");
 });

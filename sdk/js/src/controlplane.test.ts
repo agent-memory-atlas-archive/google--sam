@@ -18,6 +18,7 @@
 // tests/integration/sdk_enroll_test.go.
 
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import { timestampFromMs } from "@bufbuild/protobuf/wkt";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { enrollChallenge, enrollStatusChallenge, refreshChallenge, registerChallenge } from "./challenges.ts";
@@ -66,7 +67,7 @@ function fakeFetch(routes: Record<string, Handler>): typeof fetch {
 
 /** Signs a KeysResponse the way api.SignKeysResponse does. */
 function signedKeys(signers: Identity[], timestamp = Date.now()): KeysResponse {
-  const unsigned = create(KeysResponseSchema, { publicKeys: signers.map((s) => s.publicKeyRaw), timestamp: BigInt(timestamp) });
+  const unsigned = create(KeysResponseSchema, { publicKeys: signers.map((s) => s.publicKeyRaw), signTime: timestampFromMs(timestamp) });
   const payload = toBinary(KeysResponseSchema, unsigned);
   return create(KeysResponseSchema, { ...unsigned, signatures: signers.map((s) => s.sign(payload)) });
 }
@@ -98,8 +99,8 @@ test("enrollBootstrap sends a bound proof of possession and polls until approved
       assert.deepEqual(r.publicKey, id.libp2pPublicKey);
       assert.equal(r.requestedRole, ROLE_NODE);
       assert.deepEqual(r.labels, { region: "eu" });
-      assert.ok(Math.abs(Number(r.timestamp) - Date.now()) < 5000);
-      assert.ok(verifyEd25519(id.publicKeyRaw, enrollChallenge(r.peerId, Number(r.timestamp)), r.challengeSignature));
+      assert.ok(Math.abs(Number(r.challengeUnixMs) - Date.now()) < 5000);
+      assert.ok(verifyEd25519(id.publicKeyRaw, enrollChallenge(r.peerId, Number(r.challengeUnixMs)), r.challengeSignature));
       seen.push("enroll");
       return proto(toBinary(BootstrapEnrollResponseSchema, create(BootstrapEnrollResponseSchema, { status: EnrollmentStatus.PENDING, pollIntervalSeconds: 30 })));
     },
@@ -121,7 +122,7 @@ test("enrollBootstrap sends a bound proof of possession and polls until approved
                 biscuitToken: biscuit,
                 controlPlanePublicKey: cpKey.publicKeyRaw,
                 routerAddresses: routerAddrs,
-                expiration: 1_800_000_000n,
+                expireTime: timestampFromMs(1_800_000_000_000),
               })
             : create(BootstrapEnrollResponseSchema, { status: EnrollmentStatus.PENDING, pollIntervalSeconds: 30 }),
         ),
@@ -187,8 +188,8 @@ test("register carries the JWT and the register-bound challenge", async () => {
         assert.equal(r.jwt, "eyJ.fake.jwt");
         assert.equal(r.peerId, id.peerId);
         assert.equal(r.requestedRole, "sam:role:custom");
-        assert.ok(verifyEd25519(id.publicKeyRaw, registerChallenge(r.peerId, Number(r.timestamp)), r.challengeSignature));
-        return proto(toBinary(EnrollResponseSchema, create(EnrollResponseSchema, { biscuitToken: biscuit, controlPlanePublicKey: cpKey.publicKeyRaw, expiration: 7n })));
+        assert.ok(verifyEd25519(id.publicKeyRaw, registerChallenge(r.peerId, Number(r.challengeUnixMs)), r.challengeSignature));
+        return proto(toBinary(EnrollResponseSchema, create(EnrollResponseSchema, { biscuitToken: biscuit, controlPlanePublicKey: cpKey.publicKeyRaw, expireTime: timestampFromMs(7_000) })));
       },
     }),
   });
@@ -213,8 +214,8 @@ test("refresh presents the biscuit as a bearer and signs the refresh challenge",
         assert.equal(req.headers.get("authorization"), `Bearer ${Buffer.from(biscuit).toString("base64")}`);
         const r = fromBinary(TokenRefreshRequestSchema, body);
         assert.equal(r.peerId, id.peerId);
-        assert.ok(verifyEd25519(id.publicKeyRaw, refreshChallenge(id.peerId, Number(r.timestamp)), r.challengeSignature));
-        return proto(toBinary(TokenRefreshResponseSchema, create(TokenRefreshResponseSchema, { biscuitToken: fresh, expiresAt: 99n })));
+        assert.ok(verifyEd25519(id.publicKeyRaw, refreshChallenge(id.peerId, Number(r.challengeUnixMs)), r.challengeSignature));
+        return proto(toBinary(TokenRefreshResponseSchema, create(TokenRefreshResponseSchema, { biscuitToken: fresh, expireTime: timestampFromMs(99_000) })));
       },
     }),
   });
@@ -244,7 +245,7 @@ test("verifyKeysResponse accepts a set vouched for by a trusted key and nothing 
   const forged = create(KeysResponseSchema, { ...resp, publicKeys: [Identity.generate().publicKeyRaw, retiring.publicKeyRaw] });
   assert.throws(() => verifyKeysResponse(forged, [retiring.publicKeyRaw]), /not signed by any trusted/);
 
-  const unsigned = create(KeysResponseSchema, { publicKeys: resp.publicKeys, timestamp: resp.timestamp });
+  const unsigned = create(KeysResponseSchema, { publicKeys: resp.publicKeys, signTime: resp.signTime });
   assert.throws(() => verifyKeysResponse(unsigned, [cpKey.publicKeyRaw]), /carries 0 signatures for 2 keys/);
 });
 

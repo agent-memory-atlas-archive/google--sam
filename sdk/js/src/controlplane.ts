@@ -16,6 +16,7 @@
 // (api/sam.proto). The operator plane (/admin/*, JSON) is out of scope.
 
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import { timestampMs, type Timestamp } from "@bufbuild/protobuf/wkt";
 import { enrollChallenge, enrollStatusChallenge, refreshChallenge, registerChallenge } from "./challenges.ts";
 import {
   BootstrapEnrollRequestSchema,
@@ -171,13 +172,16 @@ export function verifyKeysResponse(resp: KeysResponse, trusted: Uint8Array[], no
   if (resp.signatures.length !== resp.publicKeys.length) {
     throw new Error(`keys response carries ${resp.signatures.length} signatures for ${resp.publicKeys.length} keys`);
   }
-  const issued = Number(resp.timestamp);
-  if (Math.abs(nowMs - issued) > KEYS_RESPONSE_FRESHNESS_MS) {
-    throw new Error(`keys response timestamp ${new Date(issued).toISOString()} is outside the freshness window`);
+  if (resp.signTime === undefined) {
+    throw new Error("keys response carries no sign_time");
   }
-  // Each signature covers the set and the timestamp, deterministically
+  const issued = timestampMs(resp.signTime);
+  if (Math.abs(nowMs - issued) > KEYS_RESPONSE_FRESHNESS_MS) {
+    throw new Error(`keys response sign_time ${new Date(issued).toISOString()} is outside the freshness window`);
+  }
+  // Each signature covers the set and the signing time, deterministically
   // encoded with the signatures cleared.
-  const payload = toBinary(KeysResponseSchema, create(KeysResponseSchema, { publicKeys: resp.publicKeys, timestamp: resp.timestamp }));
+  const payload = toBinary(KeysResponseSchema, create(KeysResponseSchema, { publicKeys: resp.publicKeys, signTime: resp.signTime }));
   const keys: Uint8Array[] = [];
   let verified = false;
   resp.publicKeys.forEach((pub, i) => {
@@ -261,7 +265,7 @@ export class ControlPlaneClient {
       publicKey: identity.libp2pPublicKey,
       requestedRole: role,
       labels: params.labels ?? {},
-      timestamp: BigInt(ts),
+      challengeUnixMs: BigInt(ts),
       challengeSignature: identity.sign(enrollChallenge(identity.peerId, ts)),
     });
     let resp = fromBinary(BootstrapEnrollResponseSchema, await this.#request("POST", "/enroll", toBinary(BootstrapEnrollRequestSchema, req)));
@@ -294,7 +298,7 @@ export class ControlPlaneClient {
       publicKey: identity.libp2pPublicKey,
       requestedRole: params.role ?? ROLE_NODE,
       labels: params.labels ?? {},
-      timestamp: BigInt(ts),
+      challengeUnixMs: BigInt(ts),
       challengeSignature: identity.sign(registerChallenge(identity.peerId, ts)),
     });
     const resp = fromBinary(EnrollResponseSchema, await this.#request("POST", "/register", toBinary(EnrollRequestSchema, req)));
@@ -303,10 +307,9 @@ export class ControlPlaneClient {
     }
     return checkedEnrollment({
       biscuit: resp.biscuitToken,
-      expiration: Number(resp.expiration),
       controlPlanePublicKey: resp.controlPlanePublicKey,
       routerAddresses: resp.routerAddresses,
-    });
+    }, resp.expireTime);
   }
 
   /**
@@ -317,7 +320,7 @@ export class ControlPlaneClient {
     const { identity } = params;
     const ts = Date.now();
     const req = create(TokenRefreshRequestSchema, {
-      timestamp: BigInt(ts),
+      challengeUnixMs: BigInt(ts),
       challengeSignature: identity.sign(refreshChallenge(identity.peerId, ts)),
       peerId: identity.peerId,
     });
@@ -331,7 +334,7 @@ export class ControlPlaneClient {
     if (resp.biscuitToken.length === 0) {
       throw new Error("refresh returned an empty biscuit");
     }
-    return { biscuit: resp.biscuitToken, expiration: Number(resp.expiresAt) };
+    return { biscuit: resp.biscuitToken, expiration: expirationSeconds(resp.expireTime, "refresh") };
   }
 
   /**
@@ -397,10 +400,9 @@ function enrollmentFromBootstrapResponse(resp: BootstrapEnrollResponse): Enrollm
     case EnrollmentStatus.APPROVED:
       return checkedEnrollment({
         biscuit: resp.biscuitToken,
-        expiration: Number(resp.expiration),
         controlPlanePublicKey: resp.controlPlanePublicKey,
         routerAddresses: resp.routerAddresses,
-      });
+      }, resp.expireTime);
     case EnrollmentStatus.REJECTED:
       throw new EnrollmentRejectedError(`enrollment rejected: ${resp.errorMessage || "no reason given"}`);
     default:
@@ -408,12 +410,20 @@ function enrollmentFromBootstrapResponse(resp: BootstrapEnrollResponse): Enrollm
   }
 }
 
-function checkedEnrollment(e: Enrollment): Enrollment {
+function checkedEnrollment(e: Omit<Enrollment, "expiration">, expireTime: Timestamp | undefined): Enrollment {
   if (e.biscuit.length === 0) {
     throw new Error("received empty biscuit token");
   }
   if (e.controlPlanePublicKey.length !== ED25519_PUBLIC_KEY_SIZE) {
     throw new Error(`received invalid control plane public key size: ${e.controlPlanePublicKey.length} bytes (expected ${ED25519_PUBLIC_KEY_SIZE})`);
   }
-  return e;
+  return { ...e, expiration: expirationSeconds(expireTime, "enrollment") };
+}
+
+/** A biscuit of unknown lifetime cannot be kept fresh; the control plane must say when it expires. */
+function expirationSeconds(expireTime: Timestamp | undefined, what: string): number {
+  if (expireTime === undefined) {
+    throw new Error(`${what} response carries no expire_time`);
+  }
+  return Math.floor(timestampMs(expireTime) / 1000);
 }

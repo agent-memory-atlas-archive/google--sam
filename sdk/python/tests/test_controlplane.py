@@ -39,6 +39,19 @@ from agent_mesh.controlplane import (
     verify_keys_response,
 )
 from agent_mesh.identity import Identity, verify_ed25519
+from google.protobuf.timestamp_pb2 import Timestamp
+
+
+def _ts_ms(ms: int) -> Timestamp:
+    t = Timestamp()
+    t.FromMilliseconds(int(ms))
+    return t
+
+
+def _ts_s(seconds: int) -> Timestamp:
+    t = Timestamp()
+    t.FromSeconds(int(seconds))
+    return t
 
 CP_KEY = Identity.generate()
 BISCUIT = b"not-really-a-biscuit"
@@ -60,9 +73,9 @@ def fake_transport(routes):
 def signed_keys(signers, timestamp=None):
     """Signs a KeysResponse the way api.SignKeysResponse does."""
     ts = int(time.time() * 1000) if timestamp is None else timestamp
-    unsigned = pb.KeysResponse(public_keys=[s.public_key_raw for s in signers], timestamp=ts)
+    unsigned = pb.KeysResponse(public_keys=[s.public_key_raw for s in signers], sign_time=_ts_ms(ts))
     payload = unsigned.SerializeToString(deterministic=True)
-    return pb.KeysResponse(public_keys=list(unsigned.public_keys), timestamp=ts, signatures=[s.sign(payload) for s in signers])
+    return pb.KeysResponse(public_keys=list(unsigned.public_keys), sign_time=_ts_ms(ts), signatures=[s.sign(payload) for s in signers])
 
 
 def test_validate_control_plane_url():
@@ -92,8 +105,8 @@ def test_enroll_bootstrap_sends_bound_proof_and_polls_until_approved():
         assert r.public_key == identity.libp2p_public_key
         assert r.requested_role == ROLE_NODE
         assert dict(r.labels) == {"region": "eu"}
-        assert abs(r.timestamp - time.time() * 1000) < 5000
-        assert verify_ed25519(identity.public_key_raw, challenges.enroll_challenge(r.peer_id, r.timestamp), r.challenge_signature)
+        assert abs(r.challenge_unix_ms - time.time() * 1000) < 5000
+        assert verify_ed25519(identity.public_key_raw, challenges.enroll_challenge(r.peer_id, r.challenge_unix_ms), r.challenge_signature)
         seen.append("enroll")
         return 200, pb.BootstrapEnrollResponse(status=pb.ENROLLMENT_STATUS_PENDING, poll_interval_seconds=30).SerializeToString()
 
@@ -110,7 +123,7 @@ def test_enroll_bootstrap_sends_bound_proof_and_polls_until_approved():
             biscuit_token=BISCUIT,
             control_plane_public_key=CP_KEY.public_key_raw,
             router_addresses=router_addrs,
-            expiration=1_800_000_000,
+            expire_time=_ts_s(1_800_000_000),
         ).SerializeToString()
 
     client = ControlPlaneClient("http://127.0.0.1:1", transport=fake_transport({"POST /enroll": enroll, "GET /enroll/status": status}))
@@ -166,8 +179,8 @@ def test_register_carries_jwt_and_register_bound_challenge():
         assert r.jwt == "eyJ.fake.jwt"
         assert r.peer_id == identity.peer_id
         assert r.requested_role == "sam:role:custom"
-        assert verify_ed25519(identity.public_key_raw, challenges.register_challenge(r.peer_id, r.timestamp), r.challenge_signature)
-        return 200, pb.EnrollResponse(biscuit_token=BISCUIT, control_plane_public_key=CP_KEY.public_key_raw, expiration=7).SerializeToString()
+        assert verify_ed25519(identity.public_key_raw, challenges.register_challenge(r.peer_id, r.challenge_unix_ms), r.challenge_signature)
+        return 200, pb.EnrollResponse(biscuit_token=BISCUIT, control_plane_public_key=CP_KEY.public_key_raw, expire_time=_ts_s(7)).SerializeToString()
 
     e = ControlPlaneClient("http://127.0.0.1:1", transport=fake_transport({"POST /register": register})).register(
         identity, "eyJ.fake.jwt", role="sam:role:custom"
@@ -187,8 +200,8 @@ def test_refresh_presents_bearer_biscuit_and_signs_refresh_challenge():
         assert headers["Authorization"] == "Bearer " + base64.b64encode(BISCUIT).decode()
         r = pb.TokenRefreshRequest.FromString(body)
         assert r.peer_id == identity.peer_id
-        assert verify_ed25519(identity.public_key_raw, challenges.refresh_challenge(identity.peer_id, r.timestamp), r.challenge_signature)
-        return 200, pb.TokenRefreshResponse(biscuit_token=b"fresher-biscuit", expires_at=99).SerializeToString()
+        assert verify_ed25519(identity.public_key_raw, challenges.refresh_challenge(identity.peer_id, r.challenge_unix_ms), r.challenge_signature)
+        return 200, pb.TokenRefreshResponse(biscuit_token=b"fresher-biscuit", expire_time=_ts_s(99)).SerializeToString()
 
     result = ControlPlaneClient("http://127.0.0.1:1", transport=fake_transport({"POST /refresh": refresh})).refresh(identity, BISCUIT)
     assert result.biscuit == b"fresher-biscuit"
@@ -213,13 +226,13 @@ def test_verify_keys_response_accepts_only_a_set_vouched_for_by_a_trusted_key():
     with pytest.raises(ValueError, match="not signed by any trusted"):
         verify_keys_response(resp, [Identity.generate().public_key_raw])
     with pytest.raises(ValueError, match="freshness window"):
-        verify_keys_response(resp, [CP_KEY.public_key_raw], now_ms=resp.timestamp + KEYS_RESPONSE_FRESHNESS_MS + 1000)
+        verify_keys_response(resp, [CP_KEY.public_key_raw], now_ms=resp.sign_time.ToMilliseconds() + KEYS_RESPONSE_FRESHNESS_MS + 1000)
 
-    forged = pb.KeysResponse(public_keys=[Identity.generate().public_key_raw, retiring.public_key_raw], timestamp=resp.timestamp, signatures=list(resp.signatures))
+    forged = pb.KeysResponse(public_keys=[Identity.generate().public_key_raw, retiring.public_key_raw], sign_time=resp.sign_time, signatures=list(resp.signatures))
     with pytest.raises(ValueError, match="not signed by any trusted"):
         verify_keys_response(forged, [retiring.public_key_raw])
 
-    unsigned = pb.KeysResponse(public_keys=list(resp.public_keys), timestamp=resp.timestamp)
+    unsigned = pb.KeysResponse(public_keys=list(resp.public_keys), sign_time=resp.sign_time)
     with pytest.raises(ValueError, match="carries 0 signatures for 2 keys"):
         verify_keys_response(unsigned, [CP_KEY.public_key_raw])
 

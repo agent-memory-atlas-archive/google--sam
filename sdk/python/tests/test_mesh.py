@@ -24,6 +24,19 @@ from agent_mesh._proto import sam_pb2 as pb
 from agent_mesh.credential import decode_auth_response
 from agent_mesh.identity import Identity
 from agent_mesh.mesh import AgentMesh
+from google.protobuf.timestamp_pb2 import Timestamp
+
+
+def _ts_ms(ms: int) -> Timestamp:
+    t = Timestamp()
+    t.FromMilliseconds(int(ms))
+    return t
+
+
+def _ts_s(seconds: int) -> Timestamp:
+    t = Timestamp()
+    t.FromSeconds(int(seconds))
+    return t
 
 CP_KEY = Identity.generate()
 
@@ -37,8 +50,8 @@ class FakeControlPlane:
 
     def _signed_keys(self):
         ts = int(time.time() * 1000)
-        unsigned = pb.KeysResponse(public_keys=[CP_KEY.public_key_raw], timestamp=ts)
-        return pb.KeysResponse(public_keys=[CP_KEY.public_key_raw], timestamp=ts, signatures=[CP_KEY.sign(unsigned.SerializeToString(deterministic=True))])
+        unsigned = pb.KeysResponse(public_keys=[CP_KEY.public_key_raw], sign_time=_ts_ms(ts))
+        return pb.KeysResponse(public_keys=[CP_KEY.public_key_raw], sign_time=_ts_ms(ts), signatures=[CP_KEY.sign(unsigned.SerializeToString(deterministic=True))])
 
     def transport(self, method, url, headers, body):
         path = urllib.parse.urlsplit(url).path
@@ -49,11 +62,11 @@ class FakeControlPlane:
                 biscuit_token=f"biscuit-{self.issued}".encode(),
                 control_plane_public_key=CP_KEY.public_key_raw,
                 router_addresses=["/dns4/router.example/tcp/4001/p2p/12D3KooWP8iKhDf3iCMo2H3butNVfdTUtYwYWYQ75jTGnynXPFMp"],
-                expiration=int(time.time()) + 3600,
+                expire_time=_ts_s(int(time.time()) + 3600),
             ).SerializeToString()
         if (method, path) == ("POST", "/refresh"):
             self.issued += 1
-            return 200, pb.TokenRefreshResponse(biscuit_token=f"biscuit-{self.issued}".encode(), expires_at=int(time.time()) + 7200).SerializeToString()
+            return 200, pb.TokenRefreshResponse(biscuit_token=f"biscuit-{self.issued}".encode(), expire_time=_ts_s(int(time.time()) + 7200)).SerializeToString()
         if (method, path) == ("GET", "/keys"):
             return (200, self._signed_keys().SerializeToString()) if self.keys_ok else (500, b"boom")
         return 404, f"no route for {method} {path}".encode()

@@ -95,7 +95,7 @@ func TestIdentityEvidenceOperatorFlow(t *testing.T) {
 func verifyIdentityEvidence(t *testing.T, controlPlaneURL string, pinnedControlPlaneKey ed25519.PublicKey, expectedProvider peer.ID, local *api.IdentityEvidenceResponse, remote *api.PeerEvidenceResponse) {
 	t.Helper()
 
-	if local.ControlPlaneUrl != controlPlaneURL || len(local.Biscuit) == 0 || local.CheckedAt <= 0 || local.BiscuitExpiresAt < local.CheckedAt {
+	if local.ControlPlaneUrl != controlPlaneURL || len(local.Biscuit) == 0 || local.CheckTime == nil || local.BiscuitExpireTime == nil || local.BiscuitExpireTime.AsTime().Before(local.CheckTime.AsTime()) {
 		t.Fatalf("invalid local identity evidence: %+v", local)
 	}
 	localPeer, err := peer.Decode(local.PeerId)
@@ -110,7 +110,7 @@ func verifyIdentityEvidence(t *testing.T, controlPlaneURL string, pinnedControlP
 		t.Fatalf("third-party verification of local Biscuit failed: %v", err)
 	}
 
-	if remote.PeerId != expectedProvider.String() || len(remote.Biscuit) == 0 || len(remote.VerifyingKey) == 0 || remote.CheckedAt <= 0 || remote.Expiration < remote.CheckedAt || len(remote.RevocationIds) == 0 {
+	if remote.PeerId != expectedProvider.String() || len(remote.Biscuit) == 0 || len(remote.VerifyingKey) == 0 || remote.CheckTime == nil || remote.ExpireTime == nil || remote.ExpireTime.AsTime().Before(remote.CheckTime.AsTime()) || len(remote.RevocationIds) == 0 {
 		t.Fatalf("invalid remote identity evidence: %+v", remote)
 	}
 	if len(remote.Roles) != 1 || remote.Roles[0] != api.RoleNode || len(remote.Labels) != 0 {

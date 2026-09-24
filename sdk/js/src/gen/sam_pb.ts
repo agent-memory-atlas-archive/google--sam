@@ -26,7 +26,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file sam.proto.
  */
 export const file_sam: GenFile = /*@__PURE__*/
-  fileDesc("CglzYW0ucHJvdG8SBnNhbS52MSJDCglBdXRoRnJhbWUSDwoHYmlzY3VpdBgBIAEoDBIWCg50YXJnZXRfc2VydmljZRgCIAEoCRINCgVhZ2VudBgDIAEoCSI/CgxBdXRoUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCRIPCgdiaXNjdWl0GAMgASgMIrkBCglNZXNoRXZlbnQSJAoEdHlwZRgBIAEoDjIWLnNhbS52MS5NZXNoRXZlbnQuVHlwZRIPCgdwZWVyX2lkGAIgASgJEhEKCXRpbWVzdGFtcBgDIAEoAxIWCg5uZXdfcHVibGljX2tleRgEIAEoDBIRCglzaWduYXR1cmUYBSABKAwiNwoEVHlwZRIKCgZCQU5ORUQQABIQCgxLRVlfUk9UQVRJT04QARIRCg1QT0xJQ1lfVVBEQVRFEAIi6wEKDUVucm9sbFJlcXVlc3QSCwoDand0GAEgASgJEg8KB3BlZXJfaWQYAiABKAkSEgoKcHVibGljX2tleRgDIAEoDBIWCg5yZXF1ZXN0ZWRfcm9sZRgEIAEoCRIxCgZsYWJlbHMYBSADKAsyIS5zYW0udjEuRW5yb2xsUmVxdWVzdC5MYWJlbHNFbnRyeRIRCgl0aW1lc3RhbXAYBiABKAMSGwoTY2hhbGxlbmdlX3NpZ25hdHVyZRgHIAEoDBotCgtMYWJlbHNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIo4BCg5FbnJvbGxSZXNwb25zZRIVCg1iaXNjdWl0X3Rva2VuGAEgASgMEhUKDWVycm9yX21lc3NhZ2UYAiABKAkSIAoYY29udHJvbF9wbGFuZV9wdWJsaWNfa2V5GAMgASgMEhgKEHJvdXRlcl9hZGRyZXNzZXMYBCADKAkSEgoKZXhwaXJhdGlvbhgFIAEoAyKJAgoWQm9vdHN0cmFwRW5yb2xsUmVxdWVzdBIXCg9ib290c3RyYXBfdG9rZW4YASABKAkSDwoHcGVlcl9pZBgCIAEoCRISCgpwdWJsaWNfa2V5GAMgASgMEhYKDnJlcXVlc3RlZF9yb2xlGAQgASgJEjoKBmxhYmVscxgFIAMoCzIqLnNhbS52MS5Cb290c3RyYXBFbnJvbGxSZXF1ZXN0LkxhYmVsc0VudHJ5EhEKCXRpbWVzdGFtcBgGIAEoAxIbChNjaGFsbGVuZ2Vfc2lnbmF0dXJlGAcgASgMGi0KC0xhYmVsc0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEi4AEKF0Jvb3RzdHJhcEVucm9sbFJlc3BvbnNlEigKBnN0YXR1cxgBIAEoDjIYLnNhbS52MS5FbnJvbGxtZW50U3RhdHVzEhUKDWJpc2N1aXRfdG9rZW4YAiABKAwSHQoVcG9sbF9pbnRlcnZhbF9zZWNvbmRzGAMgASgFEhUKDWVycm9yX21lc3NhZ2UYBCABKAkSIAoYY29udHJvbF9wbGFuZV9wdWJsaWNfa2V5GAUgASgMEhgKEHJvdXRlcl9hZGRyZXNzZXMYBiADKAkSEgoKZXhwaXJhdGlvbhgHIAEoAyJTCgtTZXJ2aWNlSW5mbxIhCgR0eXBlGAEgASgOMhMuc2FtLnYxLlNlcnZpY2VUeXBlEgwKBG5hbWUYAiABKAkSEwoLZGVzY3JpcHRpb24YAyABKAkiewoOQ29tbWFuZEJhY2tlbmQSDwoHY29tbWFuZBgBIAMoCRIsCgNlbnYYAiADKAsyHy5zYW0udjEuQ29tbWFuZEJhY2tlbmQuRW52RW50cnkaKgoIRW52RW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASKKAQoWUmVnaXN0ZXJTZXJ2aWNlUmVxdWVzdBIkCgdzZXJ2aWNlGAEgASgLMhMuc2FtLnYxLlNlcnZpY2VJbmZvEhQKCnRhcmdldF91cmwYAiABKAlIABIpCgdjb21tYW5kGAMgASgLMhYuc2FtLnYxLkNvbW1hbmRCYWNrZW5kSABCCQoHYmFja2VuZCJpChJEaXNjb3ZlcmVkUHJvdmlkZXISDwoHcGVlcl9pZBgBIAEoCRIXCg9sb2NhbF9wcm94eV91cmwYAiABKAkSEAoIc3J2X25hbWUYAyABKAkSFwoPc3J2X2Rlc2NyaXB0aW9uGAQgASgJIpICCg9TZXJ2aWNlQW5ub3VuY2USDwoHcGVlcl9pZBgBIAEoCRIhCgR0eXBlGAIgASgOMhMuc2FtLnYxLlNlcnZpY2VUeXBlEhQKDHNlcnZpY2VfbmFtZRgDIAEoCRIMCgRrZXlzGAQgAygJEjMKBmxhYmVscxgFIAMoCzIjLnNhbS52MS5TZXJ2aWNlQW5ub3VuY2UuTGFiZWxzRW50cnkSFwoPYWN0aXZlX3JlcXVlc3RzGAYgASgNEhcKD2xhdGVuY3lfZXdtYV9tcxgHIAEoARIRCgl0aW1lc3RhbXAYCCABKAMaLQoLTGFiZWxzRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASKHAQoYQ29udHJvbFBsYW5lSW5mb1Jlc3BvbnNlEhMKC29pZGNfaXNzdWVyGAEgASgJEhEKCWNsaWVudF9pZBgCIAEoCRIQCghhdWRpZW5jZRgDIAEoCRIYChByb3V0ZXJfYWRkcmVzc2VzGAQgAygJEhcKD2Jhbm5lZF9wZWVyX2lkcxgFIAMoCSKkAQoSUm91dGVyTGVhc2VSZXF1ZXN0Eg8KB3BlZXJfaWQYASABKAkSEQoJYWRkcmVzc2VzGAIgAygJEg8KB2Jpc2N1aXQYAyABKAwSFwoPY29ubmVjdGVkX3BlZXJzGAQgAygJEhAKCGRodF9zaXplGAUgASgFEhEKCXRpbWVzdGFtcBgGIAEoAxIbChNjaGFsbGVuZ2Vfc2lnbmF0dXJlGAcgASgMIkkKE1JvdXRlckxlYXNlUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCRISCgpleHBpcmVzX2F0GAMgASgDIpUBCgpQb2xpY3lSb2xlEgwKBG5hbWUYASABKAkSFwoPYWxsb3dlZF90YXJnZXRzGAIgAygJEhgKEGFsbG93ZWRfc2VydmljZXMYAyADKAkSFgoOY3VzdG9tX2RhdGFsb2cYBCADKAkSFgoOYWxsb3dlZF9hZ2VudHMYBSADKAkSFgoOYWxsb3dlZF9sYWJlbHMYBiADKAkiLgoNUG9saWN5QmluZGluZxIMCgRyb2xlGAEgASgJEg8KB21lbWJlcnMYAiADKAkiWgoMUG9saWN5Q29uZmlnEiEKBXJvbGVzGAEgAygLMhIuc2FtLnYxLlBvbGljeVJvbGUSJwoIYmluZGluZ3MYAiADKAsyFS5zYW0udjEuUG9saWN5QmluZGluZyIYChZQb2xpY3lDb25maWdHZXRSZXF1ZXN0Ik0KF1BvbGljeUNvbmZpZ0dldFJlc3BvbnNlEhUKDWRhdGFsb2dfcnVsZXMYAyADKAlKBAgBEAJKBAgCEANSBXJvbGVzUghiaW5kaW5ncyI8ChpQb2xpY3lDb25maWdVcGRhdGVSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJIkoKDEtleXNSZXNwb25zZRITCgtwdWJsaWNfa2V5cxgBIAMoDBIRCgl0aW1lc3RhbXAYAiABKAMSEgoKc2lnbmF0dXJlcxgDIAMoDCJWChNUb2tlblJlZnJlc2hSZXF1ZXN0EhsKE2NoYWxsZW5nZV9zaWduYXR1cmUYASABKAwSEQoJdGltZXN0YW1wGAIgASgDEg8KB3BlZXJfaWQYAyABKAkiWAoUVG9rZW5SZWZyZXNoUmVzcG9uc2USFQoNYmlzY3VpdF90b2tlbhgBIAEoDBISCgpleHBpcmVzX2F0GAIgASgDEhUKDWVycm9yX21lc3NhZ2UYAyABKAkiOgoRTm9kZUNhdGFsb2dSZXBvcnQSJQoIc2VydmljZXMYASADKAsyEy5zYW0udjEuU2VydmljZUluZm8iJQoSVG9rZW5SZXZva2VSZXF1ZXN0Eg8KB3BlZXJfaWQYASABKAkiNQoTVG9rZW5SZXZva2VSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJIlIKC0FnZW50U2VjcmV0EgwKBGhvc3QYASABKAkSDAoEa2luZBgCIAEoCRITCgtoZWFkZXJfbmFtZRgDIAEoCRISCgp2YWx1ZV9wYXRoGAQgASgJIkIKC0FnZW50RWdyZXNzEg0KBWFsbG93GAEgAygJEiQKB3NlY3JldHMYAiADKAsyEy5zYW0udjEuQWdlbnRTZWNyZXQiYgoMQWdlbnRJbmdyZXNzEiEKBHR5cGUYASABKA4yEy5zYW0udjEuU2VydmljZVR5cGUSDAoEbmFtZRgCIAEoCRIMCgRwb3J0GAMgASgNEhMKC2Rlc2NyaXB0aW9uGAQgASgJIqoBCgtBZ2VudEJ1bmRsZRIPCgd2ZXJzaW9uGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEhMKC2V4dGVybmFsX2lkGAMgASgJEhcKD2NyZWRlbnRpYWxfcGF0aBgEIAEoCRIjCgZlZ3Jlc3MYBSABKAsyEy5zYW0udjEuQWdlbnRFZ3Jlc3MSJQoHaW5ncmVzcxgGIAMoCzIULnNhbS52MS5BZ2VudEluZ3Jlc3MiOQoSQWdlbnRBdHRhY2hSZXF1ZXN0EiMKBmJ1bmRsZRgBIAEoCzITLnNhbS52MS5BZ2VudEJ1bmRsZSJTChNBZ2VudEF0dGFjaFJlc3BvbnNlEhUKDWVncmVzc19zb2NrZXQYASABKAkSFgoOaW5ncmVzc19zb2NrZXQYAiABKAkSDQoFZXJyb3IYAyABKAkiJgoSQWdlbnREZXRhY2hSZXF1ZXN0EhAKCGFnZW50X2lkGAEgASgJIjUKE0FnZW50RGV0YWNoUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSJAChNBZ2VudFJlZnJlc2hSZXF1ZXN0EhAKCGFnZW50X2lkGAEgASgJEhcKD2NyZWRlbnRpYWxfcGF0aBgCIAEoCSJKChRBZ2VudFJlZnJlc2hSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJEhIKCmV4cGlyZXNfYXQYAyABKAMiJgoSQWdlbnRTdGF0dXNSZXF1ZXN0EhAKCGFnZW50X2lkGAEgASgJIncKC0FnZW50U3RhdHVzEhAKCGFnZW50X2lkGAEgASgJEhAKCGF0dGFjaGVkGAIgASgIEiUKB2luZ3Jlc3MYAyADKAsyFC5zYW0udjEuQWdlbnRJbmdyZXNzEh0KFWNyZWRlbnRpYWxfZXhwaXJlc19hdBgEIAEoAyJJChNBZ2VudFN0YXR1c1Jlc3BvbnNlEiMKBmFnZW50cxgBIAMoCzITLnNhbS52MS5BZ2VudFN0YXR1cxINCgVlcnJvchgCIAEoCSKrAQoYSWRlbnRpdHlFdmlkZW5jZVJlc3BvbnNlEg8KB3BlZXJfaWQYASABKAkSDwoHYmlzY3VpdBgCIAEoDBIaChJiaXNjdWl0X2V4cGlyZXNfYXQYAyABKAMSGQoRY29udHJvbF9wbGFuZV91cmwYBCABKAkSIgoadHJ1c3RlZF9jb250cm9sX3BsYW5lX2tleXMYBSADKAwSEgoKY2hlY2tlZF9hdBgGIAEoAyKHAgoUUGVlckV2aWRlbmNlUmVzcG9uc2USDwoHcGVlcl9pZBgBIAEoCRIPCgdiaXNjdWl0GAIgASgMEhUKDXZlcmlmeWluZ19rZXkYAyABKAwSDQoFcm9sZXMYBCADKAkSOAoGbGFiZWxzGAUgAygLMiguc2FtLnYxLlBlZXJFdmlkZW5jZVJlc3BvbnNlLkxhYmVsc0VudHJ5EhIKCmV4cGlyYXRpb24YBiABKAMSFgoOcmV2b2NhdGlvbl9pZHMYByADKAkSEgoKY2hlY2tlZF9hdBgIIAEoAxotCgtMYWJlbHNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIoACChBNZW1iZXJDcmVkZW50aWFsEhkKEWNvbnRyb2xfcGxhbmVfdXJsGAEgASgJEg8KB2Jpc2N1aXQYAiABKAwSLwoLZXhwaXJlX3RpbWUYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi8KDHRydXN0ZWRfa2V5cxgEIAMoCzIZLnNhbS52MS5UcnVzdGVkU2lnbmluZ0tleRIZChFpc3N1ZWRfdW5kZXJfa2V5cxgFIAMoDBIYChByb3V0ZXJfYWRkcmVzc2VzGAYgAygJEikKDG9pZGNfc2Vzc2lvbhgHIAEoCzITLnNhbS52MS5PSURDU2Vzc2lvbiJZChFUcnVzdGVkU2lnbmluZ0tleRISCgpwdWJsaWNfa2V5GAEgASgMEjAKDHJlY2VpdmVfdGltZRgCIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiWQoLT0lEQ1Nlc3Npb24SDgoGaXNzdWVyGAEgASgJEhEKCWNsaWVudF9pZBgCIAEoCRIQCghhdWRpZW5jZRgDIAEoCRIVCg1yZWZyZXNoX3Rva2VuGAQgASgJKpQBChBFbnJvbGxtZW50U3RhdHVzEiEKHUVOUk9MTE1FTlRfU1RBVFVTX1VOU1BFQ0lGSUVEEAASHQoZRU5ST0xMTUVOVF9TVEFUVVNfUEVORElORxABEh4KGkVOUk9MTE1FTlRfU1RBVFVTX0FQUFJPVkVEEAISHgoaRU5ST0xMTUVOVF9TVEFUVVNfUkVKRUNURUQQAypzCgtTZXJ2aWNlVHlwZRIcChhTRVJWSUNFX1RZUEVfVU5TUEVDSUZJRUQQABIUChBTRVJWSUNFX1RZUEVfTUNQEAESGgoWU0VSVklDRV9UWVBFX0lORkVSRU5DRRACEhQKEFNFUlZJQ0VfVFlQRV9BMkEQA0IbWhlnaXRodWIuY29tL2dvb2dsZS9zYW0vYXBpYgZwcm90bzM", [file_google_protobuf_timestamp]);
+  fileDesc("CglzYW0ucHJvdG8SBnNhbS52MSJDCglBdXRoRnJhbWUSDwoHYmlzY3VpdBgBIAEoDBIWCg50YXJnZXRfc2VydmljZRgCIAEoCRINCgVhZ2VudBgDIAEoCSI/CgxBdXRoUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCRIPCgdiaXNjdWl0GAMgASgMItYBCglNZXNoRXZlbnQSJAoEdHlwZRgBIAEoDjIWLnNhbS52MS5NZXNoRXZlbnQuVHlwZRIPCgdwZWVyX2lkGAIgASgJEi4KCmV2ZW50X3RpbWUYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhYKDm5ld19wdWJsaWNfa2V5GAQgASgMEhEKCXNpZ25hdHVyZRgFIAEoDCI3CgRUeXBlEgoKBkJBTk5FRBAAEhAKDEtFWV9ST1RBVElPThABEhEKDVBPTElDWV9VUERBVEUQAiLzAQoNRW5yb2xsUmVxdWVzdBILCgNqd3QYASABKAkSDwoHcGVlcl9pZBgCIAEoCRISCgpwdWJsaWNfa2V5GAMgASgMEhYKDnJlcXVlc3RlZF9yb2xlGAQgASgJEjEKBmxhYmVscxgFIAMoCzIhLnNhbS52MS5FbnJvbGxSZXF1ZXN0LkxhYmVsc0VudHJ5EhkKEWNoYWxsZW5nZV91bml4X21zGAYgASgDEhsKE2NoYWxsZW5nZV9zaWduYXR1cmUYByABKAwaLQoLTGFiZWxzRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASKrAQoORW5yb2xsUmVzcG9uc2USFQoNYmlzY3VpdF90b2tlbhgBIAEoDBIVCg1lcnJvcl9tZXNzYWdlGAIgASgJEiAKGGNvbnRyb2xfcGxhbmVfcHVibGljX2tleRgDIAEoDBIYChByb3V0ZXJfYWRkcmVzc2VzGAQgAygJEi8KC2V4cGlyZV90aW1lGAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKRAgoWQm9vdHN0cmFwRW5yb2xsUmVxdWVzdBIXCg9ib290c3RyYXBfdG9rZW4YASABKAkSDwoHcGVlcl9pZBgCIAEoCRISCgpwdWJsaWNfa2V5GAMgASgMEhYKDnJlcXVlc3RlZF9yb2xlGAQgASgJEjoKBmxhYmVscxgFIAMoCzIqLnNhbS52MS5Cb290c3RyYXBFbnJvbGxSZXF1ZXN0LkxhYmVsc0VudHJ5EhkKEWNoYWxsZW5nZV91bml4X21zGAYgASgDEhsKE2NoYWxsZW5nZV9zaWduYXR1cmUYByABKAwaLQoLTGFiZWxzRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASL9AQoXQm9vdHN0cmFwRW5yb2xsUmVzcG9uc2USKAoGc3RhdHVzGAEgASgOMhguc2FtLnYxLkVucm9sbG1lbnRTdGF0dXMSFQoNYmlzY3VpdF90b2tlbhgCIAEoDBIdChVwb2xsX2ludGVydmFsX3NlY29uZHMYAyABKAUSFQoNZXJyb3JfbWVzc2FnZRgEIAEoCRIgChhjb250cm9sX3BsYW5lX3B1YmxpY19rZXkYBSABKAwSGAoQcm91dGVyX2FkZHJlc3NlcxgGIAMoCRIvCgtleHBpcmVfdGltZRgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiUwoLU2VydmljZUluZm8SIQoEdHlwZRgBIAEoDjITLnNhbS52MS5TZXJ2aWNlVHlwZRIMCgRuYW1lGAIgASgJEhMKC2Rlc2NyaXB0aW9uGAMgASgJInsKDkNvbW1hbmRCYWNrZW5kEg8KB2NvbW1hbmQYASADKAkSLAoDZW52GAIgAygLMh8uc2FtLnYxLkNvbW1hbmRCYWNrZW5kLkVudkVudHJ5GioKCEVudkVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEiigEKFlJlZ2lzdGVyU2VydmljZVJlcXVlc3QSJAoHc2VydmljZRgBIAEoCzITLnNhbS52MS5TZXJ2aWNlSW5mbxIUCgp0YXJnZXRfdXJsGAIgASgJSAASKQoHY29tbWFuZBgDIAEoCzIWLnNhbS52MS5Db21tYW5kQmFja2VuZEgAQgkKB2JhY2tlbmQiaQoSRGlzY292ZXJlZFByb3ZpZGVyEg8KB3BlZXJfaWQYASABKAkSFwoPbG9jYWxfcHJveHlfdXJsGAIgASgJEhAKCHNydl9uYW1lGAMgASgJEhcKD3Nydl9kZXNjcmlwdGlvbhgEIAEoCSKyAgoPU2VydmljZUFubm91bmNlEg8KB3BlZXJfaWQYASABKAkSIQoEdHlwZRgCIAEoDjITLnNhbS52MS5TZXJ2aWNlVHlwZRIUCgxzZXJ2aWNlX25hbWUYAyABKAkSDAoEa2V5cxgEIAMoCRIzCgZsYWJlbHMYBSADKAsyIy5zYW0udjEuU2VydmljZUFubm91bmNlLkxhYmVsc0VudHJ5EhcKD2FjdGl2ZV9yZXF1ZXN0cxgGIAEoDRIXCg9sYXRlbmN5X2V3bWFfbXMYByABKAESMQoNYW5ub3VuY2VfdGltZRgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAaLQoLTGFiZWxzRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASKHAQoYQ29udHJvbFBsYW5lSW5mb1Jlc3BvbnNlEhMKC29pZGNfaXNzdWVyGAEgASgJEhEKCWNsaWVudF9pZBgCIAEoCRIQCghhdWRpZW5jZRgDIAEoCRIYChByb3V0ZXJfYWRkcmVzc2VzGAQgAygJEhcKD2Jhbm5lZF9wZWVyX2lkcxgFIAMoCSKsAQoSUm91dGVyTGVhc2VSZXF1ZXN0Eg8KB3BlZXJfaWQYASABKAkSEQoJYWRkcmVzc2VzGAIgAygJEg8KB2Jpc2N1aXQYAyABKAwSFwoPY29ubmVjdGVkX3BlZXJzGAQgAygJEhAKCGRodF9zaXplGAUgASgFEhkKEWNoYWxsZW5nZV91bml4X21zGAYgASgDEhsKE2NoYWxsZW5nZV9zaWduYXR1cmUYByABKAwiZgoTUm91dGVyTGVhc2VSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJEi8KC2V4cGlyZV90aW1lGAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKVAQoKUG9saWN5Um9sZRIMCgRuYW1lGAEgASgJEhcKD2FsbG93ZWRfdGFyZ2V0cxgCIAMoCRIYChBhbGxvd2VkX3NlcnZpY2VzGAMgAygJEhYKDmN1c3RvbV9kYXRhbG9nGAQgAygJEhYKDmFsbG93ZWRfYWdlbnRzGAUgAygJEhYKDmFsbG93ZWRfbGFiZWxzGAYgAygJIi4KDVBvbGljeUJpbmRpbmcSDAoEcm9sZRgBIAEoCRIPCgdtZW1iZXJzGAIgAygJIloKDFBvbGljeUNvbmZpZxIhCgVyb2xlcxgBIAMoCzISLnNhbS52MS5Qb2xpY3lSb2xlEicKCGJpbmRpbmdzGAIgAygLMhUuc2FtLnYxLlBvbGljeUJpbmRpbmciGAoWUG9saWN5Q29uZmlnR2V0UmVxdWVzdCJNChdQb2xpY3lDb25maWdHZXRSZXNwb25zZRIVCg1kYXRhbG9nX3J1bGVzGAMgAygJSgQIARACSgQIAhADUgVyb2xlc1IIYmluZGluZ3MiPAoaUG9saWN5Q29uZmlnVXBkYXRlUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSJmCgxLZXlzUmVzcG9uc2USEwoLcHVibGljX2tleXMYASADKAwSLQoJc2lnbl90aW1lGAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBISCgpzaWduYXR1cmVzGAMgAygMIl4KE1Rva2VuUmVmcmVzaFJlcXVlc3QSGwoTY2hhbGxlbmdlX3NpZ25hdHVyZRgBIAEoDBIZChFjaGFsbGVuZ2VfdW5peF9tcxgCIAEoAxIPCgdwZWVyX2lkGAMgASgJInUKFFRva2VuUmVmcmVzaFJlc3BvbnNlEhUKDWJpc2N1aXRfdG9rZW4YASABKAwSLwoLZXhwaXJlX3RpbWUYAiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhUKDWVycm9yX21lc3NhZ2UYAyABKAkiOgoRTm9kZUNhdGFsb2dSZXBvcnQSJQoIc2VydmljZXMYASADKAsyEy5zYW0udjEuU2VydmljZUluZm8iJQoSVG9rZW5SZXZva2VSZXF1ZXN0Eg8KB3BlZXJfaWQYASABKAkiNQoTVG9rZW5SZXZva2VSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJIlIKC0FnZW50U2VjcmV0EgwKBGhvc3QYASABKAkSDAoEa2luZBgCIAEoCRITCgtoZWFkZXJfbmFtZRgDIAEoCRISCgp2YWx1ZV9wYXRoGAQgASgJIkIKC0FnZW50RWdyZXNzEg0KBWFsbG93GAEgAygJEiQKB3NlY3JldHMYAiADKAsyEy5zYW0udjEuQWdlbnRTZWNyZXQiYgoMQWdlbnRJbmdyZXNzEiEKBHR5cGUYASABKA4yEy5zYW0udjEuU2VydmljZVR5cGUSDAoEbmFtZRgCIAEoCRIMCgRwb3J0GAMgASgNEhMKC2Rlc2NyaXB0aW9uGAQgASgJIqoBCgtBZ2VudEJ1bmRsZRIPCgd2ZXJzaW9uGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEhMKC2V4dGVybmFsX2lkGAMgASgJEhcKD2NyZWRlbnRpYWxfcGF0aBgEIAEoCRIjCgZlZ3Jlc3MYBSABKAsyEy5zYW0udjEuQWdlbnRFZ3Jlc3MSJQoHaW5ncmVzcxgGIAMoCzIULnNhbS52MS5BZ2VudEluZ3Jlc3MiOQoSQWdlbnRBdHRhY2hSZXF1ZXN0EiMKBmJ1bmRsZRgBIAEoCzITLnNhbS52MS5BZ2VudEJ1bmRsZSJTChNBZ2VudEF0dGFjaFJlc3BvbnNlEhUKDWVncmVzc19zb2NrZXQYASABKAkSFgoOaW5ncmVzc19zb2NrZXQYAiABKAkSDQoFZXJyb3IYAyABKAkiJgoSQWdlbnREZXRhY2hSZXF1ZXN0EhAKCGFnZW50X2lkGAEgASgJIjUKE0FnZW50RGV0YWNoUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSJAChNBZ2VudFJlZnJlc2hSZXF1ZXN0EhAKCGFnZW50X2lkGAEgASgJEhcKD2NyZWRlbnRpYWxfcGF0aBgCIAEoCSJnChRBZ2VudFJlZnJlc2hSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJEi8KC2V4cGlyZV90aW1lGAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCImChJBZ2VudFN0YXR1c1JlcXVlc3QSEAoIYWdlbnRfaWQYASABKAkilAEKC0FnZW50U3RhdHVzEhAKCGFnZW50X2lkGAEgASgJEhAKCGF0dGFjaGVkGAIgASgIEiUKB2luZ3Jlc3MYAyADKAsyFC5zYW0udjEuQWdlbnRJbmdyZXNzEjoKFmNyZWRlbnRpYWxfZXhwaXJlX3RpbWUYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIkkKE0FnZW50U3RhdHVzUmVzcG9uc2USIwoGYWdlbnRzGAEgAygLMhMuc2FtLnYxLkFnZW50U3RhdHVzEg0KBWVycm9yGAIgASgJIuQBChhJZGVudGl0eUV2aWRlbmNlUmVzcG9uc2USDwoHcGVlcl9pZBgBIAEoCRIPCgdiaXNjdWl0GAIgASgMEjcKE2Jpc2N1aXRfZXhwaXJlX3RpbWUYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhkKEWNvbnRyb2xfcGxhbmVfdXJsGAQgASgJEiIKGnRydXN0ZWRfY29udHJvbF9wbGFuZV9rZXlzGAUgAygMEi4KCmNoZWNrX3RpbWUYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIsACChRQZWVyRXZpZGVuY2VSZXNwb25zZRIPCgdwZWVyX2lkGAEgASgJEg8KB2Jpc2N1aXQYAiABKAwSFQoNdmVyaWZ5aW5nX2tleRgDIAEoDBINCgVyb2xlcxgEIAMoCRI4CgZsYWJlbHMYBSADKAsyKC5zYW0udjEuUGVlckV2aWRlbmNlUmVzcG9uc2UuTGFiZWxzRW50cnkSLwoLZXhwaXJlX3RpbWUYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhYKDnJldm9jYXRpb25faWRzGAcgAygJEi4KCmNoZWNrX3RpbWUYCCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wGi0KC0xhYmVsc0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEigAIKEE1lbWJlckNyZWRlbnRpYWwSGQoRY29udHJvbF9wbGFuZV91cmwYASABKAkSDwoHYmlzY3VpdBgCIAEoDBIvCgtleHBpcmVfdGltZRgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoMdHJ1c3RlZF9rZXlzGAQgAygLMhkuc2FtLnYxLlRydXN0ZWRTaWduaW5nS2V5EhkKEWlzc3VlZF91bmRlcl9rZXlzGAUgAygMEhgKEHJvdXRlcl9hZGRyZXNzZXMYBiADKAkSKQoMb2lkY19zZXNzaW9uGAcgASgLMhMuc2FtLnYxLk9JRENTZXNzaW9uIlkKEVRydXN0ZWRTaWduaW5nS2V5EhIKCnB1YmxpY19rZXkYASABKAwSMAoMcmVjZWl2ZV90aW1lGAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJZCgtPSURDU2Vzc2lvbhIOCgZpc3N1ZXIYASABKAkSEQoJY2xpZW50X2lkGAIgASgJEhAKCGF1ZGllbmNlGAMgASgJEhUKDXJlZnJlc2hfdG9rZW4YBCABKAkqlAEKEEVucm9sbG1lbnRTdGF0dXMSIQodRU5ST0xMTUVOVF9TVEFUVVNfVU5TUEVDSUZJRUQQABIdChlFTlJPTExNRU5UX1NUQVRVU19QRU5ESU5HEAESHgoaRU5ST0xMTUVOVF9TVEFUVVNfQVBQUk9WRUQQAhIeChpFTlJPTExNRU5UX1NUQVRVU19SRUpFQ1RFRBADKnMKC1NlcnZpY2VUeXBlEhwKGFNFUlZJQ0VfVFlQRV9VTlNQRUNJRklFRBAAEhQKEFNFUlZJQ0VfVFlQRV9NQ1AQARIaChZTRVJWSUNFX1RZUEVfSU5GRVJFTkNFEAISFAoQU0VSVklDRV9UWVBFX0EyQRADQhtaGWdpdGh1Yi5jb20vZ29vZ2xlL3NhbS9hcGliBnByb3RvMw", [file_google_protobuf_timestamp]);
 
 /**
  * @generated from message sam.v1.AuthFrame
@@ -108,9 +108,13 @@ export type MeshEvent = Message<"sam.v1.MeshEvent"> & {
   peerId: string;
 
   /**
-   * @generated from field: int64 timestamp = 3;
+   * When the control plane recorded the event. Receivers ignore an event
+   * further than a few minutes from their clock and, for bans, one older
+   * than the last they applied for the peer.
+   *
+   * @generated from field: google.protobuf.Timestamp event_time = 3;
    */
-  timestamp: bigint;
+  eventTime?: Timestamp | undefined;
 
   /**
    * @generated from field: bytes new_public_key = 4;
@@ -191,16 +195,18 @@ export type EnrollRequest = Message<"sam.v1.EnrollRequest"> & {
   labels: { [key: string]: string };
 
   /**
-   * Proof of possession of public_key's private half: timestamp is unix
-   * milliseconds and challenge_signature signs the UTF-8 bytes of
-   * "sam:register:<peer_id>:<timestamp>". Required, and peer_id must be
-   * derived from public_key. The JWT proves who is asking; this proves
-   * they hold the key they are asking to bind, so an identity cannot
-   * register (and overwrite) another node's peer_id.
+   * Proof of possession of public_key's private half: challenge_unix_ms is
+   * the caller's clock in unix milliseconds and challenge_signature signs
+   * the UTF-8 bytes of "sam:register:<peer_id>:<challenge_unix_ms>". It is
+   * an int64 because it is the number in the signed text, not an instant
+   * for display. Required, and peer_id must be derived from public_key.
+   * The JWT proves who is asking; this proves they hold the key they are
+   * asking to bind, so an identity cannot register (and overwrite) another
+   * node's peer_id.
    *
-   * @generated from field: int64 timestamp = 6;
+   * @generated from field: int64 challenge_unix_ms = 6;
    */
-  timestamp: bigint;
+  challengeUnixMs: bigint;
 
   /**
    * @generated from field: bytes challenge_signature = 7;
@@ -240,9 +246,9 @@ export type EnrollResponse = Message<"sam.v1.EnrollResponse"> & {
   routerAddresses: string[];
 
   /**
-   * @generated from field: int64 expiration = 5;
+   * @generated from field: google.protobuf.Timestamp expire_time = 5;
    */
-  expiration: bigint;
+  expireTime?: Timestamp | undefined;
 };
 
 /**
@@ -285,16 +291,16 @@ export type BootstrapEnrollRequest = Message<"sam.v1.BootstrapEnrollRequest"> & 
   labels: { [key: string]: string };
 
   /**
-   * Proof of possession of public_key's private half: timestamp is unix
-   * milliseconds and challenge_signature signs the UTF-8 bytes of
-   * "sam:enroll:<peer_id>:<timestamp>". Required, and peer_id must be
-   * derived from public_key: this is what entitles a repeated POST /enroll
-   * to re-fetch an existing enrollment's biscuit, so a bootstrap token
-   * alone must never satisfy it.
+   * Proof of possession of public_key's private half: challenge_unix_ms is
+   * the caller's clock in unix milliseconds and challenge_signature signs
+   * the UTF-8 bytes of "sam:enroll:<peer_id>:<challenge_unix_ms>". Required,
+   * and peer_id must be derived from public_key: this is what entitles a
+   * repeated POST /enroll to re-fetch an existing enrollment's biscuit, so
+   * a bootstrap token alone must never satisfy it.
    *
-   * @generated from field: int64 timestamp = 6;
+   * @generated from field: int64 challenge_unix_ms = 6;
    */
-  timestamp: bigint;
+  challengeUnixMs: bigint;
 
   /**
    * @generated from field: bytes challenge_signature = 7;
@@ -361,9 +367,9 @@ export type BootstrapEnrollResponse = Message<"sam.v1.BootstrapEnrollResponse"> 
   /**
    * Populated only if APPROVED
    *
-   * @generated from field: int64 expiration = 7;
+   * @generated from field: google.protobuf.Timestamp expire_time = 7;
    */
-  expiration: bigint;
+  expireTime?: Timestamp | undefined;
 };
 
 /**
@@ -541,9 +547,9 @@ export type ServiceAnnounce = Message<"sam.v1.ServiceAnnounce"> & {
   latencyEwmaMs: number;
 
   /**
-   * @generated from field: int64 timestamp = 8;
+   * @generated from field: google.protobuf.Timestamp announce_time = 8;
    */
-  timestamp: bigint;
+  announceTime?: Timestamp | undefined;
 };
 
 /**
@@ -627,15 +633,15 @@ export type RouterLeaseRequest = Message<"sam.v1.RouterLeaseRequest"> & {
   dhtSize: number;
 
   /**
-   * Proof of possession of the router's enrolled key: timestamp is unix
-   * milliseconds and challenge_signature signs the UTF-8 bytes of
-   * "sam:routers-lease:<peer_id>:<timestamp>" with the key the router
-   * enrolled with. Required. The biscuit alone is not proof: routers hand
-   * theirs to every peer they authenticate.
+   * Proof of possession of the router's enrolled key: challenge_unix_ms is
+   * the caller's clock in unix milliseconds and challenge_signature signs
+   * the UTF-8 bytes of "sam:routers-lease:<peer_id>:<challenge_unix_ms>"
+   * with the key the router enrolled with. Required. The biscuit alone is
+   * not proof: routers hand theirs to every peer they authenticate.
    *
-   * @generated from field: int64 timestamp = 6;
+   * @generated from field: int64 challenge_unix_ms = 6;
    */
-  timestamp: bigint;
+  challengeUnixMs: bigint;
 
   /**
    * @generated from field: bytes challenge_signature = 7;
@@ -665,9 +671,9 @@ export type RouterLeaseResponse = Message<"sam.v1.RouterLeaseResponse"> & {
   error: string;
 
   /**
-   * @generated from field: int64 expires_at = 3;
+   * @generated from field: google.protobuf.Timestamp expire_time = 3;
    */
-  expiresAt: bigint;
+  expireTime?: Timestamp | undefined;
 };
 
 /**
@@ -845,12 +851,12 @@ export type KeysResponse = Message<"sam.v1.KeysResponse"> & {
   publicKeys: Uint8Array[];
 
   /**
-   * Unix milliseconds at which the set was signed; receivers reject responses
-   * outside a short freshness window so a captured set cannot be replayed.
+   * When the set was signed; receivers reject responses outside a short
+   * freshness window so a captured set cannot be replayed.
    *
-   * @generated from field: int64 timestamp = 2;
+   * @generated from field: google.protobuf.Timestamp sign_time = 2;
    */
-  timestamp: bigint;
+  signTime?: Timestamp | undefined;
 
   /**
    * One ed25519 signature per entry of public_keys, by that key, over the
@@ -876,20 +882,21 @@ export const KeysResponseSchema: GenMessage<KeysResponse> = /*@__PURE__*/
 export type TokenRefreshRequest = Message<"sam.v1.TokenRefreshRequest"> & {
   /**
    * Signature with the node key over the UTF-8 bytes of
-   * "sam:refresh:<peer_id>:<timestamp>", where peer_id is the one bound in
-   * the presented biscuit. Peer- and endpoint-bound so a captured signature
-   * verifies nowhere else.
+   * "sam:refresh:<peer_id>:<challenge_unix_ms>", where peer_id is the one
+   * bound in the presented biscuit. Peer- and endpoint-bound so a captured
+   * signature verifies nowhere else.
    *
    * @generated from field: bytes challenge_signature = 1;
    */
   challengeSignature: Uint8Array;
 
   /**
-   * Unix milliseconds. Must be within the control plane's freshness window.
+   * The caller's clock in unix milliseconds, the number in the signed text.
+   * Must be within the control plane's freshness window.
    *
-   * @generated from field: int64 timestamp = 2;
+   * @generated from field: int64 challenge_unix_ms = 2;
    */
-  timestamp: bigint;
+  challengeUnixMs: bigint;
 
   /**
    * The caller's peer ID. Optional: the control plane normally reads it
@@ -922,9 +929,9 @@ export type TokenRefreshResponse = Message<"sam.v1.TokenRefreshResponse"> & {
   biscuitToken: Uint8Array;
 
   /**
-   * @generated from field: int64 expires_at = 2;
+   * @generated from field: google.protobuf.Timestamp expire_time = 2;
    */
-  expiresAt: bigint;
+  expireTime?: Timestamp | undefined;
 
   /**
    * @generated from field: string error_message = 3;
@@ -1293,9 +1300,9 @@ export type AgentRefreshResponse = Message<"sam.v1.AgentRefreshResponse"> & {
   error: string;
 
   /**
-   * @generated from field: int64 expires_at = 3;
+   * @generated from field: google.protobuf.Timestamp expire_time = 3;
    */
-  expiresAt: bigint;
+  expireTime?: Timestamp | undefined;
 };
 
 /**
@@ -1345,9 +1352,9 @@ export type AgentStatus = Message<"sam.v1.AgentStatus"> & {
   ingress: AgentIngress[];
 
   /**
-   * @generated from field: int64 credential_expires_at = 4;
+   * @generated from field: google.protobuf.Timestamp credential_expire_time = 4;
    */
-  credentialExpiresAt: bigint;
+  credentialExpireTime?: Timestamp | undefined;
 };
 
 /**
@@ -1394,9 +1401,9 @@ export type IdentityEvidenceResponse = Message<"sam.v1.IdentityEvidenceResponse"
   biscuit: Uint8Array;
 
   /**
-   * @generated from field: int64 biscuit_expires_at = 3;
+   * @generated from field: google.protobuf.Timestamp biscuit_expire_time = 3;
    */
-  biscuitExpiresAt: bigint;
+  biscuitExpireTime?: Timestamp | undefined;
 
   /**
    * @generated from field: string control_plane_url = 4;
@@ -1411,9 +1418,9 @@ export type IdentityEvidenceResponse = Message<"sam.v1.IdentityEvidenceResponse"
   trustedControlPlaneKeys: Uint8Array[];
 
   /**
-   * @generated from field: int64 checked_at = 6;
+   * @generated from field: google.protobuf.Timestamp check_time = 6;
    */
-  checkedAt: bigint;
+  checkTime?: Timestamp | undefined;
 };
 
 /**
@@ -1455,9 +1462,9 @@ export type PeerEvidenceResponse = Message<"sam.v1.PeerEvidenceResponse"> & {
   labels: { [key: string]: string };
 
   /**
-   * @generated from field: int64 expiration = 6;
+   * @generated from field: google.protobuf.Timestamp expire_time = 6;
    */
-  expiration: bigint;
+  expireTime?: Timestamp | undefined;
 
   /**
    * hex
@@ -1467,9 +1474,9 @@ export type PeerEvidenceResponse = Message<"sam.v1.PeerEvidenceResponse"> & {
   revocationIds: string[];
 
   /**
-   * @generated from field: int64 checked_at = 8;
+   * @generated from field: google.protobuf.Timestamp check_time = 8;
    */
-  checkedAt: bigint;
+  checkTime?: Timestamp | undefined;
 };
 
 /**

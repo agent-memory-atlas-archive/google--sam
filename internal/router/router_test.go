@@ -45,6 +45,7 @@ import (
 	"github.com/libp2p/go-msgio"
 	"github.com/multiformats/go-multiaddr"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func startCustomMockOIDC(t *testing.T) (string, func(claims map[string]interface{}) string) {
@@ -244,7 +245,7 @@ func TestRouterIntegration(t *testing.T) {
 		PeerId:             nodePeerID.String(),
 		PublicKey:          nodePubKeyBytes,
 		RequestedRole:      api.RoleNode,
-		Timestamp:          regTS,
+		ChallengeUnixMs:    regTS,
 		ChallengeSignature: regSig,
 	}
 	reqData, _ := proto.Marshal(enrollNodeReq)
@@ -693,7 +694,7 @@ func TestRouterGossipSubBannedEvent(t *testing.T) {
 	event := &api.MeshEvent{
 		Type:      api.MeshEvent_BANNED,
 		PeerId:    bannedPeerIDStr,
-		Timestamp: time.Now().UnixMilli(),
+		EventTime: timestamppb.Now(),
 	}
 	eventData, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
 	if err != nil {
