@@ -1,28 +1,24 @@
-# SkyPilot recipe for running a standalone SAM control plane + router (sam-one)
-# on the cheapest or Always-Free tier VM in your cloud account (GCP, AWS,
-# Azure, OCI, or Kubernetes).
+# SkyPilot recipe for deploying a standalone SAM control plane + router (sam-one)
+# on any cloud provider (GCP, AWS, Azure, OCI, or Kubernetes).
 #
-# Quick start (free TryCloudflare HTTPS tunnel, zero DNS/TLS/firewall setup):
-#   sky launch -y -c sam-hub deploy/skypilot/sam-one.yaml --detach-run
-#   sky logs sam-hub 1 --no-follow
-#
-# The startup banner in `sky logs sam-hub 1 --no-follow` prints:
-#   - API URL:      https://<name>.trycloudflare.com
-#   - Web Console:  https://<name>.trycloudflare.com/console
-#   - Admin Token & Join Token
-#   - The exact `sam-node join <URL>` command and mobile QR code
-#
-# Optional: For a permanent custom domain ($0/mo Cloudflare Named Tunnel), pass:
+# Production deployment with a permanent custom domain (Cloudflare Named Tunnel):
 #   sky launch -y -c sam-hub deploy/skypilot/sam-one.yaml --detach-run \
 #     --env SAM_EXTERNAL_URL=https://mesh.example.com \
 #     --secret CLOUDFLARE_TUNNEL_TOKEN
+#
+# Quick deployment with an automatic HTTPS tunnel:
+#   sky launch -y -c sam-hub deploy/skypilot/sam-one.yaml --detach-run
+#   sky logs sam-hub 1 --no-follow
+#
+# Note: For lightweight testing, you can lower `cpus: 0.25+` and `memory: 1+`
+# to run on cloud free-tier instances (such as GCP `e2-micro` or AWS `t4g.micro`).
 
 name: sam-hub
 
 resources:
-  cpus: 0.25+
-  memory: 1+
-  disk_size: 10
+  cpus: 2+
+  memory: 4+
+  disk_size: 20
   use_spot: false
 
 envs:

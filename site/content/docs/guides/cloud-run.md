@@ -1,6 +1,6 @@
 ---
-title: "Cloud Run & Free-Tier Hosting"
-linkTitle: "Cloud Run & Free Tiers"
+title: "Cloud Deployment"
+linkTitle: "Cloud Deployment"
 weight: 5
 aliases:
   - /docs/user/cloud-run-deployment/
@@ -8,26 +8,29 @@ aliases:
 
 `sam-one` serves its HTTP API, the web console, and the router's WebSocket
 transport on a single port (`8080`), and ships as a pre-built container image
-(`ghcr.io/google/sam-one:latest`). You can deploy a private control plane to
-your own cloud account in **one command**—without building Docker images,
-configuring container registries, or writing Terraform.
+(`ghcr.io/google/sam-one:latest`). You can deploy a production-ready standalone
+control plane and router to your cloud account in a single command—without
+building custom Docker images, configuring container registries, or maintaining
+Kubernetes manifests.
 
 ## Pick a deployment path
 
-| Platform | Command | Free Tier & Persistence | How you obtain the Control Plane URL |
+| Platform | Command | State & Persistence | How you obtain the Control Plane URL |
 |---|---|---|---|
-| **1. SkyPilot** *(Any cloud: GCP, AWS, Azure, OCI, k8s)* | `sky launch -y -c sam-hub deploy/skypilot/sam-one.yaml --detach-run` | Uses your cloud's cheapest or **Always-Free VM** (`e2-micro`, `t4g.micro`) + persistent disk + free Cloudflare HTTPS tunnel | Run `sky logs sam-hub 1 --no-follow` and copy `API URL: https://...trycloudflare.com` |
-| **2. Fly.io** | `fly launch --copy-config --config deploy/fly/fly.toml --ha=false` | 1 GB persistent `/data` volume (SQLite + keys survive restarts) + automatic TLS/WSS | `https://<your-app>.fly.dev` (also printed in `fly logs`) |
-| **3. Google Cloud Run** | `gcloud run deploy sam-one --image ghcr.io/google/sam-one:latest ...` *(below)* | Serverless container; pair with a free Postgres (Neon / Supabase) for durable state across restarts | Printed at the end of `gcloud run deploy` (`Service URL: https://...a.run.app`) |
+| **1. Google Cloud Run** | `gcloud run deploy sam-one --image ghcr.io/google/sam-one:latest ...` *(below)* | Pair with PostgreSQL (`--db-driver=postgres`) for durable state across container revisions | Printed at the end of `gcloud run deploy` (`Service URL: https://...a.run.app`) |
+| **2. SkyPilot** *(GCP, AWS, Azure, OCI, k8s)* | `sky launch -y -c sam-hub deploy/skypilot/sam-one.yaml --detach-run` | Dedicated VM disk (`~/sam-one`) + Cloudflare Named Tunnel (or custom domain) | Run `sky logs sam-hub 1 --no-follow` and read `API URL:` from the banner |
+| **3. Fly.io** | `fly launch --copy-config --config deploy/fly/fly.toml --ha=false` | Persistent `/data` volume (SQLite, keys, and tokens survive restarts) + managed TLS/WSS | `https://<your-app>.fly.dev` (also printed in `fly logs`) |
+
+*(Note: For evaluation or testing, each of these options can also run within cloud provider free tiers—such as Cloud Run with a free serverless Postgres instance, or SkyPilot with `cpus: 0.25+` on an `e2-micro` / `t4g.micro` instance.)*
 
 ---
 
-## Option 1: Google Cloud Run (1 Command)
+## Option 1: Google Cloud Run
 
-Because `sam-one` automatically detects its public `wss://` address from Cloud
-Run's `Host` / `X-Forwarded-Proto` headers on `/info` and `/enroll` and derives
-a deterministic router `PeerID` from `SAM_ADMIN_TOKEN`, deploying to Cloud Run
-takes a single command using the pre-built image:
+Because `sam-one` automatically infers its public `wss://` router address from
+Cloud Run's `Host` and `X-Forwarded-Proto` headers on `/info` and `/enroll` and
+derives a deterministic router `PeerID` from `SAM_ADMIN_TOKEN`, deploying to
+Cloud Run takes a single command using the official image:
 
 ```bash
 PROJECT=my-gcp-project
@@ -46,102 +49,50 @@ gcloud run deploy sam-one \
   --set-env-vars "SAM_TOKEN=${JOIN_TOKEN},SAM_ADMIN_TOKEN=${ADMIN_TOKEN}"
 ```
 
-### Obtain your URL and join a node
+For production durability across container restarts and new revisions, attach a
+PostgreSQL database (such as Cloud SQL, AlloyDB, or Neon) by adding:
 
-`gcloud run deploy` outputs your `Service URL` directly:
+```bash
+  --args="--data-dir=/data,--port=8080,--db-driver=postgres,--db-dsn=${POSTGRES_DSN}"
+```
+
+### Obtain your URL
+
+`gcloud run deploy` prints your `Service URL` when deployment completes:
 
 ```text
 Service [sam-one] revision [sam-one-00001-xxx] has been deployed and is serving 100 percent of traffic.
 Service URL: https://sam-one-628944397724.us-central1.run.app
 ```
 
-Verify readiness and enroll a node from anywhere:
+You can also query it at any time:
 
 ```bash
 URL=$(gcloud run services describe sam-one --project "$PROJECT" --region "$REGION" \
   --format='value(status.url)')
-
-curl -s "$URL/readyz"              # {"status":"ready"}
-
-echo -n "$JOIN_TOKEN" > join-token
-sam-node join "$URL" --bootstrap-token-path join-token
-sam-node run --daemonize
+curl -s "$URL/readyz"   # {"status":"ready"}
 ```
-
-> [!TIP]
-> **Free-tier persistent database for Cloud Run:** By default, Cloud Run's
-> filesystem is in-memory, so when an instance restarts it keeps its router
-> `PeerID` and pinned tokens (`SAM_TOKEN`, `SAM_ADMIN_TOKEN`), while enrolled
-> nodes automatically re-enroll. To persist enrolled nodes, minted tokens, and
-> policies across restarts for **$0/mo**, create a free serverless Postgres
-> database (for example on [Neon](https://neon.tech) or
-> [Supabase](https://supabase.com)) and add
-> `--args="--data-dir=/data,--port=8080,--db-driver=postgres,--db-dsn=<YOUR_POSTGRES_URI>"`
-> to `gcloud run deploy`.
 
 Why each Cloud Run flag matters:
 
 - `--min-instances 1 --max-instances 1`: the router's DHT and relay state
-  live in the single process. Two instances would be two separate meshes behind
-  one URL.
+  live in the single process. Two instances would form two separate meshes
+  behind one URL.
 - `--no-cpu-throttling`: the router runs background loops (lease renewal,
   key sync, DHT maintenance) between HTTP requests.
-- `--timeout 3600`: Cloud Run limits the lifetime of a streaming request,
-  and each node's WebSocket connection is one. Nodes reconnect seamlessly when
-  the limit closes a connection.
-- `--allow-unauthenticated`: the mesh authenticates its own callers with
+- `--timeout 3600`: Cloud Run bounds the lifetime of a streaming request,
+  and each node's WebSocket connection is one. Nodes reconnect automatically
+  when the limit closes a connection.
+- `--allow-unauthenticated`: the mesh authenticates its own callers using
   Biscuit credentials and tokens.
 
 ---
 
-## Option 2: SkyPilot (Multi-Cloud & Always-Free VMs)
+## Option 2: SkyPilot (Multi-Cloud VMs)
 
 If you use [SkyPilot](https://docs.skypilot.co/) (`sky check`) with your GCP,
-AWS, Azure, OCI, or Kubernetes account, launch the included recipe in the
-background:
-
-```bash
-sky launch -y -c sam-hub deploy/skypilot/sam-one.yaml --detach-run
-```
-
-SkyPilot provisions the cheapest available VM (including `e2-micro` / `t4g.micro`
-Always-Free instances), installs `sam-one`, and opens an outbound Cloudflare
-HTTPS tunnel (requiring zero inbound firewall ports or DNS setup).
-
-### Obtain your URL and join token from SkyPilot logs
-
-Read the startup banner from job `1`:
-
-```bash
-sky logs sam-hub 1 --no-follow
-```
-
-```text
-══════════════════════════════════════════════════════════════════
-SAM standalone mesh is ready!
-
-API URL:      https://distinct-kent-bradford-elderly.trycloudflare.com
-Tunnel:       https://distinct-kent-bradford-elderly.trycloudflare.com -> http://0.0.0.0:8080
-Web Console:  https://distinct-kent-bradford-elderly.trycloudflare.com/console
-Router Peer:  12D3KooWScRWXVx2zSaPWC7NectYnuyhaGxpLYkNgCkp2g2tkfkY
-Admin Token:  sam_adm_e4075529d72bb22d78446799f683dd89
-Join Token:   sam_tok_05a5d01cf091187c980e68e1bd7d7d7a
-
-To enroll a node:
-  sam-node join https://distinct-kent-bradford-elderly.trycloudflare.com --bootstrap-token-path /home/gcpuser/sam-one/join-token
-══════════════════════════════════════════════════════════════════
-```
-
-Save the `Join Token` on your local machine and join:
-
-```bash
-echo -n "sam_tok_..." > join-token
-sam-node join https://distinct-kent-bradford-elderly.trycloudflare.com --bootstrap-token-path join-token
-sam-node run --daemonize
-```
-
-To use a **permanent custom domain** for **$0/mo** via a Cloudflare Named
-Tunnel instead of a random `trycloudflare.com` hostname:
+AWS, Azure, OCI, or Kubernetes credentials, launch [`deploy/skypilot/sam-one.yaml`](https://github.com/google/sam/blob/main/deploy/skypilot/sam-one.yaml)
+with a permanent custom domain backed by a Cloudflare Named Tunnel:
 
 ```bash
 sky launch -y -c sam-hub deploy/skypilot/sam-one.yaml --detach-run \
@@ -149,27 +100,70 @@ sky launch -y -c sam-hub deploy/skypilot/sam-one.yaml --detach-run \
   --secret CLOUDFLARE_TUNNEL_TOKEN
 ```
 
-To tear down the SkyPilot hub when done:
+For quick testing without a custom domain, omit `--env` and `--secret` to open
+an automatic `trycloudflare.com` HTTPS tunnel:
 
 ```bash
-sky down -y sam-hub
+sky launch -y -c sam-hub deploy/skypilot/sam-one.yaml --detach-run
+sky logs sam-hub 1 --no-follow
 ```
+
+Read the `API URL`, `Admin Token`, and `Join Token` printed in the banner from
+`sky logs sam-hub 1 --no-follow`.
 
 ---
 
-## Option 3: Fly.io (1 Command + Persistent Volume)
+## Option 3: Fly.io (Persistent Volume)
 
 The repository includes [`deploy/fly/fly.toml`](https://github.com/google/sam/blob/main/deploy/fly/fly.toml),
-which deploys `ghcr.io/google/sam-one:latest` with a 1 GB persistent volume
-mounted at `/data` (so SQLite, `router.key`, `join-token`, and `admin-token`
-persist across restarts):
+which deploys `ghcr.io/google/sam-one:latest` with a persistent volume mounted
+at `/data` so SQLite, `router.key`, `join-token`, and `admin-token` survive
+restarts:
 
 ```bash
 fly launch --copy-config --config deploy/fly/fly.toml --ha=false
 ```
 
-Once deployed, run `fly logs` to read your `Admin Token`, `Join Token`, and
+Run `fly logs` to read your `Admin Token`, `Join Token`, and
 `sam-node join https://<your-app>.fly.dev` command from the startup banner.
+
+---
+
+## Verify the dataplane with two nodes
+
+Once your control plane URL (`$URL`) is ready, verify end-to-end service
+discovery, Biscuit authorization, and WebSocket relay routing across two nodes:
+
+1. **Mint a bootstrap token** (or use `$JOIN_TOKEN`):
+   ```bash
+   export SAM_ADMIN_TOKEN="$ADMIN_TOKEN"
+   sam-one token create --server "$URL" --description "smoke-test" --max-usages 2
+   ```
+2. **Start Node A (exposing a service)**:
+   ```bash
+   cat > node-a.yaml <<'EOF'
+   version: "v1alpha1"
+   services:
+     - type: inference
+       name: prod-llm
+       target_url: "http://127.0.0.1:11434"
+   EOF
+
+   sam-node run --control-plane "$URL" \
+     --bootstrap-token-path join-token \
+     --config node-a.yaml --data-dir ~/node-a --bind-addr=
+   ```
+3. **Start Node B and call Node A's service through the mesh**:
+   ```bash
+   sam-node run --control-plane "$URL" \
+     --bootstrap-token-path join-token \
+     --data-dir ~/node-b --bind-addr=
+
+   curl -s --unix-socket ~/node-b/sam.sock http://localhost/v1/models
+   curl -s --unix-socket ~/node-b/sam.sock http://localhost/v1/chat/completions \
+     -H 'Content-Type: application/json' \
+     -d '{"model":"gemma3:1b","messages":[{"role":"user","content":"Ping across the mesh"}]}'
+   ```
 
 ---
 
