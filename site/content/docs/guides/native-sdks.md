@@ -289,7 +289,7 @@ JavaScript, `call.js`:
 // Kubernetes projected service account token), and keeps the identity and
 // credential in SAM_STATE_DIR; later runs resume from there without it.
 import { homedir } from "node:os";
-import { AgentMesh } from "@sam-mesh/sdk";
+import { AgentMesh, type DiscoveredProvider } from "@sam-mesh/sdk";
 
 const [service = "mcp://greeter", toolOrPath = "greet", args = '{"name": "world"}'] = process.argv.slice(2);
 
@@ -304,9 +304,23 @@ const mesh = await AgentMesh.enroll({
 const session = await mesh.join();
 console.log(`on the mesh as ${session.peerId}`);
 
-const [provider] = await session.discover(service);
-if (provider === undefined) {
+const providers = await session.discover(service);
+if (providers.length === 0) {
   throw new Error(`no member of the mesh serves ${service}`);
+}
+// A provider record can outlive its member; the first that answers is used.
+let provider: DiscoveredProvider | undefined;
+for (const candidate of providers) {
+  try {
+    await session.connect(candidate);
+    provider = candidate;
+    break;
+  } catch (err) {
+    console.error(`${candidate.peerId}: ${(err as Error).message}`);
+  }
+}
+if (provider === undefined) {
+  throw new Error(`no provider of ${service} is reachable`);
 }
 console.log(`${service} is served by ${provider.peerId}`);
 
@@ -371,7 +385,15 @@ async def main() -> None:
         providers = await session.discover(service)
         if not providers:
             raise SystemExit(f"no member of the mesh serves {service}")
-        provider = providers[0]
+        # A provider record can outlive its member; the first that answers is used.
+        for provider in providers:
+            try:
+                await session.connect(provider)
+                break
+            except (ConnectionError, PermissionError) as err:
+                print(f"{provider.peer_id}: {err}", file=sys.stderr)
+        else:
+            raise SystemExit(f"no provider of {service} is reachable")
         print(f"{service} is served by {provider.peer_id}")
 
         if service.startswith("mcp://"):

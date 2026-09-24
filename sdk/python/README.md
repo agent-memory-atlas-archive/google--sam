@@ -77,7 +77,15 @@ async def main() -> None:
         providers = await session.discover(service)
         if not providers:
             raise SystemExit(f"no member of the mesh serves {service}")
-        provider = providers[0]
+        # A provider record can outlive its member; the first that answers is used.
+        for provider in providers:
+            try:
+                await session.connect(provider)
+                break
+            except (ConnectionError, PermissionError) as err:
+                print(f"{provider.peer_id}: {err}", file=sys.stderr)
+        else:
+            raise SystemExit(f"no provider of {service} is reachable")
         print(f"{service} is served by {provider.peer_id}")
 
         if service.startswith("mcp://"):

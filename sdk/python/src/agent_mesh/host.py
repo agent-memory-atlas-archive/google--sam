@@ -23,16 +23,19 @@ from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
 import multiaddr
+import trio
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from libp2p import new_host
 from libp2p.abc import IHost
 from libp2p.crypto.ed25519 import create_new_key_pair
 from libp2p.custom_types import TProtocol
+from libp2p.peer.peerinfo import PeerInfo, info_from_p2p_addr
 from libp2p.security.tls.transport import PROTOCOL_ID as TLS_PROTOCOL_ID
 from libp2p.security.tls.transport import IdentityConfig, TLSTransport
 from libp2p.stream_muxer.yamux.yamux import PROTOCOL_ID as YAMUX_PROTOCOL_ID
 from libp2p.stream_muxer.yamux.yamux import Yamux
+from multiaddr.resolvers import DNSResolver
 
 from .identity import Identity
 
@@ -71,3 +74,41 @@ def create_mesh_host(identity: Identity, listen_addrs: Sequence[str] = ()) -> tu
     if str(host.get_id()) != identity.peer_id:
         raise RuntimeError(f"libp2p derived peer {host.get_id()} for identity {identity.peer_id}")
     return host, [multiaddr.Multiaddr(a) for a in listen_addrs]
+
+
+_DNS_PROTOCOLS = frozenset({"dnsaddr", "dns", "dns4", "dns6"})
+# py-libp2p dials TCP only; a resolved address on another transport is noise.
+_UNDIALABLE_PROTOCOLS = frozenset({"quic", "quic-v1", "ws", "wss", "webtransport", "webrtc", "webrtc-direct"})
+_DNS_TIMEOUT = 10.0
+
+
+async def dial_addrs(addr: multiaddr.Multiaddr) -> list[multiaddr.Multiaddr]:
+    """The concrete addresses this host can dial for addr. A control plane
+    hands out router addresses as `/dnsaddr/<host>/p2p/<id>`, resolved here
+    through the host's `_dnsaddr` TXT records (and `/dns4`, `/dns6`, `/dns`
+    through A and AAAA records) the way go-libp2p and js-libp2p do before
+    dialing; py-libp2p does not, and would report no transport for them.
+    Addresses on transports this host lacks are left out."""
+    protocols = [p.name for p in addr.protocols()]
+    if protocols and protocols[0] in _DNS_PROTOCOLS:
+        resolved: list[multiaddr.Multiaddr] = []
+        with trio.move_on_after(_DNS_TIMEOUT):
+            resolved = list(await DNSResolver().resolve(addr))
+        if not resolved:
+            raise RuntimeError(f"{addr} resolved to no address")
+    else:
+        resolved = [addr]
+    dialable: list[multiaddr.Multiaddr] = []
+    for m in resolved:
+        names = {p.name for p in m.protocols()}
+        if "tcp" in names and not names & _UNDIALABLE_PROTOCOLS:
+            dialable.append(m)
+    if not dialable:
+        raise RuntimeError(f"{addr} offers no TCP address; this host dials TCP only")
+    return dialable
+
+
+async def peer_info(addr: multiaddr.Multiaddr) -> PeerInfo:
+    """The peer an address names and the concrete addresses to reach it on."""
+    addrs = await dial_addrs(addr)
+    return PeerInfo(info_from_p2p_addr(addrs[0]).peer_id, addrs)
