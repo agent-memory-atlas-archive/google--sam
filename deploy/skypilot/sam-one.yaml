@@ -39,7 +39,10 @@ setup: |
       aarch64*|arm64*) ARCH_NAME="arm64" ;;
       *) echo "Unsupported architecture: ${ARCH}" >&2; exit 1 ;;
     esac
-    VERSION=$(curl -fsSL "https://api.github.com/repos/google/sam/releases?per_page=1" | grep '"tag_name":' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+    VERSION=$(curl -fsSL -o /dev/null -w "%{url_effective}" "https://github.com/google/sam/releases/latest" | sed 's|.*/||')
+    if [[ -z "${VERSION}" || "${VERSION}" == "releases" ]]; then
+      VERSION=$(curl -fsSL "https://api.github.com/repos/google/sam/releases?per_page=1" | grep '"tag_name":' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+    fi
     TMP_DIR=$(mktemp -d)
     curl -fsSL -o "${TMP_DIR}/sam.tar.gz" "https://github.com/google/sam/releases/download/${VERSION}/sam_Linux_${ARCH_NAME}.tar.gz"
     tar -xzf "${TMP_DIR}/sam.tar.gz" -C "${TMP_DIR}"
