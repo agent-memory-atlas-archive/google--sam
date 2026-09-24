@@ -3,9 +3,9 @@
 This directory holds the SDKs that let an agent join a SAM mesh from inside
 its own process, without a `sam-node` sidecar. Two languages are in scope:
 
-- [`js/`](js/) — `@agent-mesh/sdk`, TypeScript for Node.js, built on
+- [`js/`](js/) — `@sam-mesh/sdk`, TypeScript for Node.js, built on
   [js-libp2p](https://github.com/libp2p/js-libp2p).
-- [`python/`](python/) — `agent-mesh` (import `agent_mesh`), built on
+- [`python/`](python/) — `sam-mesh` (import `agent_mesh`), built on
   [py-libp2p](https://github.com/libp2p/py-libp2p).
 
 The motivation is [issue #480](https://github.com/google/sam/issues/480). The
@@ -46,7 +46,7 @@ Milestones 1 to 5 are implemented and tested in both languages:
 | Control plane pull on `sam-node`'s interval: `/keys` verified against the trusted set, credential refresh after a rotation, `/info` bans and router addresses | yes | yes |
 | Gossip events from the control plane (`/sam/mesh/events/v1`, StrictSign): ban enforced at once, key rotation adopted, policy update pulls | yes | yes |
 | Banned peers refused: connections dropped and denied, handshakes and requests refused, dials refused | yes | yes |
-| Published to a registry from the release workflow | npm `@agent-mesh/sdk` | PyPI `agent-mesh` |
+| Published to a registry from the release workflow | npm `@sam-mesh/sdk` | PyPI `sam-mesh` |
 
 A member built this way is on the mesh and uses it in both directions: it
 finds a service in the DHT and calls it through the router, verifying the
@@ -382,12 +382,19 @@ holds against the control plane's records.
   dial one; its connections are dropped when the ban lands.
 - Publishing: `.github/workflows/release.yml` stamps the release tag's
   version on both packages (`hack/sdk-version.sh`) and publishes
-  `@agent-mesh/sdk` to npm and `agent-mesh` to PyPI through trusted
-  publishing. One-time setup by a package owner: on npmjs.com, add
-  `google/sam` with workflow `release.yml` as a trusted publisher of
-  `@agent-mesh/sdk`; on pypi.org, add the same repository and workflow as
-  a trusted publisher of `agent-mesh` (environment left empty). No
-  publishing token is stored in the repository.
+  `@sam-mesh/sdk` to npm and `sam-mesh` to PyPI through trusted
+  publishing. The job runs only when the repository variable
+  `PUBLISH_SDKS` is `true`, so a release before the registries are set up
+  stays green. One-time setup by a package owner: on npmjs.com, create the
+  `sam-mesh` organization, publish `@sam-mesh/sdk` 0.1.0 once by hand
+  (`cd sdk/js && npm publish --access public`; the trusted-publisher
+  settings live on the package page, which exists only after that), then
+  register `google/sam` with workflow `release.yml` under the package's
+  Settings, Trusted publishing; on pypi.org, add a pending publisher for
+  project `sam-mesh` with the same repository and workflow (environment
+  left empty), which reserves the name and lets the first tag create the
+  project. Then set `PUBLISH_SDKS`. No publishing token is stored in the
+  repository.
 - Docs: `site/content/docs/guides/native-sdks.md`.
 - Tests. Unit: a fake control plane rotates its key and bans a peer; each
   SDK learns both from a pull, refreshes under the new key and only under

@@ -18,8 +18,8 @@ agent (see [Headless enrollment](../headless-enrollment/)).
 ## Install
 
 ```bash
-npm install @agent-mesh/sdk          # Node.js 22 or later
-pip install agent-mesh               # Python 3.11 or later
+npm install @sam-mesh/sdk          # Node.js 22 or later
+pip install sam-mesh               # Python 3.11 or later
 ```
 
 Both packages are published from the repository's release workflow, at the
@@ -36,7 +36,7 @@ agent enrolls once and resumes with `load` afterwards.
 JavaScript:
 
 ```ts
-import { AgentMesh } from "@agent-mesh/sdk";
+import { AgentMesh } from "@sam-mesh/sdk";
 
 const mesh = await AgentMesh.enroll({
   controlPlaneUrl: "https://hub.sam-mesh.dev",

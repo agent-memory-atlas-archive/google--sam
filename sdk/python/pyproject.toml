@@ -3,7 +3,7 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agent-mesh"
+name = "sam-mesh"
 version = "0.1.0"
 description = "Native SDK for joining a SAM agent mesh from inside a Python agent process"
 readme = "README.md"

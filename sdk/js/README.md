@@ -1,4 +1,4 @@
-# @agent-mesh/sdk
+# @sam-mesh/sdk
 
 Native JavaScript SDK for joining a SAM agent mesh from inside the agent
 process. It replaces the `sam-node` sidecar for agents written for Node.js.
@@ -11,19 +11,20 @@ calling their tools). Serving tools is the next milestone; see
 ## Install
 
 ```bash
-cd sdk/js && npm ci && npm run build
+npm install @sam-mesh/sdk            # from npm, released with the repository
+cd sdk/js && npm ci && npm run build # from a checkout
 ```
 
 Requires Node.js 22.18 or later. Runtime dependencies are
-`@bufbuild/protobuf`, `@biscuit-auth/biscuit-wasm`, `@modelcontextprotocol/sdk`
-and the js-libp2p packages (`libp2p`, `@libp2p/tcp`, `@libp2p/tls`,
+`@bufbuild/protobuf`, `@biscuit-auth/biscuit-wasm`, `@modelcontextprotocol/sdk`,
+`zod` and the js-libp2p packages (`libp2p`, `@libp2p/tcp`, `@libp2p/tls`,
 `@chainsafe/libp2p-yamux`, `@libp2p/circuit-relay-v2`, `@libp2p/identify`,
-`@libp2p/kad-dht`, `@libp2p/ping`).
+`@libp2p/kad-dht`, `@libp2p/ping`, `@libp2p/gossipsub`, `@libp2p/peer-id`).
 
 ## Use
 
 ```ts
-import { AgentMesh } from "@agent-mesh/sdk";
+import { AgentMesh } from "@sam-mesh/sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 

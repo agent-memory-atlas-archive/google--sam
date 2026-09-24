@@ -1,5 +1,5 @@
 {
-  "name": "@agent-mesh/sdk",
+  "name": "@sam-mesh/sdk",
   "version": "0.1.0",
   "description": "Native SDK for joining a SAM agent mesh from inside a Node.js agent process",
   "license": "Apache-2.0",

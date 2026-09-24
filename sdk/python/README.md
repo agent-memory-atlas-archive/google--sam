@@ -1,4 +1,4 @@
-# agent-mesh (Python)
+# sam-mesh (Python)
 
 Native Python SDK for joining a SAM agent mesh from inside the agent
 process. It replaces the `sam-node` sidecar for agents written in Python.
@@ -12,13 +12,14 @@ calling their tools). Serving tools is the next milestone; see
 ## Install
 
 ```bash
-pip install -e 'sdk/python[test]'
+pip install sam-mesh                 # from PyPI, released with the repository
+pip install -e 'sdk/python[test]'    # from a checkout
 ```
 
 Runtime dependencies are `cryptography`, `protobuf`, `biscuit-python`,
-`libp2p` (py-libp2p 0.7, trio-based), `multiaddr` and `mcp` (2.x). Python
-3.11 or later. py-libp2p's `fastecdsa` builds from source against GMP
-(`libgmp-dev` on Debian).
+`libp2p` (py-libp2p 0.7, trio-based), `multiaddr`, `mcp` (2.x), `h11` and
+`httpx`. Python 3.11 or later. py-libp2p's `fastecdsa` builds from source
+against GMP (`libgmp-dev` on Debian).
 
 ## Use
 
