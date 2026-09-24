@@ -40,6 +40,8 @@ spec:
         image: ghcr.io/berriai/litellm:main-latest
         command:
           - "litellm"
+          - "--host"
+          - "127.0.0.1"
           - "--model"
           - "openrouter/auto"
           - "--port"
@@ -50,8 +52,8 @@ spec:
               secretKeyRef:
                 name: openrouter-secret-${ENV_NAME}
                 key: api-key
-        ports:
-          - containerPort: 4000
+          - name: LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY
+            value: "true"
         resources:
           requests:
             cpu: 100m
