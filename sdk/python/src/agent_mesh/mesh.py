@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import os
 import threading
-from dataclasses import replace
+import time
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Mapping, Optional
 
@@ -26,6 +27,22 @@ from .identity import Identity
 
 _IDENTITY_FILE = "identity.key"
 _CREDENTIAL_FILE = "credential.json"
+
+
+@dataclass(frozen=True)
+class ControlPlaneSync:
+    """What one pull from the control plane changed."""
+
+    # The trusted key set differs from before the pull.
+    keys_changed: bool
+    # The credential was re-issued because a rotation had happened since.
+    refreshed: bool
+    # The control plane's ban set, when /info answered.
+    banned_peer_ids: Optional[list[str]]
+    # When /info was asked (unix seconds); a ban recorded later cannot be in the answer.
+    fetched_at: float
+    # One entry per part that failed; empty when everything landed.
+    errors: list[str] = field(default_factory=list)
 
 
 class AgentMesh:
@@ -102,6 +119,7 @@ class AgentMesh:
                 biscuit=enrollment.biscuit,
                 expiration=enrollment.expiration,
                 control_plane_keys=control_plane_keys,
+                issued_under_keys=list(control_plane_keys),
                 router_addresses=list(enrollment.router_addresses),
             ),
             state,
@@ -138,10 +156,60 @@ class AgentMesh:
         except Exception:  # noqa: BLE001 - a failed /keys sync must not cost the new biscuit
             pass
         self._credential = replace(
-            self._credential, biscuit=result.biscuit, expiration=result.expiration, control_plane_keys=control_plane_keys
+            self._credential,
+            biscuit=result.biscuit,
+            expiration=result.expiration,
+            control_plane_keys=control_plane_keys,
+            issued_under_keys=list(control_plane_keys),
         )
         self.save()
         return self._credential
+
+    def add_trusted_key(self, key: bytes) -> bool:
+        """Adopts a signing key announced by a KEY_ROTATION event, so peers whose
+        credentials the new key signs verify before the next pull confirms it."""
+        if any(bytes(k) == bytes(key) for k in self._credential.control_plane_keys):
+            return False
+        self._credential = replace(self._credential, control_plane_keys=[*self._credential.control_plane_keys, bytes(key)])
+        return True
+
+    def sync_control_plane(self) -> ControlPlaneSync:
+        """The member's pull from the control plane, as sam-node's SyncControlPlane:
+        the signing keys (verified against the set already trusted, so whoever
+        answers the URL cannot become the trust root), a credential refresh when
+        a rotation happened since it was issued, and /info for the router
+        addresses and the ban set. Each part is attempted even when another
+        fails; the errors are reported together. Gossip events only bring this
+        forward; they are never the only way state arrives."""
+        errors: list[str] = []
+        keys_changed = False
+        refreshed = False
+        try:
+            keys = self.control_plane.keys(self._credential.control_plane_keys)
+            if not keys:
+                raise ValueError("/keys returned no keys")
+            keys_changed = {bytes(k) for k in keys} != {bytes(k) for k in self._credential.control_plane_keys}
+            self._credential = replace(self._credential, control_plane_keys=list(keys))
+            if self._credential.predates_rotation():
+                self.refresh()
+                refreshed = True
+        except Exception as err:  # noqa: BLE001 - reported, the other parts still run
+            errors.append(f"keys: {err}")
+
+        banned_peer_ids: Optional[list[str]] = None
+        # Taken before the request: a ban recorded after this instant cannot be
+        # in the answer, so its absence must not be read as an unban.
+        fetched_at = time.time()
+        try:
+            info = self.control_plane.info()
+            if info.router_addresses:
+                self._credential = replace(self._credential, router_addresses=list(info.router_addresses))
+            banned_peer_ids = list(info.banned_peer_ids)
+        except Exception as err:  # noqa: BLE001
+            errors.append(f"info: {err}")
+        if keys_changed or banned_peer_ids is not None:
+            self.save()
+        return ControlPlaneSync(keys_changed=keys_changed, refreshed=refreshed, banned_peer_ids=banned_peer_ids, fetched_at=fetched_at, errors=errors)
 
     def auth_frame(self, target_service: str = "", agent: str = "") -> bytes:
         """The frame that opens every stream to a peer: this member's biscuit plus

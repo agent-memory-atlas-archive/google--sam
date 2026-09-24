@@ -37,7 +37,8 @@ print(mesh.peer_id)                      # 12D3Koo...
 
 async def main():
     # On the mesh: authenticated with a router, reachable through it,
-    # credential kept fresh for as long as the block is open.
+    # credential kept fresh, keys, bans and policy followed from the control
+    # plane for as long as the block is open.
     async with mesh.join() as session:
         print(session.relay_addresses)
         # Reach another member (directly or through a router) and verify it.
@@ -115,6 +116,9 @@ A plaintext `http://` control plane is accepted only on loopback. Pass
 - `agent_mesh.serve`: the `/sam/mcp/1.0.0` server, the `/libp2p-http`
   server and client (`h11` on the stream), and the service registry behind
   `session.serve()`.
+- `agent_mesh.sync`: the ban set and the control plane's gossip events;
+  `session.sync()` pulls keys, bans and router addresses as
+  `internal/node/controlplane_sync.go` does.
 - `agent_mesh._proto`, `agent_mesh._gen`: generated from `api/sam.proto`,
   `sdk/python/proto/circuit.proto` and `api/datalog.go` by
   `hack/gen-sdk-proto.sh`.

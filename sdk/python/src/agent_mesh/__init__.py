@@ -33,7 +33,7 @@ from .credential import MeshCredential, decode_auth_response, encode_auth_frame
 from .discovery import DHT_PROTOCOL, DiscoveredProvider, find_providers, parse_service_target, provide, service_key
 from .identity import Identity, libp2p_public_key, peer_id_from_public_key, verify_ed25519
 from .mcp_client import LabelsNotSatisfiedError, ToolCallResult, open_mcp_session, require_labels
-from .mesh import AgentMesh
+from .mesh import AgentMesh, ControlPlaneSync
 from .relay import dial_through_relay, reserve_relay
 from .serve import (
     HTTP_PROTOCOL,
@@ -49,6 +49,7 @@ from .serve import (
     mcp_stream_handler,
 )
 from .session import AdmittedRouter, MeshSession
+from .sync import GOSSIP_EVENTS_TOPIC, BanSet, verify_mesh_event
 
 __version__ = "0.1.0"
 
@@ -60,13 +61,16 @@ __all__ = [
     "AuthorizationError",
     "AuthorizeRequest",
     "BASELINE_DATALOG",
+    "BanSet",
     "BiscuitVerificationError",
     "ControlPlaneClient",
     "ControlPlaneError",
+    "ControlPlaneSync",
     "DHT_PROTOCOL",
     "DiscoveredProvider",
     "Enrollment",
     "EnrollmentRejectedError",
+    "GOSSIP_EVENTS_TOPIC",
     "HTTP_PROTOCOL",
     "HTTPHandler",
     "HTTPRequest",
@@ -113,5 +117,6 @@ __all__ = [
     "validate_control_plane_url",
     "verify_ed25519",
     "verify_keys_response",
+    "verify_mesh_event",
     "verify_peer_biscuit",
 ]

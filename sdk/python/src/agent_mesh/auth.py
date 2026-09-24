@@ -78,17 +78,22 @@ def auth_stream_handler(
     own_biscuit: Callable[[], bytes],
     trusted_keys: Callable[[], Sequence[bytes]],
     on_authenticated: Optional[Callable[[str, VerifiedBiscuit], None]] = None,
+    is_banned: Optional[Callable[[str], bool]] = None,
 ) -> Callable[[INetStream], "trio.lowlevel.Awaitable[None]"]:
     """Server side of /sam/auth/1.0.0, mirroring sam-node's HandleAuthHandshake:
     verify the caller's biscuit against the control plane keys and its
-    connection peer ID, then answer with our own. A failed verification gets no
-    answer, only a closed stream, as on the Go side."""
+    connection peer ID, then answer with our own. A failed verification, or a
+    peer the control plane banned, gets no answer, only a closed stream, as on
+    the Go side."""
 
     async def handle(stream: INetStream) -> None:
         peer_id = str(stream.muxed_conn.peer_id)
         try:
             with trio.fail_after(AUTH_HANDSHAKE_TIMEOUT):
                 frame = pb.AuthFrame.FromString(await _read_frame(stream))
+                if is_banned is not None and is_banned(peer_id):
+                    logger.warning("auth handshake from %s refused: peer is revoked", peer_id)
+                    return
                 try:
                     verified = verify_peer_biscuit(frame.biscuit, peer_id, trusted_keys())
                 except BiscuitVerificationError as err:

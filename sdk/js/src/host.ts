@@ -20,8 +20,9 @@
 import { yamux } from "@chainsafe/libp2p-yamux";
 import { circuitRelayTransport } from "@libp2p/circuit-relay-v2";
 import { privateKeyFromProtobuf } from "@libp2p/crypto/keys";
+import { gossipsub, type GossipSub } from "@libp2p/gossipsub";
 import { identify } from "@libp2p/identify";
-import type { Libp2p } from "@libp2p/interface";
+import type { Libp2p, PeerId } from "@libp2p/interface";
 import { kadDHT, passthroughMapper } from "@libp2p/kad-dht";
 import { ping } from "@libp2p/ping";
 import { tcp } from "@libp2p/tcp";
@@ -37,15 +38,31 @@ export interface MeshHostOptions {
    * Empty by default: an agent is reached through a router's relay.
    */
   listenAddrs?: string[];
+  /**
+   * Peers the control plane has banned. Consulted for every dial and every
+   * inbound connection, as sam-node's connection gater; the session keeps
+   * it current from /info and the gossip events.
+   */
+  banned?: { has(peerId: string): boolean };
 }
 
-export async function createMeshHost(identity: Identity, options: MeshHostOptions = {}): Promise<Libp2p> {
+/** The services a mesh host runs; `services.pubsub` carries the control plane's events. */
+export type MeshHost = Libp2p<{ pubsub: GossipSub }>;
+
+export async function createMeshHost(identity: Identity, options: MeshHostOptions = {}): Promise<MeshHost> {
+  const banned = options.banned ?? { has: () => false };
+  const denyBanned = (peerId: PeerId) => banned.has(peerId.toString());
   return createLibp2p({
     privateKey: privateKeyFromProtobuf(identity.toLibp2pPrivateKey()),
     addresses: { listen: options.listenAddrs ?? [] },
     transports: [tcp(), circuitRelayTransport()],
     connectionEncrypters: [tls()],
     streamMuxers: [yamux()],
+    connectionGater: {
+      denyDialPeer: denyBanned,
+      denyInboundEncryptedConnection: denyBanned,
+      denyInboundRelayedConnection: (_relay, remotePeer) => denyBanned(remotePeer),
+    },
     services: {
       identify: identify(),
       ping: ping(),
@@ -53,6 +70,10 @@ export async function createMeshHost(identity: Identity, options: MeshHostOption
       // records. Peers keep their private addresses; a mesh member often
       // is one, and the router relays to it.
       dht: kadDHT({ protocol: DHT_PROTOCOL, clientMode: true, peerInfoMapper: passthroughMapper }),
+      // The control plane's events reach members through the routers.
+      // StrictSign, as every Go component pins it: the pubsub envelope is
+      // signed by the author, and the event inside by the control plane.
+      pubsub: gossipsub({ globalSignaturePolicy: "StrictSign", allowPublishToZeroTopicPeers: true, emitSelf: false }),
     },
   });
 }

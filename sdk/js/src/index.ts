@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export { AgentMesh, type AgentMeshOptions, type EnrollOptions } from "./mesh.ts";
+export { AgentMesh, type AgentMeshOptions, type ControlPlaneSync, type EnrollOptions } from "./mesh.ts";
 export { Identity, peerIdFromPublicKey, libp2pPublicKey, verifyEd25519 } from "./identity.ts";
 export {
   ControlPlaneClient,
@@ -41,7 +41,7 @@ export { enrollChallenge, enrollStatusChallenge, refreshChallenge, registerChall
 export { MeshSession, type AdmittedRouter, type DiscoveredProvider, type JoinOptions, type ToolCallResult } from "./session.ts";
 export { BiscuitVerificationError, ROLE_ROUTER, requireRole, verifyPeerBiscuit, type VerifiedBiscuit } from "./biscuit.ts";
 export { AUTH_HANDLER_OPTIONS, AUTH_PROTOCOL, MCP_PROTOCOL, AuthRejectedError, authenticateWithPeer, authStreamHandler } from "./auth.ts";
-export { createMeshHost, type MeshHostOptions } from "./host.ts";
+export { createMeshHost, type MeshHost, type MeshHostOptions } from "./host.ts";
 export { DHT_PROTOCOL, parseServiceTarget, serviceCID, type ServiceType } from "./discovery.ts";
 export { LabelsNotSatisfiedError, StreamTransport, openMCPSession, requireLabels, type MCPSession, type MCPSessionOptions } from "./mcp.ts";
 export { AuthorizationError, authorizeCaller, type AuthorizeRequest, type ProviderAuthorizerOptions } from "./authorizer.ts";
@@ -63,3 +63,4 @@ export {
   type ServiceSpec,
 } from "./serve.ts";
 export { BASELINE_DATALOG } from "./gen/datalog.ts";
+export { BanSet, EVENT_FRESHNESS_MS, GOSSIP_EVENTS_TOPIC, verifyMeshEvent } from "./sync.ts";

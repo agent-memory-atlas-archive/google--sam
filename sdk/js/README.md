@@ -35,7 +35,7 @@ const mesh = await AgentMesh.enroll({
 console.log(mesh.peerId); // 12D3Koo...
 
 // On the mesh: authenticated with a router, reachable through it, credential
-// kept fresh until close().
+// kept fresh, keys, bans and policy followed from the control plane until close().
 const session = await mesh.join();
 console.log(session.relayAddresses.map(String));
 
@@ -101,6 +101,9 @@ A plaintext `http://` control plane is accepted only on loopback. Pass
   and the mesh policy rules from `GET /policies`.
 - `src/serve.ts`: the `/sam/mcp/1.0.0` server, the `/libp2p-http` server
   and client, and the service registry behind `session.serve()`.
+- `src/sync.ts`: the ban set and the control plane's gossip events;
+  `session.sync()` pulls keys, bans and router addresses as
+  `internal/node/controlplane_sync.go` does.
 - `src/gen/`: generated from `api/sam.proto` and `api/datalog.go` by
   `hack/gen-sdk-proto.sh`.
 

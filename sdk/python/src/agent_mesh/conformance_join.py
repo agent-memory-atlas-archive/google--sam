@@ -35,6 +35,9 @@ then takes JSON commands on stdin, one per line, until stdin closes:
    "path": "/v1/models", "method": "GET", "body": "..."}
                                            call an HTTP service over the mesh
   {"cmd": "peers"}                          peers that authenticated to us
+  {"cmd": "sync"}                           pull keys, bans and routers from
+                                           the control plane now
+  {"cmd": "banned"}                         peers banned by the control plane
   {"cmd": "quit"}                           leave the mesh and exit
 
 Each command gets one JSON line back. Same environment as conformance.py; the
@@ -100,6 +103,21 @@ async def _handle(session: MeshSession, command: dict) -> dict:
             return {"cmd": cmd, "ok": True, "is_error": result.is_error, "text": result.text}
         if cmd == "peers":
             return {"cmd": cmd, "authenticated_peers": sorted(session.authenticated_peers)}
+        if cmd == "sync":
+            result = await session.sync()
+            return {
+                "cmd": cmd,
+                "ok": not result.errors,
+                "error": "; ".join(result.errors),
+                "keys_changed": result.keys_changed,
+                "refreshed": result.refreshed,
+                "trusted_keys": [k.hex() for k in session.mesh.credential.control_plane_keys],
+                "biscuit": base64.b64encode(session.mesh.credential.biscuit).decode(),
+                "banned": session.banned.peers(),
+                "router_addresses": list(session.mesh.credential.router_addresses),
+            }
+        if cmd == "banned":
+            return {"cmd": cmd, "ok": True, "banned": session.banned.peers(), "authenticated_peers": sorted(session.authenticated_peers)}
         if cmd == "serve":
             name = command.get("name", "")
             service_type = command.get("type")
@@ -151,6 +169,9 @@ async def _handle(session: MeshSession, command: dict) -> dict:
 async def main() -> None:
     # stdout carries the protocol lines only; every log goes to stderr.
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING, force=True)
+    # py-libp2p's pubsub tries meshsub with every new peer and the host logs
+    # an error for each one that does not run pubsub; that is expected here.
+    logging.getLogger("libp2p.host.basic_host").setLevel(logging.CRITICAL)
     control_plane_url = _require_env("SAM_CONTROL_PLANE_URL")
     bootstrap_token_path = _require_env("SAM_BOOTSTRAP_TOKEN_PATH")
     state_dir = _require_env("SAM_SDK_STATE_DIR")
@@ -164,7 +185,8 @@ async def main() -> None:
         allow_insecure=allow_insecure,
         poll_interval=0.2,
     )
-    async with mesh.join(listen_addrs=listen) as session:
+    # The test drives every pull itself; only gossip events bring one forward.
+    async with mesh.join(listen_addrs=listen, control_plane_sync_interval=0, control_plane_sync_jitter=0) as session:
         _emit(
             {
                 "sdk": "python",
@@ -173,6 +195,7 @@ async def main() -> None:
                 "relay_addresses": session.relay_addresses,
                 "direct_addresses": [str(a) for a in session.host.get_addrs()],
                 "biscuit": base64.b64encode(mesh.credential.biscuit).decode(),
+                "trusted_keys": [k.hex() for k in mesh.credential.control_plane_keys],
             }
         )
         while True:

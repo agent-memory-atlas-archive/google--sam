@@ -33,12 +33,22 @@ class MeshCredential:
     expiration: int
     # Every control plane signing key currently trusted (rotation keeps several valid).
     control_plane_keys: list[bytes] = field(default_factory=list)
+    # The trusted set when the biscuit was issued. A key trusted now that was
+    # not in this set means a rotation happened since: the biscuit is signed by
+    # a retiring key and must be refreshed before that key leaves its grace
+    # period (sam-node's identityPredatesRotation).
+    issued_under_keys: list[bytes] = field(default_factory=list)
     # Router multiaddrs, `/p2p/<peer id>` suffixed, as handed out at enrollment.
     router_addresses: list[str] = field(default_factory=list)
 
     def time_to_live_seconds(self, now: float | None = None) -> int:
         """Seconds of validity left on the biscuit; negative once expired."""
         return self.expiration - int(time.time() if now is None else now)
+
+    def predates_rotation(self) -> bool:
+        """Whether a key trusted now was unknown when the credential was issued."""
+        issued = {bytes(k) for k in self.issued_under_keys}
+        return any(bytes(k) not in issued for k in self.control_plane_keys)
 
     def to_json(self) -> str:
         return json.dumps(
@@ -47,6 +57,7 @@ class MeshCredential:
                 "biscuit": base64.b64encode(self.biscuit).decode(),
                 "expiration": self.expiration,
                 "control_plane_keys": [base64.b64encode(k).decode() for k in self.control_plane_keys],
+                "issued_under_keys": [base64.b64encode(k).decode() for k in self.issued_under_keys],
                 "router_addresses": list(self.router_addresses),
             },
             indent=2,
@@ -56,11 +67,14 @@ class MeshCredential:
     def from_json(cls, text: str) -> "MeshCredential":
         raw = json.loads(text)
         try:
+            control_plane_keys = [base64.b64decode(k) for k in raw.get("control_plane_keys", [])]
             return cls(
                 control_plane_url=str(raw["control_plane_url"]),
                 biscuit=base64.b64decode(raw["biscuit"]),
                 expiration=int(raw["expiration"]),
-                control_plane_keys=[base64.b64decode(k) for k in raw.get("control_plane_keys", [])],
+                control_plane_keys=control_plane_keys,
+                # A file from before this field: the set known then is the best answer.
+                issued_under_keys=[base64.b64decode(k) for k in raw["issued_under_keys"]] if "issued_under_keys" in raw else control_plane_keys,
                 router_addresses=[str(a) for a in raw.get("router_addresses", [])],
             )
         except (KeyError, TypeError, ValueError) as err:

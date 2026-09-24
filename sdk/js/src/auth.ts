@@ -71,6 +71,8 @@ export interface AuthServerOptions {
   /** This member's current biscuit, read per handshake so a refresh takes effect. */
   ownBiscuit(): Uint8Array;
   trustedKeys(): Uint8Array[];
+  /** Peers the control plane has banned; a banned peer's frame gets no answer. */
+  isBanned?(peerId: string): boolean;
   /** Called with every peer that passes; the session keeps the admitted set. */
   onAuthenticated?(peerId: string, verified: VerifiedBiscuit): void;
 }
@@ -91,6 +93,10 @@ export function authStreamHandler(options: AuthServerOptions): StreamHandler {
     try {
       const lp = framed(stream);
       const frame = fromBinary(AuthFrameSchema, (await lp.read({ signal })).subarray());
+      if (options.isBanned?.(peerId) === true) {
+        stream.log?.("auth handshake from %s refused: peer is revoked", peerId);
+        return;
+      }
       let verified: VerifiedBiscuit;
       try {
         verified = await verifyPeerBiscuit(frame.biscuit, peerId, options.trustedKeys());

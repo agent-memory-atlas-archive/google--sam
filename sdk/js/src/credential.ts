@@ -24,8 +24,21 @@ export interface MeshCredential {
   expiration: number;
   /** Every control plane signing key currently trusted (rotation keeps several valid). */
   controlPlaneKeys: Uint8Array[];
+  /**
+   * The trusted set when the biscuit was issued. A key trusted now that was
+   * not in this set means a rotation happened since: the biscuit is signed
+   * by a retiring key and must be refreshed before that key leaves its
+   * grace period (sam-node's identityPredatesRotation).
+   */
+  issuedUnderKeys: Uint8Array[];
   /** Router multiaddrs, `/p2p/<peer id>` suffixed, as handed out at enrollment. */
   routerAddresses: string[];
+}
+
+/** Whether a key trusted now was unknown when the credential was issued. */
+export function credentialPredatesRotation(c: MeshCredential): boolean {
+  const issued = new Set(c.issuedUnderKeys.map((k) => Buffer.from(k).toString("hex")));
+  return c.controlPlaneKeys.some((k) => !issued.has(Buffer.from(k).toString("hex")));
 }
 
 /** Seconds of validity left on the biscuit; negative once expired. */
@@ -52,6 +65,7 @@ interface CredentialJSON {
   biscuit: string;
   expiration: number;
   control_plane_keys: string[];
+  issued_under_keys?: string[];
   router_addresses: string[];
 }
 
@@ -61,6 +75,7 @@ export function credentialToJSON(c: MeshCredential): string {
     biscuit: Buffer.from(c.biscuit).toString("base64"),
     expiration: c.expiration,
     control_plane_keys: c.controlPlaneKeys.map((k) => Buffer.from(k).toString("base64")),
+    issued_under_keys: c.issuedUnderKeys.map((k) => Buffer.from(k).toString("base64")),
     router_addresses: c.routerAddresses,
   };
   return JSON.stringify(out, null, 2) + "\n";
@@ -71,11 +86,14 @@ export function credentialFromJSON(text: string): MeshCredential {
   if (typeof raw.control_plane_url !== "string" || typeof raw.biscuit !== "string" || typeof raw.expiration !== "number") {
     throw new Error("malformed credential file");
   }
+  const controlPlaneKeys = (raw.control_plane_keys ?? []).map((k) => new Uint8Array(Buffer.from(k, "base64")));
   return {
     controlPlaneUrl: raw.control_plane_url,
     biscuit: new Uint8Array(Buffer.from(raw.biscuit, "base64")),
     expiration: raw.expiration,
-    controlPlaneKeys: (raw.control_plane_keys ?? []).map((k) => new Uint8Array(Buffer.from(k, "base64"))),
+    controlPlaneKeys,
+    // A file from before this field: the set known then is the best answer.
+    issuedUnderKeys: raw.issued_under_keys !== undefined ? raw.issued_under_keys.map((k) => new Uint8Array(Buffer.from(k, "base64"))) : controlPlaneKeys,
     routerAddresses: raw.router_addresses ?? [],
   };
 }

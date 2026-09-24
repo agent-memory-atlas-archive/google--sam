@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -40,6 +41,7 @@ import (
 	"github.com/google/sam/internal/storage"
 	"github.com/libp2p/go-libp2p"
 	libp2phttp "github.com/libp2p/go-libp2p-http"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -165,6 +167,15 @@ func TestNativeSDKsMesh(t *testing.T) {
 	baseURL := "http://" + srv.Addr()
 	_, portStr, _ := net.SplitHostPort(srv.Addr())
 	cpPort, _ := strconv.Atoi(portStr)
+
+	// Bans and rotations reach the mesh as gossip events through the routers,
+	// as the sam-control-plane binary publishes them.
+	publisher, err := controlplane.NewMeshPublisher(context.Background(), store, 500*time.Millisecond)
+	if err != nil {
+		t.Fatalf("failed to start mesh event publisher: %v", err)
+	}
+	t.Cleanup(func() { _ = publisher.Close() })
+	srv.SetMeshAdapter(publisher)
 
 	// The router enrolls through OIDC with group "routers" and the node with
 	// user mock-user. Every member holds the node role, which may reach any
@@ -437,6 +448,127 @@ bindings:
 				t.Errorf("%s admitted peers %v lack %s (%s)", m.name, peers, other.name, other.report.PeerID)
 			}
 		}
+	}
+
+	// Control plane state reaches the members while they run. A ban travels
+	// as a gossip event through the router and is enforced without a pull;
+	// a key rotation lands with the next pull, and a credential that
+	// predates it is refreshed under the new key.
+	t.Run("ban-and-rotation", func(t *testing.T) {
+		// An enrolled peer the control plane can ban: a node record, admitted
+		// by every member over the router.
+		outcast := newAdmittedGoPeer(t, ctx, cpPriv, routerAddr)
+		outcastBiscuit := goHostBiscuit(t, cpPriv, outcast.ID())
+		outcastPub, err := crypto.MarshalPublicKey(outcast.Peerstore().PubKey(outcast.ID()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.EnrollNode(ctx, &storage.EnrolledNode{
+			PeerID:         outcast.ID().String(),
+			PublicKey:      outcastPub,
+			Biscuit:        outcastBiscuit,
+			Role:           api.RoleNode,
+			EnrollmentType: "BOOTSTRAP",
+			EnrolledAt:     time.Now(),
+			ExpiresAt:      time.Now().Add(time.Hour),
+		}); err != nil {
+			t.Fatalf("failed to enroll the outcast: %v", err)
+		}
+		for _, m := range members {
+			sdkPeer, _ := peer.Decode(m.report.PeerID)
+			dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			if err := outcast.Connect(dialCtx, peer.AddrInfo{ID: sdkPeer, Addrs: []multiaddr.Multiaddr{multiaddr.StringCast(m.report.RelayAddresses[0])}}); err != nil {
+				cancel()
+				t.Fatalf("outcast could not reach %s: %v", m.name, err)
+			}
+			cancel()
+			authHandshake(t, ctx, outcast, sdkPeer, outcastBiscuit)
+			if !contains(m.peers(t), outcast.ID().String()) {
+				t.Fatalf("%s did not admit the outcast before the ban", m.name)
+			}
+		}
+
+		// The operator bans it. The event goes control plane -> router -> members.
+		revokeBody, _ := proto.Marshal(&api.TokenRevokeRequest{PeerId: outcast.ID().String()})
+		req, _ := http.NewRequest(http.MethodPost, baseURL+"/admin/revoke", bytes.NewReader(revokeBody))
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		req.Header.Set("Content-Type", "application/x-protobuf")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST /admin/revoke: %v", err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("POST /admin/revoke: %s", resp.Status)
+		}
+		for _, m := range members {
+			state := m.bannedUntil(t, outcast.ID().String(), 10*time.Second)
+			if contains(state.AuthenticatedPeers, outcast.ID().String()) {
+				t.Errorf("%s kept the outcast admitted after the ban", m.name)
+			}
+			// Its credential still verifies; it is refused all the same.
+			sdkPeer, _ := peer.Decode(m.report.PeerID)
+			if err := tryAuthHandshake(ctx, outcast, sdkPeer, multiaddr.StringCast(m.report.RelayAddresses[0]), outcastBiscuit); err == nil {
+				t.Errorf("%s admitted the banned outcast again", m.name)
+			}
+			// A pull agrees with the event and does not lift the ban.
+			if res := m.sync(t); !contains(res.Banned, outcast.ID().String()) {
+				t.Errorf("%s: /info does not list the outcast as banned after the pull: %+v", m.name, res)
+			}
+		}
+
+		// The control plane rotates its signing key; the retiring key stays
+		// valid for its grace period, and the rotation is announced as the
+		// sam-control-plane binary announces it. A member learns the new key
+		// from the event or from its next pull, and since its credential
+		// predates the rotation, refreshes it under the new key.
+		newPub, newPriv, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.RotateKeys(ctx, newPriv, newPub, time.Hour); err != nil {
+			t.Fatalf("RotateKeys: %v", err)
+		}
+		if err := publisher.PublishEvent(ctx, api.MeshEvent_KEY_ROTATION, "", newPub); err != nil {
+			t.Fatalf("publish KEY_ROTATION: %v", err)
+		}
+		for _, m := range members {
+			// Idempotent: the event may already have brought a pull forward.
+			res := m.sync(t)
+			if !contains(res.TrustedKeys, hex.EncodeToString(newPub)) || !contains(res.TrustedKeys, hex.EncodeToString(cpPub)) {
+				t.Fatalf("%s trusts %v after the rotation, want both keys", m.name, res.TrustedKeys)
+			}
+			if res.Biscuit == m.report.Biscuit {
+				t.Fatalf("%s still holds the credential minted before the rotation", m.name)
+			}
+			fresh, err := base64.StdEncoding.DecodeString(res.Biscuit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sdkPeer, _ := peer.Decode(m.report.PeerID)
+			if _, err := identity.VerifyBiscuitAndGetExpiry(fresh, sdkPeer, []ed25519.PublicKey{newPub}, 5*time.Second); err != nil {
+				t.Fatalf("%s refreshed credential does not verify under the new key: %v", m.name, err)
+			}
+			if _, err := identity.VerifyBiscuitAndGetExpiry(fresh, sdkPeer, []ed25519.PublicKey{cpPub}, 5*time.Second); err == nil {
+				t.Fatalf("%s refreshed credential still verifies under the retiring key", m.name)
+			}
+			// The mesh keeps working under the new credential: the sam-node
+			// learned the key from the same event.
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				cred := m.authRaw(t, samNode.p2pAddr)
+				if cred.OK && cred.PeerID == samNode.peerID.String() {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("%s could not authenticate with the node under its refreshed credential: %+v", m.name, cred)
+				}
+				time.Sleep(200 * time.Millisecond)
+			}
+		}
+	})
+
+	for _, m := range members {
 		m.quit(t)
 	}
 }
@@ -545,6 +677,57 @@ func (m *sdkMember) peers(t *testing.T) []string {
 		t.Fatalf("%s member: peers answered %q", m.name, line)
 	}
 	return res.AuthenticatedPeers
+}
+
+// sdkBanned answers a {"cmd":"banned"} command.
+type sdkBanned struct {
+	Banned             []string `json:"banned"`
+	AuthenticatedPeers []string `json:"authenticated_peers"`
+}
+
+// bannedUntil polls the member's ban set, without asking it to pull, until
+// wantPeer is in it: this is how long a gossip event takes to land.
+func (m *sdkMember) bannedUntil(t *testing.T, wantPeer string, timeout time.Duration) sdkBanned {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		var res sdkBanned
+		if line := m.send(t, map[string]string{"cmd": "banned"}); json.Unmarshal(line, &res) != nil {
+			t.Fatalf("%s member: banned answered %q", m.name, line)
+		}
+		if contains(res.Banned, wantPeer) {
+			return res
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s member never learned the ban of %s from the gossip event; banned=%v\nstderr:\n%s", m.name, wantPeer, res.Banned, m.stderr.String())
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// sdkSyncResult answers a {"cmd":"sync"} command.
+type sdkSyncResult struct {
+	OK              bool     `json:"ok"`
+	Error           string   `json:"error"`
+	KeysChanged     bool     `json:"keys_changed"`
+	Refreshed       bool     `json:"refreshed"`
+	TrustedKeys     []string `json:"trusted_keys"`
+	Biscuit         string   `json:"biscuit"`
+	Banned          []string `json:"banned"`
+	RouterAddresses []string `json:"router_addresses"`
+}
+
+// sync asks the member to pull from the control plane now; every part must land.
+func (m *sdkMember) sync(t *testing.T) sdkSyncResult {
+	t.Helper()
+	var res sdkSyncResult
+	if line := m.send(t, map[string]string{"cmd": "sync"}); json.Unmarshal(line, &res) != nil {
+		t.Fatalf("%s member: sync answered %q", m.name, line)
+	}
+	if !res.OK {
+		t.Fatalf("%s member: sync failed: %s", m.name, res.Error)
+	}
+	return res
 }
 
 // sdkProvider is one entry of a {"cmd":"discover"} answer.
@@ -872,6 +1055,39 @@ func authHandshake(t *testing.T, ctx context.Context, h host.Host, target peer.I
 		t.Fatalf("%s refused the handshake: %s", target, resp.Error)
 	}
 	return resp.Biscuit
+}
+
+// tryAuthHandshake reconnects to target through addr if needed and runs the
+// client side of /sam/auth/1.0.0, returning the error a refusal produces: a
+// connection the gate denies, or a stream closed without an answer.
+func tryAuthHandshake(ctx context.Context, h host.Host, target peer.ID, addr multiaddr.Multiaddr, biscuit []byte) error {
+	dialCtx, cancel := context.WithTimeout(network.WithAllowLimitedConn(ctx, "auth"), 10*time.Second)
+	defer cancel()
+	if err := h.Connect(dialCtx, peer.AddrInfo{ID: target, Addrs: []multiaddr.Multiaddr{addr}}); err != nil {
+		return err
+	}
+	s, err := h.NewStream(dialCtx, target, api.AuthProtocolID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+	_ = s.SetDeadline(time.Now().Add(5 * time.Second))
+	frame, _ := proto.Marshal(&api.AuthFrame{Biscuit: biscuit})
+	if err := msgio.NewVarintWriter(s).WriteMsg(frame); err != nil {
+		return err
+	}
+	msg, err := msgio.NewVarintReaderSize(s, 64*1024).ReadMsg()
+	if err != nil {
+		return err
+	}
+	var resp api.AuthResponse
+	if err := proto.Unmarshal(msg, &resp); err != nil {
+		return err
+	}
+	if !resp.Success {
+		return fmt.Errorf("refused: %s", resp.Error)
+	}
+	return nil
 }
 
 // refuseForgedFrame checks that target answers a frame it cannot verify

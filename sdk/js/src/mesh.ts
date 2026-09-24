@@ -15,7 +15,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ControlPlaneClient, ROLE_NODE, type Enrollment } from "./controlplane.ts";
-import { credentialFromJSON, credentialToJSON, encodeAuthFrame, type MeshCredential } from "./credential.ts";
+import { credentialFromJSON, credentialPredatesRotation, credentialToJSON, encodeAuthFrame, type MeshCredential } from "./credential.ts";
 import { Identity } from "./identity.ts";
 import { joinMesh, type JoinOptions, type MeshSession } from "./session.ts";
 
@@ -53,6 +53,20 @@ export interface EnrollOptions extends AgentMeshOptions {
   signal?: AbortSignal;
   /** Overrides the control plane's suggested poll interval while pending. */
   pollIntervalMs?: number;
+}
+
+/** What one pull from the control plane changed. */
+export interface ControlPlaneSync {
+  /** The trusted key set differs from before the pull. */
+  keysChanged: boolean;
+  /** The credential was re-issued because a rotation had happened since. */
+  refreshed: boolean;
+  /** The control plane's ban set, when /info answered. */
+  bannedPeerIds: string[] | undefined;
+  /** When /info was asked; a ban recorded later cannot be in the answer. */
+  fetchedAt: Date;
+  /** One entry per part that failed; empty when everything landed. */
+  errors: string[];
 }
 
 /**
@@ -127,6 +141,7 @@ export class AgentMesh {
         biscuit: enrollment.biscuit,
         expiration: enrollment.expiration,
         controlPlaneKeys,
+        issuedUnderKeys: controlPlaneKeys,
         routerAddresses: enrollment.routerAddresses,
       },
       options.stateDir,
@@ -158,9 +173,69 @@ export class AgentMesh {
     } catch {
       // Keep the previous set; a failed /keys sync must not cost the new biscuit.
     }
-    this.#credential = { ...this.#credential, biscuit: result.biscuit, expiration: result.expiration, controlPlaneKeys };
+    this.#credential = { ...this.#credential, biscuit: result.biscuit, expiration: result.expiration, controlPlaneKeys, issuedUnderKeys: controlPlaneKeys };
     await this.save();
     return this.#credential;
+  }
+
+  /**
+   * Adopts a signing key announced by a KEY_ROTATION event, so peers whose
+   * credentials the new key signs verify before the next pull confirms it.
+   */
+  addTrustedKey(key: Uint8Array): boolean {
+    const hex = Buffer.from(key).toString("hex");
+    if (this.#credential.controlPlaneKeys.some((k) => Buffer.from(k).toString("hex") === hex)) {
+      return false;
+    }
+    this.#credential = { ...this.#credential, controlPlaneKeys: [...this.#credential.controlPlaneKeys, key] };
+    return true;
+  }
+
+  /**
+   * The member's pull from the control plane, as sam-node's SyncControlPlane:
+   * the signing keys (verified against the set already trusted, so whoever
+   * answers the URL cannot become the trust root), a credential refresh when
+   * a rotation happened since it was issued, and /info for the router
+   * addresses and the ban set. Each part is attempted even when another
+   * fails; the errors are reported together. Gossip events only bring this
+   * forward; they are never the only way state arrives.
+   */
+  async syncControlPlane(): Promise<ControlPlaneSync> {
+    const errors: string[] = [];
+    let keysChanged = false;
+    let refreshed = false;
+    try {
+      const keys = await this.controlPlane.keys(this.#credential.controlPlaneKeys);
+      if (keys.length === 0) {
+        throw new Error("/keys returned no keys");
+      }
+      keysChanged = !sameKeySet(keys, this.#credential.controlPlaneKeys);
+      this.#credential = { ...this.#credential, controlPlaneKeys: keys };
+      if (credentialPredatesRotation(this.#credential)) {
+        await this.refresh();
+        refreshed = true;
+      }
+    } catch (err) {
+      errors.push(`keys: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    let bannedPeerIds: string[] | undefined;
+    // Taken before the request: a ban recorded after this instant cannot be
+    // in the answer, so its absence must not be read as an unban.
+    const fetchedAt = new Date();
+    try {
+      const info = await this.controlPlane.info();
+      if (info.routerAddresses.length > 0) {
+        this.#credential = { ...this.#credential, routerAddresses: info.routerAddresses };
+      }
+      bannedPeerIds = info.bannedPeerIds;
+    } catch (err) {
+      errors.push(`info: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (keysChanged || bannedPeerIds !== undefined) {
+      await this.save();
+    }
+    return { keysChanged, refreshed, bannedPeerIds, fetchedAt, errors };
   }
 
   /**
@@ -197,6 +272,15 @@ function newClient(options: AgentMeshOptions): ControlPlaneClient {
     allowInsecure: options.allowInsecure ?? false,
     ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
   });
+}
+
+function sameKeySet(a: Uint8Array[], b: Uint8Array[]): boolean {
+  const hex = (keys: Uint8Array[]) =>
+    keys
+      .map((k) => Buffer.from(k).toString("hex"))
+      .sort()
+      .join(",");
+  return hex(a) === hex(b);
 }
 
 function labelsOf(options: AgentMeshOptions): { labels?: Record<string, string> } {

@@ -21,7 +21,7 @@ node and to the control plane, a `sam-node`.
 
 ## What exists today
 
-Milestones 1 to 4 are implemented and tested in both languages:
+Milestones 1 to 5 are implemented and tested in both languages:
 
 | Capability | JS | Python |
 | --- | --- | --- |
@@ -43,12 +43,19 @@ Milestones 1 to 4 are implemented and tested in both languages:
 | `/libp2p-http` server: publish inference and A2A services, forwarded to a local URL or an in-process handler | yes | yes |
 | `/libp2p-http` client: call inference and A2A services on the mesh | yes | yes |
 | DHT provide with reprovide, `POST /nodes/catalog` self-report | yes | yes |
+| Control plane pull on `sam-node`'s interval: `/keys` verified against the trusted set, credential refresh after a rotation, `/info` bans and router addresses | yes | yes |
+| Gossip events from the control plane (`/sam/mesh/events/v1`, StrictSign): ban enforced at once, key rotation adopted, policy update pulls | yes | yes |
+| Banned peers refused: connections dropped and denied, handshakes and requests refused, dials refused | yes | yes |
+| Published to a registry from the release workflow | npm `@agent-mesh/sdk` | PyPI `agent-mesh` |
 
 A member built this way is on the mesh and uses it in both directions: it
 finds a service in the DHT and calls it through the router, verifying the
 provider on every call, and it publishes services of its own that a
 `sam-node` or another SDK member discovers and calls, authorizing every
-caller with the same Datalog the Go node evaluates.
+caller with the same Datalog the Go node evaluates. It follows the control
+plane while it runs: a ban reaches it as a gossip event within a second and
+again with the next pull, and a key rotation makes it refresh its credential
+under the new key.
 
 Facts about the libp2p implementations that the SDKs work around, each
 pinned by a test:
@@ -91,6 +98,18 @@ pinned by a test:
   with `Host` set to the peer ID. The JS SDK bridges the stream to a Node
   duplex and runs Node's HTTP server and client on it; the Python SDK
   drives `h11` over the stream.
+- Every Go component runs GossipSub with `StrictSign`. `@libp2p/gossipsub`
+  (the libp2p-maintained package; `@chainsafe/libp2p-gossipsub` stops at
+  libp2p 2) and py-libp2p's `GossipSub` with `strict_signing=True` both
+  exchange messages with `sam-router`. py-libp2p's Pubsub learns of peers
+  through a notifee it registers when constructed, so it is built before
+  the first connection; it also opens a meshsub stream to every new peer
+  and its host logs an error for peers that do not run pubsub, which is
+  expected on a mesh with plain peers.
+- py-libp2p's connection gate is address-based, not peer-based, so the
+  Python SDK enforces a ban by disconnecting the peer and refusing its
+  handshakes, requests and dials; js-libp2p's `connectionGater` also denies
+  the connection itself, as sam-node's gater does.
 
 ## Wire contract
 
@@ -124,6 +143,7 @@ messages in `api/sam.proto`. Bodies are capped at 1 MiB on both sides.
 | `POST /refresh` | `TokenRefreshRequest`, header `Authorization: Bearer <base64 biscuit>` | `TokenRefreshResponse` | sign `sam:refresh:<peer_id>:<ts>` |
 | `GET /keys` | — | `KeysResponse` | none; see below |
 | `GET /policies` | header `Authorization: Bearer <base64 biscuit>` | `PolicyConfigGetResponse{datalog_rules}` | none; the biscuit must belong to an admitted node |
+| `POST /nodes/catalog` | `NodeCatalogReport`, header `Authorization: Bearer <base64 biscuit>` | `204` | none; the reporting peer is read from the biscuit |
 
 - `<ts>` is unix milliseconds and must be within 5 minutes of the control
   plane's clock (`challengeMaxAge`). Challenges are defined in
@@ -340,14 +360,55 @@ holds against the control plane's records.
   the HTTP path, then served once it presents a node-role token. About 9
   seconds for the whole mesh.
 
-### Milestone 5 — parity and release
+### Milestone 5 — parity and release (done)
 
-- Control plane sync loop (`/keys`, bans, router addresses) and gossip
-  event handling for bans, key rotation and policy updates.
-- Publishing: `@agent-mesh/sdk` to npm and `agent-mesh` to PyPI from the
-  release workflow, versioned with the repository.
-- Docs: a guide under `site/content/docs/guides/` and the connector
-  interface for platforms (issue #480).
+- Control plane pull (`session.sync()`, `mesh.syncControlPlane()`), as
+  `SyncControlPlane` in `internal/node/controlplane_sync.go`: `/keys`
+  verified against the keys already trusted, so whoever answers the URL
+  cannot become the trust root; a credential refresh when a key trusted now
+  was unknown when the credential was issued (`issuedUnderKeys` in the
+  credential file); `/info` for router addresses and the ban set,
+  reconciled with the rule that a ban recorded after the request went out
+  survives an answer that omits it; the mesh policy when serving. Runs
+  once shortly after join, then on `sam-node`'s interval with the same
+  jitter, and whenever an event triggers it.
+- Gossip events on `/sam/mesh/events/v1`: the topic validator rejects
+  anything not signed by a trusted control plane key and ignores stale
+  events; `BANNED` evicts the peer at once, `KEY_ROTATION` adopts the key
+  and triggers a pull, `POLICY_UPDATE` triggers a pull. Bans are not
+  persisted; a restarted member reads them from `/info`.
+- Ban enforcement: the auth handshake, the MCP handshake and HTTP ingress
+  refuse a banned peer before looking at its token; `connect()` refuses to
+  dial one; its connections are dropped when the ban lands.
+- Publishing: `.github/workflows/release.yml` stamps the release tag's
+  version on both packages (`hack/sdk-version.sh`) and publishes
+  `@agent-mesh/sdk` to npm and `agent-mesh` to PyPI through trusted
+  publishing. One-time setup by a package owner: on npmjs.com, add
+  `google/sam` with workflow `release.yml` as a trusted publisher of
+  `@agent-mesh/sdk`; on pypi.org, add the same repository and workflow as
+  a trusted publisher of `agent-mesh` (environment left empty). No
+  publishing token is stored in the repository.
+- Docs: `site/content/docs/guides/native-sdks.md`.
+- Tests. Unit: a fake control plane rotates its key and bans a peer; each
+  SDK learns both from a pull, refreshes under the new key and only under
+  it, drops and refuses the banned peer, and lifts the ban when the control
+  plane does; `BanSet` and `verifyMeshEvent` alone. Integration: the mesh
+  of `sdk_mesh_test.go` gets the control plane's real event publisher; an
+  enrolled Go peer admitted by every member is banned with
+  `POST /admin/revoke` and each member learns it from the gossip event
+  through the router without pulling, refuses the peer's next handshake,
+  and a pull agrees; then the control plane rotates its key and announces
+  it, and every member ends up trusting both keys, holding a credential
+  that verifies only under the new one, and still authenticating with the
+  `sam-node`.
+
+### Later
+
+- The connector interface for platforms (issue #480): `Attach`, `Detach`,
+  `Refresh`, `Status` and the agent bundle, so a scheduler places SDK
+  members the way it places `sam-box` sandboxes.
+- Reading the control plane's events also for router address changes, and
+  re-dialing a router that replaced another.
 
 ### Non-goals
 
@@ -382,8 +443,8 @@ both so nothing skips there. The SDK members in the mesh test are the
 runners `sdk/js/src/conformance-join.ts` and
 `sdk/python/src/agent_mesh/conformance_join.py`: each joins, prints what it
 holds, then takes JSON commands on stdin (`auth`, `discover`, `tools`,
-`call`, `serve`, `http`, `peers`, `quit`) so the Go test can drive both
-languages through the same script.
+`call`, `serve`, `http`, `peers`, `sync`, `banned`, `quit`) so the Go test
+can drive both languages through the same script.
 
 Interoperability facts that the tests pin: `sdk/testdata/identity_vectors.json`
 holds key encodings, peer IDs and challenge signatures produced with

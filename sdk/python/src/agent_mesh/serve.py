@@ -124,6 +124,8 @@ class ProviderOptions:
     own_biscuit: Callable[[], bytes]
     # Called after a caller is authorized for a service, e.g. for the session's admitted set.
     on_authorized: Optional[Callable[[str, VerifiedBiscuit, str], None]] = None
+    # Peers the control plane has banned; refused before their token is looked at.
+    is_banned: Optional[Callable[[str], bool]] = None
 
 
 class ServiceRegistry:
@@ -189,6 +191,10 @@ def mcp_stream_handler(registry: ServiceRegistry, options: ProviderOptions, prot
                 await stream.close()
                 return
             frame = pb.AuthFrame.FromString(data)
+            if options.is_banned is not None and options.is_banned(peer_id):
+                await _refuse(stream, peer_id, "peer is revoked")
+                await stream.close()
+                return
             try:
                 verified = await trio.to_thread.run_sync(
                     authorize_caller,
@@ -368,6 +374,8 @@ async def _handle_ingress(
         return plain(400, "Invalid X-Sam-Biscuit encoding")
 
     target_service = f"{service_type}://{service_name}"
+    if options.is_banned is not None and options.is_banned(peer_id):
+        return plain(403, "Authorization failed")
     try:
         verified = await trio.to_thread.run_sync(
             authorize_caller,

@@ -135,6 +135,8 @@ export function streamToNodeDuplex(stream: Stream, remotePeer: string): StreamSo
 export interface ProviderOptions extends ProviderAuthorizerOptions {
   /** This provider's current biscuit, for the mutual AuthResponse. */
   ownBiscuit(): Uint8Array;
+  /** Peers the control plane has banned; refused before their token is looked at. */
+  isBanned?(peerId: string): boolean;
   /** Called after a caller is authorized for a service, e.g. for the session's admitted set. */
   onAuthorized?(peerId: string, verified: VerifiedBiscuit, targetService: string): void;
 }
@@ -189,6 +191,10 @@ export function mcpStreamHandler(registry: ServiceRegistry, options: ProviderOpt
     try {
       const lp = lpStream(stream, { maxDataLength: MAX_AUTH_FRAME_BYTES });
       const frame = fromBinary(AuthFrameSchema, (await lp.read({ signal })).subarray());
+      if (options.isBanned?.(peerId) === true) {
+        await refuse(stream, peerId, "peer is revoked", signal);
+        return;
+      }
       let verified: VerifiedBiscuit;
       try {
         verified = await authorizeCaller({ biscuit: frame.biscuit, peerId, targetService: frame.targetService, protocol, agent: frame.agent }, options);
@@ -336,6 +342,10 @@ async function handleIngress(req: http.IncomingMessage, res: http.ServerResponse
   }
 
   const targetService = `${serviceType}://${serviceName}`;
+  if (options.isBanned?.(remotePeer) === true) {
+    reply(403, "Authorization failed");
+    return;
+  }
   const agentHeader = req.headers[HEADER_SAM_AGENT];
   let verified: VerifiedBiscuit;
   try {

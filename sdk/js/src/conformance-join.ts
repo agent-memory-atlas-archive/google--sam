@@ -36,6 +36,9 @@
 //    "path": "/v1/models", "method": "GET", "body": "..."}
 //                                            call an HTTP service over the mesh
 //   {"cmd": "peers"}                          peers that authenticated to us
+//   {"cmd": "sync"}                           pull keys, bans and routers from
+//                                            the control plane now
+//   {"cmd": "banned"}                         peers banned by the control plane
 //   {"cmd": "quit"}                           leave the mesh and exit
 //
 // Each command gets one JSON line back. Same environment as conformance.ts;
@@ -107,6 +110,22 @@ async function handle(session: MeshSession, command: Command): Promise<unknown> 
       }
       case "peers":
         return { cmd: "peers", authenticated_peers: [...session.authenticatedPeers.keys()].sort() };
+      case "sync": {
+        const result = await session.sync();
+        return {
+          cmd: "sync",
+          ok: result.errors.length === 0,
+          error: result.errors.join("; "),
+          keys_changed: result.keysChanged,
+          refreshed: result.refreshed,
+          trusted_keys: session.mesh.credential.controlPlaneKeys.map((k) => Buffer.from(k).toString("hex")),
+          biscuit: Buffer.from(session.mesh.credential.biscuit).toString("base64"),
+          banned: session.banned.peers(),
+          router_addresses: session.mesh.credential.routerAddresses,
+        };
+      }
+      case "banned":
+        return { cmd: "banned", ok: true, banned: session.banned.peers(), authenticated_peers: [...session.authenticatedPeers.keys()].sort() };
       case "serve": {
         const name = command.name ?? "";
         if (command.type === "mcp") {
@@ -162,7 +181,8 @@ async function main(): Promise<void> {
   const listenAddrs = (process.env.SAM_SDK_LISTEN_ADDRS ?? "").split(",").filter((a) => a !== "");
 
   const mesh = await AgentMesh.enroll({ controlPlaneUrl, allowInsecure, stateDir, bootstrapTokenPath, pollIntervalMs: 200 });
-  const session = await mesh.join({ listenAddrs, signal: AbortSignal.timeout(20_000) });
+  // The test drives every pull itself; only gossip events bring one forward.
+  const session = await mesh.join({ listenAddrs, signal: AbortSignal.timeout(20_000), controlPlaneSyncIntervalMs: 0, controlPlaneSyncJitterMs: 0 });
 
   emit({
     sdk: "js",
@@ -171,6 +191,7 @@ async function main(): Promise<void> {
     relay_addresses: session.relayAddresses.map((ma) => ma.toString()),
     direct_addresses: session.addresses.filter((ma) => !ma.toString().includes("/p2p-circuit")).map((ma) => ma.toString()),
     biscuit: Buffer.from(mesh.credential.biscuit).toString("base64"),
+    trusted_keys: mesh.credential.controlPlaneKeys.map((k) => Buffer.from(k).toString("hex")),
   });
 
   for await (const line of createInterface({ input: process.stdin })) {

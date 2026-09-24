@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { Connection, Libp2p } from "@libp2p/interface";
+import type { Connection } from "@libp2p/interface";
+import { TopicValidatorResult } from "@libp2p/gossipsub";
+import { peerIdFromString } from "@libp2p/peer-id";
 import { multiaddr, type Multiaddr } from "@multiformats/multiaddr";
 import { AUTH_HANDLER_OPTIONS, AUTH_PROTOCOL, MCP_PROTOCOL, authenticateWithPeer, authStreamHandler } from "./auth.ts";
 import { ROLE_ROUTER, requireRole, type VerifiedBiscuit } from "./biscuit.ts";
 import { serviceCID, type ServiceType } from "./discovery.ts";
-import { createMeshHost, listenThroughRelay, type MeshHostOptions } from "./host.ts";
+import { createMeshHost, listenThroughRelay, type MeshHost, type MeshHostOptions } from "./host.ts";
 import { openMCPSession, type MCPSession, type MCPSessionOptions } from "./mcp.ts";
-import type { AgentMesh } from "./mesh.ts";
+import type { AgentMesh, ControlPlaneSync } from "./mesh.ts";
 import {
   HTTP_PROTOCOL,
   SERVE_HANDLER_OPTIONS,
@@ -33,6 +35,7 @@ import {
   type ServedService,
   type ServiceSpec,
 } from "./serve.ts";
+import { BanSet, GOSSIP_EVENTS_TOPIC, MeshEvent_Type, verifyMeshEvent } from "./sync.ts";
 
 export interface JoinOptions extends MeshHostOptions {
   /**
@@ -49,6 +52,14 @@ export interface JoinOptions extends MeshHostOptions {
   policySyncIntervalMs?: number;
   /** How often published services are re-announced in the DHT. */
   provideIntervalMs?: number;
+  /**
+   * How often keys, bans and router addresses are pulled from the control
+   * plane (sam-node's --control-plane-sync-interval). Gossip events bring a
+   * pull forward; 0 disables the loop.
+   */
+  controlPlaneSyncIntervalMs?: number;
+  /** Upper bound of the random delay before a pull an event triggered. */
+  controlPlaneSyncJitterMs?: number;
   /** Bounds the whole join. */
   signal?: AbortSignal;
 }
@@ -84,6 +95,10 @@ const MIN_REFRESH_DELAY_MS = 2_000;
 const DEFAULT_POLICY_SYNC_MS = 15 * 60 * 1000;
 /** How often provider records are refreshed; go-libp2p-kad-dht expires them after 48h. */
 const DEFAULT_PROVIDE_INTERVAL_MS = 10 * 60 * 1000;
+/** sam-node's --control-plane-sync-interval default, and its 2s first pull. */
+const DEFAULT_CONTROL_PLANE_SYNC_MS = 15 * 60 * 1000;
+const FIRST_CONTROL_PLANE_SYNC_MS = 2_000;
+const DEFAULT_CONTROL_PLANE_SYNC_JITTER_MS = 2_000;
 
 /**
  * A member that is on the mesh: a libp2p host authenticated with at least
@@ -92,33 +107,46 @@ const DEFAULT_PROVIDE_INTERVAL_MS = 10 * 60 * 1000;
  */
 export class MeshSession {
   readonly mesh: AgentMesh;
-  readonly node: Libp2p;
+  readonly node: MeshHost;
   readonly routers: AdmittedRouter[];
   /** Peers that passed the inbound auth handshake, with their credential's expiration. */
   readonly authenticatedPeers: Map<string, Date>;
+  /** Peers the control plane has banned; connections to and from them are refused. */
+  readonly banned: BanSet;
   /** The services this member publishes. */
   readonly services = new ServiceRegistry();
   #refreshTimer: ReturnType<typeof setTimeout> | undefined;
   #policyTimer: ReturnType<typeof setInterval> | undefined;
   #provideTimer: ReturnType<typeof setInterval> | undefined;
+  #syncTimer: ReturnType<typeof setTimeout> | undefined;
+  #syncing: Promise<ControlPlaneSync> | undefined;
   readonly #refreshLeadMs: number;
   readonly #refreshRetryMs: number;
   readonly #policySyncMs: number;
   readonly #provideIntervalMs: number;
+  readonly #syncIntervalMs: number;
+  readonly #syncJitterMs: number;
   #policyRules: string[] | undefined;
   #serving = false;
   #closed = false;
 
-  constructor(mesh: AgentMesh, node: Libp2p, routers: AdmittedRouter[], authenticatedPeers: Map<string, Date>, options: JoinOptions) {
+  constructor(mesh: AgentMesh, node: MeshHost, routers: AdmittedRouter[], authenticatedPeers: Map<string, Date>, banned: BanSet, options: JoinOptions) {
     this.mesh = mesh;
     this.node = node;
     this.routers = routers;
     this.authenticatedPeers = authenticatedPeers;
+    this.banned = banned;
     this.#refreshLeadMs = options.refreshLeadMs ?? DEFAULT_REFRESH_LEAD_MS;
     this.#refreshRetryMs = options.refreshRetryMs ?? DEFAULT_REFRESH_RETRY_MS;
     this.#policySyncMs = options.policySyncIntervalMs ?? DEFAULT_POLICY_SYNC_MS;
     this.#provideIntervalMs = options.provideIntervalMs ?? DEFAULT_PROVIDE_INTERVAL_MS;
+    this.#syncIntervalMs = options.controlPlaneSyncIntervalMs ?? DEFAULT_CONTROL_PLANE_SYNC_MS;
+    this.#syncJitterMs = options.controlPlaneSyncJitterMs ?? DEFAULT_CONTROL_PLANE_SYNC_JITTER_MS;
     this.#scheduleRefresh();
+    this.#listenForEvents();
+    if (this.#syncIntervalMs > 0) {
+      this.#scheduleSync(Math.min(FIRST_CONTROL_PLANE_SYNC_MS, this.#syncIntervalMs));
+    }
   }
 
   get peerId(): string {
@@ -138,9 +166,14 @@ export class MeshSession {
   /**
    * Connects to a peer by address; a `/p2p-circuit` address goes through
    * the named relay. Returns the connection, reused if one is already open.
+   * A banned peer is refused here and by the connection gater.
    */
   connect(addr: string | Multiaddr, signal?: AbortSignal): Promise<Connection> {
     const ma = typeof addr === "string" ? multiaddr(addr) : addr;
+    const target = ma.getComponents().findLast((c) => c.name === "p2p")?.value;
+    if (target !== undefined && this.banned.has(target)) {
+      return Promise.reject(new Error(`peer ${target} is banned by the control plane`));
+    }
     return this.node.dial(ma, signal !== undefined ? { signal } : {});
   }
 
@@ -229,6 +262,111 @@ export class MeshSession {
   }
 
   /**
+   * Pulls keys, bans and router addresses from the control plane now, and
+   * the mesh policy when serving, then applies them: a newly banned peer is
+   * hung up on and dropped from the admitted set. Concurrent calls share
+   * one pull. Errors of individual parts are in the result, not thrown.
+   */
+  sync(): Promise<ControlPlaneSync> {
+    this.#syncing ??= this.#syncOnce().finally(() => {
+      this.#syncing = undefined;
+    });
+    return this.#syncing;
+  }
+
+  async #syncOnce(): Promise<ControlPlaneSync> {
+    const result = await this.mesh.syncControlPlane();
+    if (result.bannedPeerIds !== undefined) {
+      const { banned } = this.banned.reconcile(result.bannedPeerIds, result.fetchedAt);
+      await Promise.all(banned.map((peerId) => this.#evict(peerId)));
+    }
+    if (this.#serving) {
+      try {
+        await this.syncPolicy();
+      } catch (err) {
+        result.errors.push(`policy: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return result;
+  }
+
+  /** Asks for a pull soon, after a random delay so a fleet told at once does not pull at once. */
+  triggerSync(): void {
+    if (this.#closed) {
+      return;
+    }
+    this.#scheduleSync(Math.floor(Math.random() * (this.#syncJitterMs + 1)));
+  }
+
+  #scheduleSync(delayMs: number): void {
+    clearTimeout(this.#syncTimer);
+    this.#syncTimer = setTimeout(() => {
+      this.sync()
+        .catch(() => {})
+        .finally(() => {
+          if (!this.#closed && this.#syncIntervalMs > 0) {
+            // Stretched by up to a tenth so a fleet started together does not pull together.
+            this.#scheduleSync(this.#syncIntervalMs + Math.floor(Math.random() * (this.#syncIntervalMs / 10 + 1)));
+          }
+        });
+    }, delayMs);
+    this.#syncTimer.unref?.();
+  }
+
+  /** Drops a banned peer: its admission and its connections. */
+  async #evict(peerId: string): Promise<void> {
+    this.authenticatedPeers.delete(peerId);
+    try {
+      await this.node.hangUp(peerIdFromString(peerId));
+    } catch {
+      // Not connected, or already gone.
+    }
+  }
+
+  /**
+   * The control plane's gossip events, relayed by the routers. The topic
+   * validator drops anything not signed by a trusted control plane key, so
+   * a peer whose libp2p key signed the envelope still cannot get an
+   * unsigned event through; a stale event is ignored, not penalized.
+   */
+  #listenForEvents(): void {
+    const pubsub = this.node.services.pubsub;
+    pubsub.topicValidators.set(GOSSIP_EVENTS_TOPIC, (_peer, message) => {
+      if (message.type !== "signed") {
+        return TopicValidatorResult.Reject;
+      }
+      return verifyMeshEvent(message.data, this.mesh.credential.controlPlaneKeys) !== undefined ? TopicValidatorResult.Accept : TopicValidatorResult.Reject;
+    });
+    pubsub.addEventListener("message", (evt) => {
+      if (evt.detail.topic !== GOSSIP_EVENTS_TOPIC) {
+        return;
+      }
+      const event = verifyMeshEvent(evt.detail.data, this.mesh.credential.controlPlaneKeys);
+      if (event === undefined) {
+        return;
+      }
+      switch (event.type) {
+        case MeshEvent_Type.BANNED:
+          // Not persisted: a restarted member picks the ban back up from /info.
+          if (this.banned.add(event.peerId, Number(event.timestamp))) {
+            void this.#evict(event.peerId);
+          }
+          break;
+        case MeshEvent_Type.KEY_ROTATION:
+          if (event.newPublicKey.length === 32) {
+            this.mesh.addTrustedKey(event.newPublicKey);
+          }
+          this.triggerSync();
+          break;
+        case MeshEvent_Type.POLICY_UPDATE:
+          this.triggerSync();
+          break;
+      }
+    });
+    pubsub.subscribe(GOSSIP_EVENTS_TOPIC);
+  }
+
+  /**
    * The mesh policy rules this member evaluates for callers, as the control
    * plane rendered them (PolicyConfigGetResponse.datalog_rules). Empty until
    * the first serve() or syncPolicy().
@@ -265,6 +403,7 @@ export class MeshSession {
         trustedKeys: () => this.mesh.credential.controlPlaneKeys,
         ownBiscuit: () => this.mesh.credential.biscuit,
         policyRules: () => this.policyRules,
+        isBanned: (peerId) => this.banned.has(peerId),
         onAuthorized: (peerId, verified) => this.authenticatedPeers.set(peerId, verified.expiration),
       };
       await this.node.handle(MCP_PROTOCOL, mcpStreamHandler(this.services, providerOptions, MCP_PROTOCOL), SERVE_HANDLER_OPTIONS);
@@ -337,6 +476,7 @@ export class MeshSession {
   async close(): Promise<void> {
     this.#closed = true;
     clearTimeout(this.#refreshTimer);
+    clearTimeout(this.#syncTimer);
     clearInterval(this.#policyTimer);
     clearInterval(this.#provideTimer);
     await this.node.stop();
@@ -350,7 +490,8 @@ export async function joinMesh(mesh: AgentMesh, options: JoinOptions = {}): Prom
     throw new Error("credential lists no router addresses; the control plane had no active router at enrollment");
   }
 
-  const node = await createMeshHost(mesh.identity, options);
+  const banned = new BanSet();
+  const node = await createMeshHost(mesh.identity, { ...options, banned });
   const admitted: AdmittedRouter[] = [];
   const authenticatedPeers = new Map<string, Date>();
   try {
@@ -359,6 +500,7 @@ export async function joinMesh(mesh: AgentMesh, options: JoinOptions = {}): Prom
       authStreamHandler({
         ownBiscuit: () => mesh.credential.biscuit,
         trustedKeys: () => mesh.credential.controlPlaneKeys,
+        isBanned: (peerId) => banned.has(peerId),
         onAuthenticated: (peerId, verified) => authenticatedPeers.set(peerId, verified.expiration),
       }),
       AUTH_HANDLER_OPTIONS,
@@ -394,5 +536,5 @@ export async function joinMesh(mesh: AgentMesh, options: JoinOptions = {}): Prom
     throw err;
   }
 
-  return new MeshSession(mesh, node, admitted, authenticatedPeers, options);
+  return new MeshSession(mesh, node, admitted, authenticatedPeers, banned, options);
 }
