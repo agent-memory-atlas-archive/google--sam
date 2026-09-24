@@ -14,8 +14,10 @@
 # limitations under the License.
 
 # Fails when the protobuf bindings or the baseline Datalog artifact the SDKs
-# ship are stale relative to api/. Regenerates in place, so run it on a
-# clean checkout.
+# ship are stale relative to api/, when the example programs embedded in the
+# SDK READMEs and the Native SDKs guide differ from the files CI runs, or
+# when the JavaScript lockfile resolves packages anywhere but the public
+# registry. Regenerates in place, so run it on a clean checkout.
 
 set -o errexit
 set -o nounset
@@ -34,3 +36,14 @@ if ! git diff --exit-code -- "${GENERATED[@]}"; then
   exit 1
 fi
 echo "SDK generated files are up to date."
+
+go run ./hack/gen-sdk-docs -check sdk site/content/docs
+echo "SDK examples embedded in the docs are up to date."
+
+if grep -E '"resolved": "https?://' sdk/js/package-lock.json | grep -qv '"resolved": "https://registry.npmjs.org/'; then
+  echo "ERROR: sdk/js/package-lock.json resolves packages outside https://registry.npmjs.org/."
+  grep -E '"resolved": "https?://' sdk/js/package-lock.json | grep -v '"resolved": "https://registry.npmjs.org/' | head -3
+  echo "Regenerate it with the public registry (sdk/js/.npmrc pins it)."
+  exit 1
+fi
+echo "SDK lockfile resolves against the public registry."

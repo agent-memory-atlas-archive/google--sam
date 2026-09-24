@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Native SDKs (sdk/): unit tests per language, then both SDKs enrolling
-# against a real control plane through tests/integration/sdk_enroll_test.go.
-# api/sam.proto is a trigger because the SDKs ship bindings generated from it.
+# Native SDKs (sdk/): unit tests per language, then both SDKs on a mesh with
+# a real control plane, router and sam-node through tests/integration, and
+# the example programs the docs embed run the same way. api/sam.proto is a
+# trigger because the SDKs ship bindings generated from it; the docs are
+# because they embed the examples.
 name: SDK
 
 on:
@@ -24,6 +26,9 @@ on:
       - 'sdk/**'
       - 'api/sam.proto'
       - 'hack/gen-sdk-proto.sh'
+      - 'hack/gen-sdk-docs/**'
+      - 'hack/verify-sdk-generated.sh'
+      - 'site/content/docs/guides/native-sdks.md'
       - 'tests/integration/sdk_*_test.go'
       - '.github/workflows/sdk.yml'
   pull_request:
@@ -32,6 +37,9 @@ on:
       - 'sdk/**'
       - 'api/sam.proto'
       - 'hack/gen-sdk-proto.sh'
+      - 'hack/gen-sdk-docs/**'
+      - 'hack/verify-sdk-generated.sh'
+      - 'site/content/docs/guides/native-sdks.md'
       - 'tests/integration/sdk_*_test.go'
       - '.github/workflows/sdk.yml'
 
@@ -75,8 +83,8 @@ jobs:
       - name: Python SDK
         run: make sdk-python
 
-      - name: Generated bindings are current
+      - name: Generated bindings, embedded examples and lockfile are current
         run: ./hack/verify-sdk-generated.sh
 
-      - name: Both SDKs on a mesh with a real control plane, router and sam-node
-        run: go test ./tests/integration -run TestNativeSDKs -count=1 -v
+      - name: Both SDKs and the documented examples on a mesh with a real control plane, router and sam-node
+        run: go test ./tests/integration -run TestNativeSDK -count=1 -v

@@ -295,18 +295,24 @@ holds against the control plane's records.
 
 ### Milestone 3 — call tools (done)
 
-- Discovery: `session.discover(type, name)` looks the mesh DHT up for the
-  service key `internal/node/service.go` derives. JS: `@libp2p/kad-dht` in
-  client mode on `/sam/kad/1.0.0`; Python: the SDK's own bounded
-  GET_PROVIDERS walk on the same protocol (see the facts above).
-- `/sam/mcp/1.0.0` client: `session.openMCP(addr, "mcp://<name>")` sends
+- Discovery: `session.discover("mcp://calc")`, or `(type, name)`, or a type
+  alone, looks the mesh DHT up for the service key
+  `internal/node/service.go` derives. JS: `@libp2p/kad-dht` in client mode
+  on `/sam/kad/1.0.0`; Python: the SDK's own bounded GET_PROVIDERS walk on
+  the same protocol (see the facts above).
+- Naming a peer: every call takes a `Peer`, which is a provider `discover`
+  returned, a peer id, or a multiaddr. For the first two the SDK dials the
+  advertised addresses and `<router>/p2p-circuit/p2p/<peer>` through every
+  admitted router, as `preparePeerAddrs` in `internal/node/mcp.go` does; a
+  multiaddr is dialed as given.
+- `/sam/mcp/1.0.0` client: `session.openMCP(peer, "mcp://<name>")` sends
   the `AuthFrame` naming the service, verifies the provider's credential
   and the caller's required labels (`checkPeerLabels`), then runs the
   official MCP client over the varint-framed stream. JS: a `Transport` for
   `@modelcontextprotocol/sdk`; Python: a pair of memory streams pumped to
   and from the libp2p stream for `mcp.ClientSession`. `""` as the target is
   the provider's own catalog (`list_local_services`, `get_mesh_info`).
-- `session.listTools(addr, service)` and `session.callTool(addr, service,
+- `session.listTools(peer, service)` and `session.callTool(peer, service,
   tool, args)` on top of that.
 - Tests. Unit: each SDK calls a tool on an in-process provider that serves
   `/sam/mcp/1.0.0` as `sam-node` does with the official MCP server behind
@@ -433,15 +439,16 @@ holds against the control plane's records.
 ./hack/gen-sdk-proto.sh
 
 # JavaScript
-cd sdk/js && npm ci && npm test && npm run build
+cd sdk/js && npm ci && npm test && npm run build && npm run examples
 
 # Python
 python3 -m venv sdk/python/.venv
 sdk/python/.venv/bin/pip install -e 'sdk/python[test]'
 sdk/python/.venv/bin/pytest sdk/python/tests
 
-# Both against a real control plane, router and sam-node
-go test ./tests/integration -run TestNativeSDKs -v
+# Both against a real control plane, router and sam-node, and the example
+# programs the docs embed against the same
+go test ./tests/integration -run TestNativeSDK -v
 ```
 
 `make sdk-test` runs all of the above. The integration tests skip an SDK
@@ -452,6 +459,18 @@ runners `sdk/js/src/conformance-join.ts` and
 holds, then takes JSON commands on stdin (`auth`, `discover`, `tools`,
 `call`, `serve`, `http`, `peers`, `sync`, `banned`, `quit`) so the Go test
 can drive both languages through the same script.
+
+The programs the package READMEs and the Native SDKs guide show are
+`sdk/js/examples/*.ts` and `sdk/python/examples/*.py`. The Markdown embeds
+them between `<!-- embed: <path> -->` and `<!-- /embed -->` markers;
+`make sdk-docs` (`go run ./hack/gen-sdk-docs sdk site/content/docs`) copies
+the files in, `hack/verify-sdk-generated.sh` fails when a copy is stale, and
+`TestNativeSDKExamples` runs the files themselves against a mesh. Edit the
+example, regenerate, commit both.
+
+`sdk/js/.npmrc` pins the public registry so `package-lock.json` never
+resolves packages through a local mirror; the verify script checks the
+lockfile too.
 
 Interoperability facts that the tests pin: `sdk/testdata/identity_vectors.json`
 holds key encodings, peer IDs and challenge signatures produced with
@@ -473,7 +492,7 @@ one follows is named so a change on one side can be carried to the others.
 | `identity.ts` | `identity.py` | ed25519 key pair, libp2p key encodings, peer ID |
 | `controlplane.ts` | `controlplane.py` | `/info`, `/keys`, `/enroll`, `/enroll/status`, `/register`, `/refresh`, `/policies`, `/nodes/catalog`, with the challenges of `api/network.go` |
 | `credential.ts` | `credential.py` | what a member holds, `AuthFrame` encoding, `issuedUnderKeys` |
-| `mesh.ts` | `mesh.py` | `AgentMesh`: enroll, load, refresh, `syncControlPlane` as `SyncControlPlane` in `internal/node/controlplane_sync.go`; state directory (`identity.key`, `credential.json`) |
+| `mesh.ts` | `mesh.py` | `AgentMesh`: enroll (resumes an unexpired credential in the state directory before spending a token), load, refresh, `syncControlPlane` as `SyncControlPlane` in `internal/node/controlplane_sync.go`; state directory (`identity.key`, `credential.json`, the same layout in both languages) |
 | `biscuit.ts` | `biscuit.py` | verification of a peer's credential, as `internal/identity.verifyBiscuit` |
 | `host.ts` | `host.py` | the libp2p host as `internal/node/node.go` configures it, plus gossipsub and the connection gater |
 | `auth.ts` | `auth.py` | `/sam/auth/1.0.0` on both sides, as `HandleAuthHandshake` |
@@ -485,6 +504,7 @@ one follows is named so a change on one side can be carried to the others.
 | `serve.ts` | `serve.py` | `/sam/mcp/1.0.0` server, `/libp2p-http` server and client, service registry, as `WithBiscuitAuth` and `StartIngressServer` |
 | `sync.ts` | `sync.py` | ban set and mesh event verification, as `reconcileBannedPeers` and `verifyEvent` |
 | `conformance.ts`, `conformance-join.ts` | `conformance.py`, `conformance_join.py` | the runners the integration tests drive |
+| `../examples/` | `../../examples/` | the programs the docs embed and `TestNativeSDKExamples` runs |
 | `gen/` | `_proto/`, `_gen/` | generated by `hack/gen-sdk-proto.sh` from `api/sam.proto`, `sdk/python/proto/circuit.proto` and `api/datalog.go` |
 
 Unit tests sit beside the code (`*.test.ts`, `tests/test_*.py`) and build a

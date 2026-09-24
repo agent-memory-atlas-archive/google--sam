@@ -28,6 +28,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "examples": "tsc -p tsconfig.examples.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "pretest": "tsc -p tsconfig.test.json",
     "test": "node --test 'build/**/*.test.js'"

@@ -51,6 +51,130 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// sdkMesh is the real mesh the SDK tests run against: a control plane
+// publishing gossip events, a sam-router, and a sam-node serving the MCP
+// service "calc" from a backend the test runs.
+type sdkMesh struct {
+	root       string
+	store      *storage.SQLStore
+	publisher  *controlplane.P2PMeshAdapter
+	baseURL    string
+	adminToken string
+	cpPort     int
+	cpPriv     ed25519.PrivateKey
+	cpPub      ed25519.PublicKey
+	routerAddr string
+	routerPeer string
+	samNode    *backgroundNode
+	nodeAPI    string
+}
+
+const sdkMeshAdminToken = "test-admin-token"
+
+func startSDKMesh(t *testing.T) *sdkMesh {
+	t.Helper()
+	root := repoRoot(t)
+	oidcURL, mintToken := startCustomMockOIDC(t)
+
+	store, err := storage.NewSQLStore("sqlite", filepath.Join(t.TempDir(), "cp.db"))
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	srv, err := controlplane.NewServer(controlplane.Options{
+		ListenAddr:            "127.0.0.1:0",
+		AdminToken:            sdkMeshAdminToken,
+		OIDCIssuer:            oidcURL,
+		AllowedAudiences:      []string{"sam-mesh-audience"},
+		AutoApproveEnrollment: true,
+	}, store)
+	if err != nil {
+		t.Fatalf("failed to create control plane: %v", err)
+	}
+	if err := srv.Start(); err != nil {
+		t.Fatalf("failed to start control plane: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	baseURL := "http://" + srv.Addr()
+	_, portStr, _ := net.SplitHostPort(srv.Addr())
+	cpPort, _ := strconv.Atoi(portStr)
+
+	// Bans and rotations reach the mesh as gossip events through the routers,
+	// as the sam-control-plane binary publishes them.
+	publisher, err := controlplane.NewMeshPublisher(context.Background(), store, 500*time.Millisecond)
+	if err != nil {
+		t.Fatalf("failed to start mesh event publisher: %v", err)
+	}
+	t.Cleanup(func() { _ = publisher.Close() })
+	srv.SetMeshAdapter(publisher)
+
+	// The router enrolls through OIDC with group "routers" and the node with
+	// user mock-user. Every member holds the node role, which may reach any
+	// service on any target; the SDK members get it from their bootstrap
+	// token and the node from its binding.
+	policyFile := filepath.Join(t.TempDir(), "policy.yaml")
+	policy := fmt.Sprintf(`roles:
+  - name: %s
+    allowed_services: []
+    allowed_targets: ["*"]
+  - name: %s
+    allowed_services: ["*"]
+    allowed_targets: ["*"]
+bindings:
+  - role: %s
+    members: ["group:routers"]
+  - role: %s
+    members: ["user:mock-user"]
+`, api.RoleRouter, api.RoleNode, api.RoleRouter, api.RoleNode)
+	if err := os.WriteFile(policyFile, []byte(policy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	injectPolicyYAML(t, cpPort, sdkMeshAdminToken, policyFile)
+
+	routerAddr, _ := startRouter(t, t.TempDir(), cpPort, mintToken, "router")
+
+	cpPriv, cpPub, err := store.GetCurrentKey(context.Background())
+	if err != nil {
+		t.Fatalf("failed to load control plane signing key: %v", err)
+	}
+
+	// The Go node: a sam-node enrolled through OIDC, listening on loopback,
+	// serving the MCP service "calc" from a backend this test runs.
+	backend := httptest.NewServer(newBoundaryMCPHandler(t))
+	t.Cleanup(backend.Close)
+	nodeBin := buildBinary(t, "./cmd/sam-node")
+	nodeHome := filepath.Join(t.TempDir(), "node")
+	if err := os.MkdirAll(nodeHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	samNode := launchNode(t, nodeBin,
+		append(os.Environ(), "HOME="+nodeHome, "XDG_CONFIG_HOME="+filepath.Join(nodeHome, ".config")),
+		nodeHome, "run",
+		"--control-plane", baseURL,
+		"--jwt", mintToken(map[string]interface{}{"sub": "mock-user", "roles": []string{api.RoleNode}}),
+		"--allow-loopback",
+		"--api-token-path", tokenPath(t, "node-token"),
+		"--discovery-interval", "100ms",
+		"--config", writeNodeConfig(t, nodeHome, nil, svcDecl{Type: "mcp", Name: "calc", TargetURL: backend.URL}),
+		"--log-level", "debug",
+	)
+	return &sdkMesh{
+		root:       root,
+		store:      store,
+		publisher:  publisher,
+		baseURL:    baseURL,
+		adminToken: sdkMeshAdminToken,
+		cpPort:     cpPort,
+		cpPriv:     cpPriv,
+		cpPub:      cpPub,
+		routerAddr: routerAddr,
+		routerPeer: extractPeerID(routerAddr),
+		samNode:    samNode,
+		nodeAPI:    samNode.waitForAPI(t),
+	}
+}
+
 // sdkMember is a running SDK conformance-join runner: a mesh member written
 // in another language that the test drives over stdin/stdout. Both runners
 // (sdk/js/src/conformance-join.ts, sdk/python/src/agent_mesh/conformance_join.py)
@@ -140,97 +264,12 @@ var sdkMemberLaunchers = []sdkRunner{
 // whose toolchain is missing is skipped, and the matrix shrinks to the
 // members present.
 func TestNativeSDKsMesh(t *testing.T) {
-	root := repoRoot(t)
-	oidcURL, mintToken := startCustomMockOIDC(t)
-
-	store, err := storage.NewSQLStore("sqlite", filepath.Join(t.TempDir(), "cp.db"))
-	if err != nil {
-		t.Fatalf("failed to create store: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-
-	const adminToken = "test-admin-token"
-	srv, err := controlplane.NewServer(controlplane.Options{
-		ListenAddr:            "127.0.0.1:0",
-		AdminToken:            adminToken,
-		OIDCIssuer:            oidcURL,
-		AllowedAudiences:      []string{"sam-mesh-audience"},
-		AutoApproveEnrollment: true,
-	}, store)
-	if err != nil {
-		t.Fatalf("failed to create control plane: %v", err)
-	}
-	if err := srv.Start(); err != nil {
-		t.Fatalf("failed to start control plane: %v", err)
-	}
-	t.Cleanup(func() { _ = srv.Close() })
-	baseURL := "http://" + srv.Addr()
-	_, portStr, _ := net.SplitHostPort(srv.Addr())
-	cpPort, _ := strconv.Atoi(portStr)
-
-	// Bans and rotations reach the mesh as gossip events through the routers,
-	// as the sam-control-plane binary publishes them.
-	publisher, err := controlplane.NewMeshPublisher(context.Background(), store, 500*time.Millisecond)
-	if err != nil {
-		t.Fatalf("failed to start mesh event publisher: %v", err)
-	}
-	t.Cleanup(func() { _ = publisher.Close() })
-	srv.SetMeshAdapter(publisher)
-
-	// The router enrolls through OIDC with group "routers" and the node with
-	// user mock-user. Every member holds the node role, which may reach any
-	// service on any target; the SDK members get it from their bootstrap
-	// token and the node from its binding.
-	policyFile := filepath.Join(t.TempDir(), "policy.yaml")
-	policy := fmt.Sprintf(`roles:
-  - name: %s
-    allowed_services: []
-    allowed_targets: ["*"]
-  - name: %s
-    allowed_services: ["*"]
-    allowed_targets: ["*"]
-bindings:
-  - role: %s
-    members: ["group:routers"]
-  - role: %s
-    members: ["user:mock-user"]
-`, api.RoleRouter, api.RoleNode, api.RoleRouter, api.RoleNode)
-	if err := os.WriteFile(policyFile, []byte(policy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	injectPolicyYAML(t, cpPort, adminToken, policyFile)
-
-	routerAddr, _ := startRouter(t, t.TempDir(), cpPort, mintToken, "router")
-	routerPeer := extractPeerID(routerAddr)
-
-	ctx := context.Background()
-	cpPriv, cpPub, err := store.GetCurrentKey(ctx)
-	if err != nil {
-		t.Fatalf("failed to load control plane signing key: %v", err)
-	}
-
-	// The Go node: a sam-node enrolled through OIDC, listening on loopback,
-	// serving the MCP service "calc" from a backend this test runs.
+	mesh := startSDKMesh(t)
+	root, baseURL, adminToken, cpPort := mesh.root, mesh.baseURL, mesh.adminToken, mesh.cpPort
+	routerAddr, routerPeer, cpPriv, cpPub := mesh.routerAddr, mesh.routerPeer, mesh.cpPriv, mesh.cpPub
+	store, publisher, samNode, nodeAPI := mesh.store, mesh.publisher, mesh.samNode, mesh.nodeAPI
 	const serviceName = "calc"
-	backend := httptest.NewServer(newBoundaryMCPHandler(t))
-	t.Cleanup(backend.Close)
-	nodeBin := buildBinary(t, "./cmd/sam-node")
-	nodeHome := filepath.Join(t.TempDir(), "node")
-	if err := os.MkdirAll(nodeHome, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	samNode := launchNode(t, nodeBin,
-		append(os.Environ(), "HOME="+nodeHome, "XDG_CONFIG_HOME="+filepath.Join(nodeHome, ".config")),
-		nodeHome, "run",
-		"--control-plane", baseURL,
-		"--jwt", mintToken(map[string]interface{}{"sub": "mock-user", "roles": []string{api.RoleNode}}),
-		"--allow-loopback",
-		"--api-token-path", tokenPath(t, "node-token"),
-		"--discovery-interval", "100ms",
-		"--config", writeNodeConfig(t, nodeHome, nil, svcDecl{Type: "mcp", Name: serviceName, TargetURL: backend.URL}),
-		"--log-level", "debug",
-	)
-	nodeAPI := samNode.waitForAPI(t)
+	ctx := context.Background()
 
 	// One member per SDK, each listening directly on loopback too so both
 	// the direct and the relayed path can be walked.

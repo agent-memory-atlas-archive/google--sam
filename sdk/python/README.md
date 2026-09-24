@@ -7,7 +7,8 @@ finds services and calls them, publishes services of its own, and follows
 the control plane's keys, bans and policy while it runs. Import it as
 `agent_mesh`.
 
-Guide: [sam-mesh.dev/docs/guides/native-sdks](https://sam-mesh.dev/docs/guides/native-sdks/).
+Guide: [sam-mesh.dev/docs/guides/native-sdks](https://sam-mesh.dev/docs/guides/native-sdks/),
+from an empty machine to two programs on a mesh.
 Source: [github.com/google/sam/tree/main/sdk/python](https://github.com/google/sam/tree/main/sdk/python).
 
 ## Install
@@ -22,72 +23,140 @@ asyncio, use it through `anyio` with the trio backend. One dependency,
 
 ## Use
 
+Both programs below are in
+[`examples/`](https://github.com/google/sam/tree/main/sdk/python/examples)
+and run against a real mesh in the repository's tests. They read the mesh
+from `SAM_CONTROL_PLANE_URL` and the enrollment token from
+`SAM_BOOTSTRAP_TOKEN_PATH`; the guide shows how to get both from `sam-one`
+or from the operator of an existing mesh.
+
+Find a service and call it:
+
+<!-- embed: sdk/python/examples/call.py -->
 ```python
+"""Finds a service on the mesh and calls it: a tool of an MCP service, or a
+path of an inference or A2A service.
+
+    python call.py mcp://greeter greet '{"name": "Ada"}'
+    python call.py a2a://greeter /card
+    python call.py inference://ollama /v1/models
+
+SAM_CONTROL_PLANE_URL names the mesh. SAM_BOOTSTRAP_TOKEN_PATH is the file
+holding the token the mesh operator gave you; the first run spends it and
+keeps the identity and credential in SAM_STATE_DIR, later runs resume from
+there without it.
+"""
+
+import json
+import os
+import sys
+
+import trio
+from agent_mesh import AgentMesh
+
+argv = sys.argv[1:]
+service = argv[0] if len(argv) > 0 else "mcp://greeter"
+tool_or_path = argv[1] if len(argv) > 1 else "greet"
+args = json.loads(argv[2]) if len(argv) > 2 else {"name": "world"}
+
+mesh = AgentMesh.enroll(
+    os.environ.get("SAM_CONTROL_PLANE_URL", "https://mesh.example.com"),
+    bootstrap_token_path=os.environ.get("SAM_BOOTSTRAP_TOKEN_PATH"),
+    state_dir=os.environ.get("SAM_STATE_DIR", "~/.config/sam-mesh/caller"),
+)
+
+
+async def main() -> None:
+    async with mesh.join() as session:
+        print(f"on the mesh as {session.peer_id}")
+
+        providers = await session.discover(service)
+        if not providers:
+            raise SystemExit(f"no member of the mesh serves {service}")
+        provider = providers[0]
+        print(f"{service} is served by {provider.peer_id}")
+
+        if service.startswith("mcp://"):
+            tools = await session.list_tools(provider, service)
+            print("tools:", ", ".join(t.name for t in tools))
+            result = await session.call_tool(provider, service, tool_or_path, args)
+            print("\n".join(result.text))
+        else:
+            response = await session.request(provider, service, tool_or_path)
+            print(response.status, response.text)
+
+
+trio.run(main)
+```
+<!-- /embed -->
+
+Publish services of your own:
+
+<!-- embed: sdk/python/examples/serve.py -->
+```python
+"""Publishes services on the mesh and answers callers until stopped: an MCP
+tool, an A2A endpoint and, when OLLAMA_URL is set, the Ollama server running
+beside this program as an inference service. The mesh policy decides which
+members may call; the SDK turns the others away before anything reaches this
+code or Ollama.
+
+    python serve.py
+
+SAM_CONTROL_PLANE_URL names the mesh. SAM_BOOTSTRAP_TOKEN_PATH is the file
+holding the token the mesh operator gave you; the first run spends it and
+keeps the identity and credential in SAM_STATE_DIR, later runs resume from
+there without it.
+"""
+
+import json
+import os
+
 import trio
 from agent_mesh import AgentMesh, HTTPRequest, HTTPResponse, HTTPService, MCPService, VerifiedBiscuit
 from mcp.server.mcpserver import MCPServer
 
 mesh = AgentMesh.enroll(
-    "https://hub.sam-mesh.dev",
-    bootstrap_token_path="/run/secrets/sam-bootstrap-token",
-    state_dir="~/.config/sam-mesh/agent",
+    os.environ.get("SAM_CONTROL_PLANE_URL", "https://mesh.example.com"),
+    bootstrap_token_path=os.environ.get("SAM_BOOTSTRAP_TOKEN_PATH"),
+    state_dir=os.environ.get("SAM_STATE_DIR", "~/.config/sam-mesh/greeter"),
 )
-print(mesh.peer_id)                      # 12D3Koo...
 
 
-async def main():
-    # On the mesh: authenticated with a router, reachable through it,
-    # credential kept fresh, keys, bans and policy followed from the control
-    # plane for as long as the block is open.
+def create_server() -> MCPServer:
+    server = MCPServer("greeter")
+
+    @server.tool(description="Greets someone by name")
+    def greet(name: str) -> str:
+        return f"hello {name}"
+
+    return server
+
+
+async def card(request: HTTPRequest, caller: VerifiedBiscuit) -> HTTPResponse:
+    body = json.dumps({"name": "greeter", "path": request.path, "caller": caller.peer_id})
+    return HTTPResponse(status=200, headers={"content-type": "application/json"}, body=body.encode())
+
+
+async def main() -> None:
     async with mesh.join() as session:
-        print(session.relay_addresses)
-        # Reach another member (directly or through a router) and verify it.
-        peer = await session.authenticate("/ip4/.../p2p/<router>/p2p-circuit/p2p/<peer>")
-        print(peer.roles, peer.labels, peer.expiration)
+        await session.serve(MCPService(name="greeter", create_server=create_server))
+        await session.serve(HTTPService(type="a2a", name="greeter", target=card))
+        if "OLLAMA_URL" in os.environ:
+            await session.serve(HTTPService(type="inference", name="ollama", target=os.environ["OLLAMA_URL"]))
 
-        # Find a service in the mesh DHT and call one of its tools.
-        provider = (await session.discover("mcp", "calc"))[0]
-        addr = f"{session.routers[0].addr}/p2p-circuit/p2p/{provider.peer_id}"
-        print(await session.list_tools(addr, "mcp://calc"))
-        result = await session.call_tool(addr, "mcp://calc", "add", {"a": 1, "b": 2}, required_labels={"region": "eu"})
-        print(result.text)
-
-        # Publish services of your own. Callers are authorized with the mesh
-        # policy before anything reaches your code or your backend.
-        def create_server() -> MCPServer:
-            server = MCPServer("echo")
-
-            @server.tool()
-            def echo(text: str) -> str:
-                return text
-
-            return server
-
-        await session.serve(MCPService(name="echo", create_server=create_server))
-        await session.serve(HTTPService(type="inference", name="llm", target="http://127.0.0.1:8000"))
-
-        async def card(request: HTTPRequest, caller: VerifiedBiscuit) -> HTTPResponse:
-            return HTTPResponse(status=200, body=f"hello {caller.peer_id}".encode())
-
-        await session.serve(HTTPService(type="a2a", name="reviewer", target=card))
-
-        # Call an inference or A2A service on another member.
-        models = await session.request(addr, "inference://llm", "/v1/models")
-        print(models.status, models.text)
+        served = ", ".join(f"{t}://{n}" for t, n, _ in session.services.list())
+        print(f"serving {served} as {session.peer_id}", flush=True)
+        await trio.sleep_forever()
 
 
 trio.run(main)
-
-# Later, in a new process:
-mesh = AgentMesh.load("~/.config/sam-mesh/agent")
 ```
+<!-- /embed -->
 
-py-libp2p runs on trio, so `join()` is a trio async context manager; under
-asyncio use it through `anyio` with the trio backend.
-
-`enroll` takes exactly one of `bootstrap_token_path`, `bootstrap_token` or
-`jwt`. Read tokens from a file or the environment; do not put them on a
-command line.
+`enroll` reuses the identity and credential saved in `state_dir` when they
+are still valid for that control plane, and needs exactly one of
+`bootstrap_token_path`, `bootstrap_token` or `jwt` otherwise. Read tokens
+from a file or the environment; do not put them on a command line.
 
 A plaintext `http://` control plane is accepted only on loopback. Pass
 `allow_insecure=True` for a network you trust.

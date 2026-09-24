@@ -6,73 +6,137 @@ the agent enrolls with the control plane, joins the mesh through a router,
 finds services and calls them, publishes services of its own, and follows
 the control plane's keys, bans and policy while it runs.
 
-Guide: [sam-mesh.dev/docs/guides/native-sdks](https://sam-mesh.dev/docs/guides/native-sdks/).
+Guide: [sam-mesh.dev/docs/guides/native-sdks](https://sam-mesh.dev/docs/guides/native-sdks/),
+from an empty machine to two programs on a mesh.
 Source: [github.com/google/sam/tree/main/sdk/js](https://github.com/google/sam/tree/main/sdk/js).
 
 ## Install
 
 ```bash
-npm install @sam-mesh/sdk
+npm install @sam-mesh/sdk @modelcontextprotocol/sdk zod
 ```
 
 Requires Node.js 22.18 or later.
 
 ## Use
 
+Both programs below are in
+[`examples/`](https://github.com/google/sam/tree/main/sdk/js/examples) and
+run against a real mesh in the repository's tests. They read the mesh from
+`SAM_CONTROL_PLANE_URL` and the enrollment token from
+`SAM_BOOTSTRAP_TOKEN_PATH`; the guide shows how to get both from `sam-one`
+or from the operator of an existing mesh.
+
+Find a service and call it:
+
+<!-- embed: sdk/js/examples/call.ts -->
 ```ts
+// Finds a service on the mesh and calls it: a tool of an MCP service, or a
+// path of an inference or A2A service.
+//
+//   node call.js mcp://greeter greet '{"name": "Ada"}'
+//   node call.js a2a://greeter /card
+//   node call.js inference://ollama /v1/models
+//
+// SAM_CONTROL_PLANE_URL names the mesh. SAM_BOOTSTRAP_TOKEN_PATH is the file
+// holding the token the mesh operator gave you; the first run spends it and
+// keeps the identity and credential in SAM_STATE_DIR, later runs resume from
+// there without it.
+import { homedir } from "node:os";
 import { AgentMesh } from "@sam-mesh/sdk";
+
+const [service = "mcp://greeter", toolOrPath = "greet", args = '{"name": "world"}'] = process.argv.slice(2);
+
+const mesh = await AgentMesh.enroll({
+  controlPlaneUrl: process.env.SAM_CONTROL_PLANE_URL ?? "https://mesh.example.com",
+  bootstrapTokenPath: process.env.SAM_BOOTSTRAP_TOKEN_PATH,
+  stateDir: process.env.SAM_STATE_DIR ?? `${homedir()}/.config/sam-mesh/caller`,
+});
+const session = await mesh.join();
+console.log(`on the mesh as ${session.peerId}`);
+
+const [provider] = await session.discover(service);
+if (provider === undefined) {
+  throw new Error(`no member of the mesh serves ${service}`);
+}
+console.log(`${service} is served by ${provider.peerId}`);
+
+if (service.startsWith("mcp://")) {
+  const tools = await session.listTools(provider, service);
+  console.log(`tools: ${tools.map((t) => t.name).join(", ")}`);
+  const result = await session.callTool(provider, service, toolOrPath, JSON.parse(args));
+  console.log(result.text.join("\n"));
+} else {
+  const response = await session.request(provider, service, toolOrPath);
+  console.log(response.status, response.text());
+}
+
+await session.close();
+```
+<!-- /embed -->
+
+Publish services of your own:
+
+<!-- embed: sdk/js/examples/serve.ts -->
+```ts
+// Publishes services on the mesh and answers callers until stopped: an MCP
+// tool, an A2A endpoint and, when OLLAMA_URL is set, the Ollama server running
+// beside this program as an inference service. The mesh policy decides which
+// members may call; the SDK turns the others away before anything reaches
+// this code or Ollama.
+//
+//   node serve.js
+//
+// SAM_CONTROL_PLANE_URL names the mesh. SAM_BOOTSTRAP_TOKEN_PATH is the file
+// holding the token the mesh operator gave you; the first run spends it and
+// keeps the identity and credential in SAM_STATE_DIR, later runs resume from
+// there without it.
+import { homedir } from "node:os";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { AgentMesh } from "@sam-mesh/sdk";
 import { z } from "zod";
 
 const mesh = await AgentMesh.enroll({
-  controlPlaneUrl: "https://hub.sam-mesh.dev",
-  bootstrapTokenPath: "/run/secrets/sam-bootstrap-token",
-  stateDir: `${process.env.HOME}/.config/sam-mesh/agent`,
+  controlPlaneUrl: process.env.SAM_CONTROL_PLANE_URL ?? "https://mesh.example.com",
+  bootstrapTokenPath: process.env.SAM_BOOTSTRAP_TOKEN_PATH,
+  stateDir: process.env.SAM_STATE_DIR ?? `${homedir()}/.config/sam-mesh/greeter`,
 });
-console.log(mesh.peerId); // 12D3Koo...
-
-// On the mesh: authenticated with a router, reachable through it, credential
-// kept fresh, keys, bans and policy followed from the control plane until close().
 const session = await mesh.join();
-console.log(session.relayAddresses.map(String));
 
-// Reach another member (directly or through a router) and verify it.
-const peer = await session.authenticate("/ip4/.../p2p/<router>/p2p-circuit/p2p/<peer>");
-console.log(peer.roles, peer.labels, peer.expiration);
-
-// Find a service in the mesh DHT and call one of its tools.
-const [provider] = await session.discover("mcp", "calc");
-const addr = `${session.routers[0].addr}/p2p-circuit/p2p/${provider.peerId}`;
-console.log(await session.listTools(addr, "mcp://calc"));
-const result = await session.callTool(addr, "mcp://calc", "add", { a: 1, b: 2 }, { requiredLabels: { region: "eu" } });
-console.log(result.text);
-
-// Publish services of your own. Callers are authorized with the mesh policy
-// before anything reaches your code or your backend.
 await session.serve({
   type: "mcp",
-  name: "echo",
+  name: "greeter",
   createServer: () => {
-    const server = new McpServer({ name: "echo", version: "1.0.0" });
-    server.tool("echo", { text: z.string() }, async ({ text }) => ({ content: [{ type: "text", text }] }));
+    const server = new McpServer({ name: "greeter", version: "1.0.0" });
+    server.registerTool("greet", { description: "Greets someone by name", inputSchema: { name: z.string() } }, async ({ name }) => ({
+      content: [{ type: "text", text: `hello ${name}` }],
+    }));
     return server;
   },
 });
-await session.serve({ type: "inference", name: "llm", target: "http://127.0.0.1:8000" });
-await session.serve({ type: "a2a", name: "reviewer", target: (request, caller) => new Response(`hello ${caller.peerId}`) });
 
-// Call an inference or A2A service on another member.
-const models = await session.request(addr, "inference://llm", "/v1/models");
-console.log(models.status, models.text());
-await session.close();
+await session.serve({
+  type: "a2a",
+  name: "greeter",
+  target: (request, caller) => Response.json({ name: "greeter", path: new URL(request.url).pathname, caller: caller.peerId }),
+});
 
-// Later, in a new process:
-const resumed = await AgentMesh.load({ controlPlaneUrl: "https://hub.sam-mesh.dev", stateDir: "..." });
+if (process.env.OLLAMA_URL !== undefined) {
+  await session.serve({ type: "inference", name: "ollama", target: process.env.OLLAMA_URL });
+}
+
+console.log(`serving ${session.servedServices.map((s) => `${s.type}://${s.name}`).join(", ")} as ${session.peerId}`);
+
+const stop = () => void session.close().then(() => process.exit(0));
+process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
 ```
+<!-- /embed -->
 
-`enroll` takes exactly one of `bootstrapTokenPath`, `bootstrapToken` or
-`jwt`. Read tokens from a file or the environment; do not put them on a
-command line.
+`enroll` reuses the identity and credential saved in `stateDir` when they
+are still valid for that control plane, and needs exactly one of
+`bootstrapTokenPath`, `bootstrapToken` or `jwt` otherwise. Read tokens from
+a file or the environment; do not put them on a command line.
 
 A plaintext `http://` control plane is accepted only on loopback. Pass
 `allowInsecure: true` for a network you trust.
