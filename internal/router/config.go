@@ -43,6 +43,10 @@ type Options struct {
 	DHTMaxRecordAge    time.Duration
 	LowWaterMark       int
 	HighWaterMark      int
+	// RelayLimitDuration / RelayLimitData cap each relayed connection; 0 is
+	// no limit, so Default() leaves them alone.
+	RelayLimitDuration time.Duration
+	RelayLimitData     int64
 	// RequiredRole restricts enrollment and startup to only accept tokens containing this role.
 	RequiredRole string
 	// HTTPFallbackHandler, when set, serves ordinary (non-WebSocket-upgrade)

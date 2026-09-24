@@ -6,6 +6,7 @@ require (
 	github.com/a2aproject/a2a-go/v2 v2.5.0
 	github.com/biscuit-auth/biscuit-go/v2 v2.2.0
 	github.com/coreos/go-oidc/v3 v3.21.0
+	github.com/dustin/go-humanize v1.0.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/ipfs/go-cid v0.6.2
@@ -48,7 +49,6 @@ require (
 	github.com/davidlazar/go-crypto v0.0.0-20200604182044-b73af7476f6c // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
 	github.com/dunglas/httpsfv v1.1.0 // indirect
-	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/filecoin-project/go-clock v0.1.0 // indirect
 	github.com/flynn/noise v1.1.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
