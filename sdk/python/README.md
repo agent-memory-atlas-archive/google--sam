@@ -1,25 +1,24 @@
 # sam-mesh (Python)
 
 Native Python SDK for joining a SAM agent mesh from inside the agent
-process. It replaces the `sam-node` sidecar for agents written in Python.
-Import it as `agent_mesh`.
+process. It replaces the `sam-node` sidecar for agents written in Python:
+the agent enrolls with the control plane, joins the mesh through a router,
+finds services and calls them, publishes services of its own, and follows
+the control plane's keys, bans and policy while it runs. Import it as
+`agent_mesh`.
 
-Status: **milestone 3** (identity, enrollment, credential refresh, joining
-the mesh over libp2p with mutual authentication, discovering services and
-calling their tools). Serving tools is the next milestone; see
-[../README.md](../README.md) for the plan.
+Guide: [sam-mesh.dev/docs/guides/native-sdks](https://sam-mesh.dev/docs/guides/native-sdks/).
+Source: [github.com/google/sam/tree/main/sdk/python](https://github.com/google/sam/tree/main/sdk/python).
 
 ## Install
 
 ```bash
-pip install sam-mesh                 # from PyPI, released with the repository
-pip install -e 'sdk/python[test]'    # from a checkout
+pip install sam-mesh
 ```
 
-Runtime dependencies are `cryptography`, `protobuf`, `biscuit-python`,
-`libp2p` (py-libp2p 0.7, trio-based), `multiaddr`, `mcp` (2.x), `h11` and
-`httpx`. Python 3.11 or later. py-libp2p's `fastecdsa` builds from source
-against GMP (`libgmp-dev` on Debian).
+Python 3.11 or later. The SDK runs on trio (py-libp2p is trio-based); under
+asyncio, use it through `anyio` with the trio backend. One dependency,
+`fastecdsa`, builds from source against GMP (`libgmp-dev` on Debian).
 
 ## Use
 
@@ -93,43 +92,7 @@ command line.
 A plaintext `http://` control plane is accepted only on loopback. Pass
 `allow_insecure=True` for a network you trust.
 
-## Layout
+## License
 
-- `agent_mesh.identity`: ed25519 key pair, libp2p key encodings, peer ID.
-- `agent_mesh.controlplane`: `/info`, `/keys`, `/enroll`, `/enroll/status`,
-  `/register`, `/refresh`, with the proof-of-possession challenges from
-  `api/network.go`.
-- `agent_mesh.credential`: what a member holds, `AuthFrame` encoding.
-- `agent_mesh.mesh`: `AgentMesh`, persistence under a state directory
-  (`identity.key` in the libp2p private key encoding, `credential.json`).
-- `agent_mesh.biscuit`: verification of a peer's credential with
-  biscuit-python, as `internal/identity.verifyBiscuit` does.
-- `agent_mesh.host`, `agent_mesh.auth`, `agent_mesh.relay`,
-  `agent_mesh.session`: the libp2p host, the `/sam/auth/1.0.0` handshake on
-  both sides, the circuit relay v2 client (reservation, dial, accept) and
-  `MeshSession` with the refresh loop.
-- `agent_mesh.discovery`, `agent_mesh.mcp_client`: the bounded
-  GET_PROVIDERS walk and ADD_PROVIDER on the mesh DHT, and MCP over
-  `/sam/mcp/1.0.0` for `mcp.ClientSession`.
-- `agent_mesh.authorizer`: the provider authorizer, as
-  `internal/node.(*SamNode).Authorize`, over the generated baseline Datalog
-  and the mesh policy rules from `GET /policies`.
-- `agent_mesh.serve`: the `/sam/mcp/1.0.0` server, the `/libp2p-http`
-  server and client (`h11` on the stream), and the service registry behind
-  `session.serve()`.
-- `agent_mesh.sync`: the ban set and the control plane's gossip events;
-  `session.sync()` pulls keys, bans and router addresses as
-  `internal/node/controlplane_sync.go` does.
-- `agent_mesh._proto`, `agent_mesh._gen`: generated from `api/sam.proto`,
-  `sdk/python/proto/circuit.proto` and `api/datalog.go` by
-  `hack/gen-sdk-proto.sh`.
-
-## Test
-
-```bash
-pytest sdk/python/tests                          # unit tests, fake control plane and router
-go test ./tests/integration -run TestNativeSDKs  # real control plane, router and sam-node
-```
-
-The integration tests skip unless `agent_mesh` imports in
-`sdk/python/.venv/bin/python` or `python3`.
+Apache-2.0. Issues and contributions at
+[github.com/google/sam](https://github.com/google/sam).

@@ -1,25 +1,21 @@
 # @sam-mesh/sdk
 
 Native JavaScript SDK for joining a SAM agent mesh from inside the agent
-process. It replaces the `sam-node` sidecar for agents written for Node.js.
+process. It replaces the `sam-node` sidecar for agents written for Node.js:
+the agent enrolls with the control plane, joins the mesh through a router,
+finds services and calls them, publishes services of its own, and follows
+the control plane's keys, bans and policy while it runs.
 
-Status: **milestone 3** (identity, enrollment, credential refresh, joining
-the mesh over libp2p with mutual authentication, discovering services and
-calling their tools). Serving tools is the next milestone; see
-[../README.md](../README.md) for the plan.
+Guide: [sam-mesh.dev/docs/guides/native-sdks](https://sam-mesh.dev/docs/guides/native-sdks/).
+Source: [github.com/google/sam/tree/main/sdk/js](https://github.com/google/sam/tree/main/sdk/js).
 
 ## Install
 
 ```bash
-npm install @sam-mesh/sdk            # from npm, released with the repository
-cd sdk/js && npm ci && npm run build # from a checkout
+npm install @sam-mesh/sdk
 ```
 
-Requires Node.js 22.18 or later. Runtime dependencies are
-`@bufbuild/protobuf`, `@biscuit-auth/biscuit-wasm`, `@modelcontextprotocol/sdk`,
-`zod` and the js-libp2p packages (`libp2p`, `@libp2p/tcp`, `@libp2p/tls`,
-`@chainsafe/libp2p-yamux`, `@libp2p/circuit-relay-v2`, `@libp2p/identify`,
-`@libp2p/kad-dht`, `@libp2p/ping`, `@libp2p/gossipsub`, `@libp2p/peer-id`).
+Requires Node.js 22.18 or later.
 
 ## Use
 
@@ -81,40 +77,7 @@ command line.
 A plaintext `http://` control plane is accepted only on loopback. Pass
 `allowInsecure: true` for a network you trust.
 
-## Layout
+## License
 
-- `src/identity.ts`: ed25519 key pair, libp2p key encodings, peer ID.
-- `src/controlplane.ts`: `/info`, `/keys`, `/enroll`, `/enroll/status`,
-  `/register`, `/refresh`, with the proof-of-possession challenges from
-  `api/network.go`.
-- `src/credential.ts`: what a member holds, `AuthFrame` encoding.
-- `src/mesh.ts`: `AgentMesh`, persistence under a state directory
-  (`identity.key` in the libp2p private key encoding, `credential.json`).
-- `src/biscuit.ts`: verification of a peer's credential with biscuit-wasm,
-  as `internal/identity.verifyBiscuit` does.
-- `src/host.ts`, `src/auth.ts`, `src/session.ts`: the libp2p host, the
-  `/sam/auth/1.0.0` handshake on both sides, `MeshSession` with the relay
-  reservation and the refresh loop.
-- `src/discovery.ts`, `src/mcp.ts`: service keys for the mesh DHT, and MCP
-  over `/sam/mcp/1.0.0` (a `Transport` for the official MCP client).
-- `src/authorizer.ts`: the provider authorizer, as
-  `internal/node.(*SamNode).Authorize`, over the generated baseline Datalog
-  and the mesh policy rules from `GET /policies`.
-- `src/serve.ts`: the `/sam/mcp/1.0.0` server, the `/libp2p-http` server
-  and client, and the service registry behind `session.serve()`.
-- `src/sync.ts`: the ban set and the control plane's gossip events;
-  `session.sync()` pulls keys, bans and router addresses as
-  `internal/node/controlplane_sync.go` does.
-- `src/gen/`: generated from `api/sam.proto` and `api/datalog.go` by
-  `hack/gen-sdk-proto.sh`.
-
-## Test
-
-```bash
-npm test                                          # unit tests, fake control plane and router
-go test ./tests/integration -run TestNativeSDKs   # real control plane, router and sam-node
-```
-
-The integration tests run `dist/conformance.js` and
-`dist/conformance-join.js`, so build first. They skip when `dist/` or
-`node_modules/` is missing.
+Apache-2.0. Issues and contributions at
+[github.com/google/sam](https://github.com/google/sam).
