@@ -15,12 +15,26 @@
 package api
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/biscuit-auth/biscuit-go/v2/parser"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 func TestBuildPolicyRules(t *testing.T) {
+	// A node member written in the CIDv1 encoding peer.Decode also accepts;
+	// the rule must carry the base58 form a token's node() fact uses.
+	const nodeID = "12D3KooWA4Xop1JaT3MHxwYMkCepYsv4iPVopMXwCz5iHYdBfeSB"
+	decoded, err := peer.Decode(nodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeCID := peer.ToCid(decoded).String()
+	if nodeCID == nodeID {
+		t.Fatal("test needs a non-canonical encoding")
+	}
+
 	roles := []*PolicyRole{
 		{
 			Name:            "test-role",
@@ -37,7 +51,7 @@ func TestBuildPolicyRules(t *testing.T) {
 	bindings := []*PolicyBinding{
 		{
 			Role:    "test-role",
-			Members: []string{"sam:system:authenticated", "user:alice", "role:admin", "agent:spoofed"},
+			Members: []string{"sam:system:authenticated", "user:alice", "role:admin", "agent:spoofed", "node:" + nodeCID, "node:not-a-peer-id"},
 		},
 	}
 
@@ -46,6 +60,7 @@ func TestBuildPolicyRules(t *testing.T) {
 	expectedStrings := map[string]bool{
 		"role(\"test-role\") <- true":                                                          false,
 		"role(\"test-role\") <- user(\"alice\")":                                               false,
+		"role(\"test-role\") <- node(\"" + nodeID + "\")":                                      false,
 		"granted_service_all_types(true) <- role(\"test-role\")":                               false,
 		"granted_service_all(\"mcp\") <- role(\"test-role\")":                                  false,
 		"granted_service_suffix(\"mcp\", \".suffix\") <- role(\"test-role\")":                  false,
@@ -78,8 +93,11 @@ func TestBuildPolicyRules(t *testing.T) {
 		}
 	}
 
-	if len(warnings) != 2 {
-		t.Fatalf("warnings = %q, want one for granted_agent_all and one for the unparseable entry", warnings)
+	if len(warnings) != 3 {
+		t.Fatalf("warnings = %q, want one for granted_agent_all, one for the unparseable entry and one for the bad peer ID", warnings)
+	}
+	if !strings.Contains(strings.Join(warnings, "\n"), `"node:not-a-peer-id"`) {
+		t.Errorf("warnings = %q, want one naming the member that is not a peer ID", warnings)
 	}
 
 	// The text is the contract every member evaluates; it must yield the same

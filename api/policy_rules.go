@@ -20,6 +20,7 @@ import (
 
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/biscuit-auth/biscuit-go/v2/parser"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 // PolicyRule is one mesh policy rule in both the form biscuit-go evaluates
@@ -60,9 +61,21 @@ func BuildPolicyRules(roles []*PolicyRole, bindings []*PolicyBinding) (rules []P
 				continue
 			}
 			parts := strings.SplitN(m, ":", 2)
-			if len(parts) == 2 && allowedMemberPrefix[parts[0]] {
-				add(roleHead, biscuit.Predicate{Name: parts[0], IDs: []biscuit.Term{biscuit.String(parts[1])}})
+			if len(parts) != 2 || !allowedMemberPrefix[parts[0]] {
+				continue
 			}
+			value := parts[1]
+			// A token carries node() in peer.ID.String() form; an operator may
+			// have written any encoding peer.Decode accepts.
+			if parts[0] == FactNode {
+				id, err := peer.Decode(value)
+				if err != nil {
+					warnings = append(warnings, fmt.Sprintf("Binding member %q is not a peer ID and grants role %s to nobody: %v", m, b.Role, err))
+					continue
+				}
+				value = id.String()
+			}
+			add(roleHead, biscuit.Predicate{Name: parts[0], IDs: []biscuit.Term{biscuit.String(value)}})
 		}
 	}
 
