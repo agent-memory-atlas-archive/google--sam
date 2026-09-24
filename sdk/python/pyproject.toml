@@ -20,7 +20,7 @@ dependencies = [
     "mcp>=2,<3",
     "multiaddr>=0.2",
     # py-libp2p requires protobuf<7; stay co-installable.
-    "protobuf>=4.25,<7",
+    "protobuf>=4.25,<8",
     "trio>=0.26",
 ]
 
