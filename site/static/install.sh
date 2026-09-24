@@ -26,8 +26,11 @@ esac
 echo "Fetching latest release information..."
 LATEST_RELEASE_URL="https://api.github.com/repos/${REPO}/releases/latest"
 # `|| true`: with pipefail, a grep that matches nothing would kill the script
-# here instead of reaching the friendly error below.
-VERSION=$(curl -s $LATEST_RELEASE_URL | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
+# here instead of reaching the fallback/error below.
+VERSION=$(curl -s "$LATEST_RELEASE_URL" | grep '"tag_name":' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/' || true)
+if [ -z "$VERSION" ]; then
+    VERSION=$(curl -s "https://api.github.com/repos/${REPO}/releases?per_page=1" | grep '"tag_name":' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/' || true)
+fi
 
 if [ -z "$VERSION" ]; then
     echo "Error: Could not find the latest release."
@@ -56,7 +59,7 @@ tar -xzf "${TAR_NAME}"
 
 echo "Installing to ${INSTALL_DIR} (may require sudo)..."
 INSTALLED_BINS=()
-for b in sam-node sam-control-plane sam-router mcp-client sam-box sam-console nano-init; do
+for b in sam-one sam-node sam-control-plane sam-router mcp-client sam-box sam-console nano-init; do
     if [ -f "$b" ]; then
         INSTALLED_BINS+=("$b")
     fi

@@ -15,7 +15,24 @@ code as a Kubernetes deployment, so what you learn here applies there too.
 You need the `sam-one` and `sam-node` binaries. The
 [install script](../quickstart/#1-install) provides both.
 
-## 1. Start the mesh
+## 1. Start the control plane and get your URL
+
+`sam-one` packages the control plane, the libp2p WebSocket router, and the web
+console into a single binary on one port. Whenever it starts—on your laptop, in
+a container, or on a cloud VM—it prints a startup banner containing your
+**Control Plane URL (`API URL`)**, your tokens, and the exact `sam-node join`
+command to copy-paste.
+
+### Where to get your Control Plane URL
+
+| Where your nodes run | How to start `sam-one` | Control Plane URL you get |
+|---|---|---|
+| **Across machines, VMs, or phones** *(Instant HTTPS tunnel)* | `sam-one --data-dir ~/sam-one --tunnel cloudflare --tunnel-install` | Public `https://<name>.trycloudflare.com` URL + terminal QR code |
+| **Same machine only** *(Local development)* | `sam-one --data-dir ~/sam-one` | Local `http://127.0.0.1:<port>` URL |
+| **Custom domain behind NAT/firewall** *(Cloudflare Named Tunnel)* | `sam-one --data-dir ~/sam-one --tunnel cloudflare --tunnel-token-path ~/cf-token --external-url https://mesh.example.com` | Permanent `https://mesh.example.com` URL (no inbound firewall ports) |
+| **Always-on Cloud Deployment** *(Cloud Run, SkyPilot, Fly.io)* | See [Cloud Deployment](../../guides/cloud-run/) (`gcloud run deploy`, `sky launch`, or `fly launch`) | `https://<svc>.a.run.app`, `https://mesh.example.com`, or `https://<app>.fly.dev` |
+
+For example, starting `sam-one` locally:
 
 ```bash
 sam-one --data-dir ~/sam-one

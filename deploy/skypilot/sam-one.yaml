@@ -1,0 +1,65 @@
+# SkyPilot recipe for running a standalone SAM control plane + router (sam-one)
+# on the cheapest or Always-Free tier VM in your cloud account (GCP, AWS,
+# Azure, OCI, or Kubernetes).
+#
+# Quick start (free TryCloudflare HTTPS tunnel, zero DNS/TLS/firewall setup):
+#   sky launch -y -c sam-hub deploy/skypilot/sam-one.yaml --detach-run
+#   sky logs sam-hub 1 --no-follow
+#
+# The startup banner in `sky logs sam-hub 1 --no-follow` prints:
+#   - API URL:      https://<name>.trycloudflare.com
+#   - Web Console:  https://<name>.trycloudflare.com/console
+#   - Admin Token & Join Token
+#   - The exact `sam-node join <URL>` command and mobile QR code
+#
+# Optional: For a permanent custom domain ($0/mo Cloudflare Named Tunnel), pass:
+#   sky launch -y -c sam-hub deploy/skypilot/sam-one.yaml --detach-run \
+#     --env SAM_EXTERNAL_URL=https://mesh.example.com \
+#     --secret CLOUDFLARE_TUNNEL_TOKEN
+
+name: sam-hub
+
+resources:
+  cpus: 0.25+
+  memory: 1+
+  disk_size: 10
+  use_spot: false
+
+envs:
+  SAM_EXTERNAL_URL: ""
+
+secrets:
+  CLOUDFLARE_TUNNEL_TOKEN: ""
+
+setup: |
+  set -euo pipefail
+  if ! command -v sam-one >/dev/null 2>&1; then
+    ARCH="$(uname -m)"
+    case "${ARCH}" in
+      x86_64*) ARCH_NAME="x86_64" ;;
+      aarch64*|arm64*) ARCH_NAME="arm64" ;;
+      *) echo "Unsupported architecture: ${ARCH}" >&2; exit 1 ;;
+    esac
+    VERSION=$(curl -fsSL "https://api.github.com/repos/google/sam/releases?per_page=1" | grep '"tag_name":' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+    TMP_DIR=$(mktemp -d)
+    curl -fsSL -o "${TMP_DIR}/sam.tar.gz" "https://github.com/google/sam/releases/download/${VERSION}/sam_Linux_${ARCH_NAME}.tar.gz"
+    tar -xzf "${TMP_DIR}/sam.tar.gz" -C "${TMP_DIR}"
+    sudo mv "${TMP_DIR}/sam-one" "${TMP_DIR}/sam-node" /usr/local/bin/
+    rm -rf "${TMP_DIR}"
+  fi
+
+run: |
+  set -euo pipefail
+  mkdir -p "${HOME}/sam-one"
+
+  ARGS=(
+    --data-dir "${HOME}/sam-one"
+    --port 8080
+    --tunnel cloudflare
+    --tunnel-install
+  )
+  if [[ -n "${SAM_EXTERNAL_URL:-}" ]]; then
+    ARGS+=(--external-url "${SAM_EXTERNAL_URL}")
+  fi
+
+  exec sam-one "${ARGS[@]}"

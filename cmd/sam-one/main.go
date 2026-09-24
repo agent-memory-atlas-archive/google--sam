@@ -55,6 +55,7 @@ func main() {
 		allowedAudiencesFlag string
 		logLevel             string
 		tunnelProvider       string
+		tunnelTokenPath      string
 		tunnelInstall        bool
 		cloudflaredPath      string
 		enrollQR             bool
@@ -98,6 +99,10 @@ func main() {
 			if err != nil {
 				logger.Fatalf("Invalid --admin-token-path: %v", err)
 			}
+			tunnelToken, err := secretFromPathOrEnv(tunnelTokenPath, "CLOUDFLARE_TUNNEL_TOKEN")
+			if err != nil {
+				logger.Fatalf("Invalid --tunnel-token-path: %v", err)
+			}
 			if externalURL == "" {
 				externalURL = os.Getenv("SAM_EXTERNAL_URL")
 			}
@@ -114,8 +119,11 @@ func main() {
 			// port settled now rather than at bind time.
 			var tun tunnel.Tunnel
 			if tunnelProvider != "" {
-				if externalURL != "" {
-					logger.Fatal("--tunnel and --external-url are mutually exclusive: the tunnel provides the external URL")
+				if tunnelToken == "" && externalURL != "" {
+					logger.Fatal("--tunnel and --external-url are mutually exclusive unless --tunnel-token-path / CLOUDFLARE_TUNNEL_TOKEN is set")
+				}
+				if tunnelToken != "" && externalURL == "" {
+					logger.Fatal("--tunnel-token-path / CLOUDFLARE_TUNNEL_TOKEN requires --external-url (the public https:// hostname routed to the named tunnel)")
 				}
 				if port == 0 {
 					var err error
@@ -131,6 +139,8 @@ func main() {
 					dataDir:         dataDir,
 					cloudflaredPath: cloudflaredPath,
 					install:         tunnelInstall,
+					token:           tunnelToken,
+					externalURL:     externalURL,
 				}); err != nil {
 					logger.Fatalf("Failed to open tunnel: %v", err)
 				}
@@ -202,6 +212,7 @@ func main() {
 	rootCmd.Flags().StringVar(&allowedAudiencesFlag, "allowed-audiences", api.DefaultAudience, "Comma-separated list of allowed OIDC audiences")
 	rootCmd.Flags().StringVar(&logLevel, "log-level", "", "Log level: debug, info, warn, error")
 	rootCmd.Flags().StringVar(&tunnelProvider, "tunnel", "", "Publish the listener on a public URL through a tunnel provider ("+strings.Join(tunnel.Names(), ", ")+"); sets the external URL")
+	rootCmd.Flags().StringVar(&tunnelTokenPath, "tunnel-token-path", "", "File containing a Cloudflare Named Tunnel token (or env CLOUDFLARE_TUNNEL_TOKEN); use with --tunnel cloudflare --external-url https://...")
 	rootCmd.Flags().BoolVar(&tunnelInstall, "tunnel-install", false, "Download the pinned connector binary (cloudflared "+tunnel.CloudflaredVersion+", digest-verified) into <data-dir>/bin without asking; implies accepting its license")
 	rootCmd.Flags().StringVar(&cloudflaredPath, "cloudflared-path", "", "Explicit cloudflared executable for --tunnel cloudflare (default: PATH, then <data-dir>/bin)")
 	rootCmd.Flags().BoolVar(&enrollQR, "enroll-qr", stdoutIsTerminal(), "Print a device enrollment QR code at startup (default: when stdout is a terminal)")
@@ -304,6 +315,8 @@ type tunnelOptions struct {
 	dataDir         string
 	cloudflaredPath string
 	install         bool
+	token           string
+	externalURL     string
 }
 
 // openTunnel publishes the listener that Start is about to bind. The
@@ -317,6 +330,8 @@ func openTunnel(ctx context.Context, o tunnelOptions) (tunnel.Tunnel, error) {
 		cf.Binary = o.cloudflaredPath
 		cf.InstallDir = filepath.Join(o.dataDir, "bin")
 		cf.Consent = installConsent(o.install)
+		cf.Token = o.token
+		cf.ExternalURL = o.externalURL
 	}
 	host := o.bindAddress
 	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {

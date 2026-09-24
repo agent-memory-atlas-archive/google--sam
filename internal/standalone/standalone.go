@@ -21,6 +21,7 @@
 package standalone
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -28,6 +29,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -40,8 +42,10 @@ import (
 	"github.com/google/sam/internal/router"
 	"github.com/google/sam/internal/storage"
 	golog "github.com/ipfs/go-log/v2"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/multiformats/go-multiaddr"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 var logger = golog.Logger("sam-one")
@@ -329,12 +333,17 @@ func (s *Server) Start(ctx context.Context) error {
 		externalAddrs = []string{ext}
 	}
 
+	routerKeyPath := filepath.Join(s.opts.DataDir, routerKeyFile)
+	if err := ensureRouterKey(routerKeyPath, s.opts.AdminToken); err != nil {
+		return fmt.Errorf("failed to provision router key: %w", err)
+	}
+
 	rtr, err := router.NewRouter(ctx, router.Options{
 		ControlPlaneURL:    "http://" + cp.Addr(),
 		ListenAddrs:        append([]string{wsAddr}, s.opts.P2PListen...),
 		ExternalAddrs:      externalAddrs,
 		AllowLoopback:      !s.opts.Router.DisallowLoopback,
-		KeysDBPath:         filepath.Join(s.opts.DataDir, routerKeyFile),
+		KeysDBPath:         routerKeyPath,
 		BootstrapToken:     routerToken,
 		KeysSyncInterval:   s.opts.Router.KeysSyncInterval,
 		LeaseRenewInterval: s.opts.Router.LeaseRenewInterval,
@@ -347,7 +356,7 @@ func (s *Server) Start(ctx context.Context) error {
 		// source IPs; libp2p's default 8-conns-per-IP cap would throttle
 		// the whole listener.
 		ConnsPerSourceIP:    s.opts.Router.ConnsPerSourceIP,
-		HTTPFallbackHandler: mux,
+		HTTPFallbackHandler: s.wrapPublicHTTPHandler(mux),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create router: %w", err)
@@ -633,4 +642,179 @@ func externalMultiaddr(rawURL string) (string, error) {
 		return "", err
 	}
 	return addr, nil
+}
+
+// ensureRouterKey seeds router.key deterministically from an operator-supplied
+// adminToken when no router.key file exists on disk yet. On stateless
+// single-container platforms (e.g. Cloud Run) where /data is ephemeral and
+// SAM_ADMIN_TOKEN is pinned via environment variable, this keeps the embedded
+// router's libp2p PeerID stable across container restarts without extra config.
+func ensureRouterKey(keyPath, adminToken string) error {
+	if _, err := os.Stat(keyPath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if strings.TrimSpace(adminToken) == "" {
+		return nil
+	}
+	seed := sha256.Sum256([]byte("sam-one-router-ed25519-v1:" + strings.TrimSpace(adminToken)))
+	priv, _, err := crypto.GenerateEd25519Key(bytes.NewReader(seed[:]))
+	if err != nil {
+		return err
+	}
+	data, err := crypto.MarshalPrivateKey(priv)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(keyPath, data, 0o600)
+}
+
+// wrapPublicHTTPHandler augments control-plane endpoints that return
+// RouterAddresses (/info, /enroll, /enroll/status, /enroll/oidc, /refresh) on
+// the public listener when no explicit --external-url was configured: it
+// derives the router's public ws/wss multiaddr from the incoming request's
+// Host / X-Forwarded-Host and X-Forwarded-Proto headers so single-step PaaS
+// deployments (Cloud Run, Fly.io, Render) advertise a dialable wss multiaddr
+// without a second deploy pass.
+func (s *Server) wrapPublicHTTPHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.opts.ExternalURL != "" || s.router == nil || !returnsRouterAddresses(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		inferredAddr, ok := inferredRequestMultiaddr(r, s.PeerID())
+		if !ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+		rec := httptest.NewRecorder()
+		next.ServeHTTP(rec, r)
+		for k, vals := range rec.Header() {
+			for _, v := range vals {
+				w.Header().Add(k, v)
+			}
+		}
+		if rec.Code != http.StatusOK {
+			w.WriteHeader(rec.Code)
+			_, _ = w.Write(rec.Body.Bytes())
+			return
+		}
+		out, ok := prependInferredRouterAddr(r.URL.Path, rec.Body.Bytes(), inferredAddr)
+		if !ok {
+			w.WriteHeader(rec.Code)
+			_, _ = w.Write(rec.Body.Bytes())
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(out)
+	})
+}
+
+func returnsRouterAddresses(path string) bool {
+	switch path {
+	case "/info", "/enroll", "/enroll/status", "/enroll/oidc", "/refresh":
+		return true
+	default:
+		return false
+	}
+}
+
+func prependInferredRouterAddr(path string, body []byte, inferredAddr string) ([]byte, bool) {
+	prepend := func(existing []string) []string {
+		out := make([]string, 0, len(existing)+1)
+		out = append(out, inferredAddr)
+		for _, a := range existing {
+			if a != inferredAddr {
+				out = append(out, a)
+			}
+		}
+		return out
+	}
+	switch path {
+	case "/info":
+		var msg api.ControlPlaneInfoResponse
+		if err := proto.Unmarshal(body, &msg); err != nil {
+			return nil, false
+		}
+		msg.RouterAddresses = prepend(msg.RouterAddresses)
+		b, err := proto.Marshal(&msg)
+		return b, err == nil
+	case "/enroll", "/enroll/status":
+		var msg api.BootstrapEnrollResponse
+		if err := proto.Unmarshal(body, &msg); err != nil {
+			return nil, false
+		}
+		msg.RouterAddresses = prepend(msg.RouterAddresses)
+		b, err := proto.Marshal(&msg)
+		return b, err == nil
+	case "/enroll/oidc", "/refresh":
+		var msg api.EnrollResponse
+		if err := proto.Unmarshal(body, &msg); err != nil {
+			return nil, false
+		}
+		msg.RouterAddresses = prepend(msg.RouterAddresses)
+		b, err := proto.Marshal(&msg)
+		return b, err == nil
+	default:
+		return nil, false
+	}
+}
+
+// inferredRequestMultiaddr derives `/dns4/<host>/tcp/<port>/ws(s)/p2p/<peerID>`
+// from an HTTP request when the request either arrived over HTTPS (TLS or
+// X-Forwarded-Proto: https) or names a non-loopback host.
+func inferredRequestMultiaddr(r *http.Request, peerID string) (string, bool) {
+	if peerID == "" {
+		return "", false
+	}
+	host := firstForwardedValue(r.Header.Get("X-Forwarded-Host"))
+	if host == "" {
+		host = strings.TrimSpace(r.Host)
+	}
+	if host == "" {
+		return "", false
+	}
+	scheme := "http"
+	if r.TLS != nil || strings.EqualFold(firstForwardedValue(r.Header.Get("X-Forwarded-Proto")), "https") {
+		scheme = "https"
+	}
+	if scheme == "http" && isLoopbackOrUnspecifiedHostPort(host) {
+		return "", false
+	}
+	base, err := externalMultiaddr(scheme + "://" + host)
+	if err != nil {
+		return "", false
+	}
+	full := base + "/p2p/" + peerID
+	if _, err := multiaddr.NewMultiaddr(full); err != nil {
+		return "", false
+	}
+	return full, true
+}
+
+func firstForwardedValue(v string) string {
+	if i := strings.IndexByte(v, ','); i >= 0 {
+		v = v[:i]
+	}
+	return strings.TrimSpace(v)
+}
+
+func isLoopbackOrUnspecifiedHostPort(hostport string) bool {
+	h := hostport
+	if splitHost, _, err := net.SplitHostPort(hostport); err == nil {
+		h = splitHost
+	}
+	h = strings.Trim(h, "[]")
+	if strings.EqualFold(h, "localhost") || h == "" {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback() || ip.IsUnspecified()
+	}
+	return false
 }

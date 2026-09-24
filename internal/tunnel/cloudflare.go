@@ -71,6 +71,15 @@ type Cloudflare struct {
 	// the zone's authoritative nameserver (see authoritativeLookup). Tests
 	// stub it.
 	LookupHost func(ctx context.Context, host string) ([]string, error)
+	// Token is an optional Cloudflare Named Tunnel token (from
+	// --tunnel-token-path or CLOUDFLARE_TUNNEL_TOKEN). When set, Open runs
+	// `cloudflared tunnel --no-autoupdate run --url <target>` with
+	// TUNNEL_TOKEN in the child environment instead of a random
+	// trycloudflare.com quick tunnel, and publishes ExternalURL.
+	Token string
+	// ExternalURL is the public https:// hostname routed to the named
+	// tunnel when Token is set.
+	ExternalURL string
 }
 
 // quickTunnelURL matches the assigned hostname in cloudflared's banner. The
@@ -94,6 +103,9 @@ func (c *Cloudflare) Name() string { return "cloudflare" }
 
 // Open implements Provider.
 func (c *Cloudflare) Open(ctx context.Context, target string) (Tunnel, error) {
+	if c.Token != "" && strings.TrimSpace(c.ExternalURL) == "" {
+		return nil, fmt.Errorf("cloudflare named tunnel requires ExternalURL (--external-url)")
+	}
 	binary, err := c.resolveBinary(ctx)
 	if err != nil {
 		return nil, err
@@ -106,7 +118,13 @@ func (c *Cloudflare) Open(ctx context.Context, target string) (Tunnel, error) {
 
 	// The process outlives Open: its lifetime is the tunnel's, ended by Close.
 	procCtx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(procCtx, binary, "tunnel", "--url", target, "--no-autoupdate")
+	var cmd *exec.Cmd
+	if c.Token != "" {
+		cmd = exec.CommandContext(procCtx, binary, "tunnel", "--no-autoupdate", "run", "--url", target)
+		cmd.Env = append(os.Environ(), "TUNNEL_TOKEN="+c.Token)
+	} else {
+		cmd = exec.CommandContext(procCtx, binary, "tunnel", "--url", target, "--no-autoupdate")
+	}
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 5 * time.Second
 	pr, pw := io.Pipe()
@@ -117,7 +135,7 @@ func (c *Cloudflare) Open(ctx context.Context, target string) (Tunnel, error) {
 		cancel()
 		return nil, fmt.Errorf("failed to start cloudflared: %w", err)
 	}
-	t := &process{cancel: cancel, done: make(chan struct{})}
+	t := &process{cancel: cancel, done: make(chan struct{}), namedURL: strings.TrimRight(strings.TrimSpace(c.ExternalURL), "/")}
 	urlCh := make(chan string, 1)
 	go t.scan(pr, urlCh)
 	go func() {
@@ -129,7 +147,9 @@ func (c *Cloudflare) Open(ctx context.Context, target string) (Tunnel, error) {
 	select {
 	case u := <-urlCh:
 		t.url = u
-		c.awaitPublished(ctx, u, deadline)
+		if c.Token == "" {
+			c.awaitPublished(ctx, u, deadline)
+		}
 		return t, nil
 	case <-t.done:
 		return nil, fmt.Errorf("cloudflared exited before publishing a URL: %w", t.Err())
@@ -259,9 +279,10 @@ func (c *Cloudflare) resolveBinary(ctx context.Context) (string, error) {
 
 // process is a Tunnel backed by a child connector process.
 type process struct {
-	url    string
-	cancel context.CancelFunc
-	done   chan struct{}
+	url      string
+	namedURL string
+	cancel   context.CancelFunc
+	done     chan struct{}
 
 	mu     sync.Mutex
 	closed bool
@@ -298,7 +319,8 @@ func (p *process) finish(err error) {
 }
 
 // scan drains the connector's output for its lifetime (a full pipe would
-// stall the child) and reports the first quick-tunnel URL it sees.
+// stall the child) and reports the first quick-tunnel URL (or named-tunnel
+// edge registration) it sees.
 func (p *process) scan(r io.Reader, urlCh chan<- string) {
 	sc := bufio.NewScanner(r)
 	found := false
@@ -306,7 +328,12 @@ func (p *process) scan(r io.Reader, urlCh chan<- string) {
 		line := sc.Text()
 		logger.Debugf("cloudflared: %s", line)
 		if !found {
-			if m := assignedQuickTunnelURL(line); m != "" {
+			if p.namedURL != "" {
+				if strings.Contains(line, "Registered tunnel connection") {
+					found = true
+					urlCh <- p.namedURL
+				}
+			} else if m := assignedQuickTunnelURL(line); m != "" {
 				found = true
 				urlCh <- m
 			}
