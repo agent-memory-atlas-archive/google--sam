@@ -18,7 +18,7 @@
 
 import { fromBinary, toBinary } from "@bufbuild/protobuf";
 import { timestampMs, type Timestamp } from "@bufbuild/protobuf/wkt";
-import { verifyEd25519 } from "./identity.ts";
+import { canonicalPeerId, verifyEd25519 } from "./identity.ts";
 import { MeshEvent_Type, MeshEventSchema, type MeshEvent } from "./gen/sam_pb.ts";
 
 /** The GossipSub topic the control plane publishes mesh events on (api.GossipEvents). */
@@ -83,13 +83,14 @@ export class BanSet {
 }
 
 /** A MeshEvent that verified: signed by a trusted key and carrying a fresh event_time. */
+/** A MeshEvent that verified: signed by a trusted key, carrying a fresh event_time, its peer id in canonical form. */
 export type VerifiedMeshEvent = MeshEvent & { eventTime: Timestamp };
 
 /**
  * Verifies a MeshEvent as sam-node's verifyEvent does: the signature covers
  * the deterministic encoding of the event with the signature cleared, under
  * any trusted control plane key. Returns the event, or undefined when it
- * does not verify or is not fresh.
+ * does not verify, is not fresh, or bans something that is not a peer ID.
  */
 export function verifyMeshEvent(data: Uint8Array, trustedKeys: Uint8Array[], now: Date = new Date()): VerifiedMeshEvent | undefined {
   let event: MeshEvent;
@@ -109,6 +110,14 @@ export function verifyMeshEvent(data: Uint8Array, trustedKeys: Uint8Array[], now
   const skew = Math.abs(now.getTime() - timestampMs(event.eventTime));
   if (skew > EVENT_FRESHNESS_MS) {
     return undefined;
+  }
+  if (event.type === MeshEvent_Type.BANNED) {
+    // Canonicalized after the signature check, which covers the bytes as sent.
+    try {
+      return { ...event, peerId: canonicalPeerId(event.peerId) } as VerifiedMeshEvent;
+    } catch {
+      return undefined;
+    }
   }
   return event as VerifiedMeshEvent;
 }

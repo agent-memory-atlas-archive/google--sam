@@ -19,7 +19,7 @@ import pytest
 
 from agent_mesh import base58
 from agent_mesh.challenges import enroll_challenge
-from agent_mesh.identity import Identity, libp2p_public_key, peer_id_from_public_key, verify_ed25519
+from agent_mesh.identity import Identity, canonical_peer_id, libp2p_public_key, peer_id_from_public_key, verify_ed25519
 
 VECTORS = json.loads((Path(__file__).resolve().parents[2] / "testdata" / "identity_vectors.json").read_text())["vectors"]
 
@@ -62,6 +62,17 @@ def test_generated_identities_are_distinct_and_self_verify():
 def test_libp2p_public_key_refuses_wrong_size():
     with pytest.raises(ValueError, match="32 bytes"):
         libp2p_public_key(b"\x00" * 33)
+
+
+def test_canonical_peer_id_is_the_base58_form_for_every_encoding():
+    # The CIDv1 form of a known ed25519 peer, as `peer.ToCid(id).String()` prints it.
+    b58 = "12D3KooWA4Xop1JaT3MHxwYMkCepYsv4iPVopMXwCz5iHYdBfeSB"
+    cidv1 = "bafzaajaiaejcaa5ba677htqqxyoxbxiy45f4bglh4tldbg5fbvpr3xegmqjfkmny"
+    assert canonical_peer_id(b58) == b58
+    assert canonical_peer_id(cidv1) == b58
+    for bad in ("not-a-peer", ""):
+        with pytest.raises(ValueError, match="is not a peer ID"):
+            canonical_peer_id(bad)
 
 
 @pytest.mark.parametrize("data", [b"", b"\x00", b"\x00\x00\x01\x02", bytes.fromhex("00ff"), bytes.fromhex("deadbeef")])

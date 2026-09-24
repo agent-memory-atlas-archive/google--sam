@@ -19,6 +19,7 @@ import { peerIdFromString } from "@libp2p/peer-id";
 import { isMultiaddr, multiaddr, type Multiaddr } from "@multiformats/multiaddr";
 import { AUTH_HANDLER_OPTIONS, AUTH_PROTOCOL, MCP_PROTOCOL, authenticateWithPeer, authStreamHandler } from "./auth.ts";
 import { ROLE_ROUTER, requireRole, type VerifiedBiscuit } from "./biscuit.ts";
+import { canonicalPeerId } from "./identity.ts";
 import { isServiceType, parseServiceTarget, serviceCID, type ServiceType } from "./discovery.ts";
 import { createMeshHost, listenThroughRelay, type MeshHost, type MeshHostOptions } from "./host.ts";
 import { openMCPSession, type MCPSession, type MCPSessionOptions } from "./mcp.ts";
@@ -189,17 +190,19 @@ export class MeshSession {
   /** The addresses connect() dials for a peer, in the order libp2p tries them. */
   dialTargets(peer: Peer): { peerId: string | undefined; addrs: Multiaddr[] } {
     if (typeof peer === "string" && !peer.startsWith("/")) {
-      return { peerId: peer, addrs: this.relayedAddresses(peer) };
+      const peerId = canonicalPeerId(peer);
+      return { peerId, addrs: this.relayedAddresses(peerId) };
     }
     if (typeof peer === "string" || isMultiaddr(peer)) {
       const ma = typeof peer === "string" ? multiaddr(peer) : peer;
       return { peerId: targetPeerOf(ma), addrs: [ma] };
     }
+    const peerId = canonicalPeerId(peer.peerId);
     const advertised = peer.addrs.map((text) => {
       const ma = multiaddr(text);
-      return targetPeerOf(ma) === undefined ? ma.encapsulate(`/p2p/${peer.peerId}`) : ma;
+      return targetPeerOf(ma) === undefined ? ma.encapsulate(`/p2p/${peerId}`) : ma;
     });
-    return { peerId: peer.peerId, addrs: [...advertised, ...this.relayedAddresses(peer.peerId)] };
+    return { peerId, addrs: [...advertised, ...this.relayedAddresses(peerId)] };
   }
 
   /** `<router>/p2p-circuit/p2p/<peer>` through every router that admitted this member. */
@@ -312,7 +315,7 @@ export class MeshSession {
   async #syncOnce(): Promise<ControlPlaneSync> {
     const result = await this.mesh.syncControlPlane();
     if (result.bannedPeerIds !== undefined) {
-      const { banned } = this.banned.reconcile(result.bannedPeerIds, result.fetchedAt);
+      const { banned } = this.banned.reconcile(canonicalPeerIds(result.bannedPeerIds), result.fetchedAt);
       await Promise.all(banned.map((peerId) => this.#evict(peerId)));
     }
     if (this.#serving) {
@@ -574,8 +577,21 @@ export async function joinMesh(mesh: AgentMesh, options: JoinOptions = {}): Prom
   return new MeshSession(mesh, node, admitted, authenticatedPeers, banned, options);
 }
 
-/** The peer a multiaddr ends at: its trailing `/p2p/<id>`, or undefined for a relay address with no target yet. */
+/** The peer a multiaddr ends at, in canonical form: its trailing `/p2p/<id>`, or undefined for a relay address with no target yet. */
 function targetPeerOf(ma: Multiaddr): string | undefined {
   const last = ma.getComponents().at(-1);
-  return last?.name === "p2p" ? last.value : undefined;
+  return last?.name === "p2p" && last.value !== undefined ? canonicalPeerId(last.value) : undefined;
+}
+
+/** Canonicalizes a list from the control plane, dropping entries that are not peer IDs. */
+function canonicalPeerIds(ids: string[]): string[] {
+  const out: string[] = [];
+  for (const id of ids) {
+    try {
+      out.push(canonicalPeerId(id));
+    } catch {
+      // Not a peer ID; it can match nothing, so it bans nothing.
+    }
+  }
+  return out;
 }

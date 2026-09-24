@@ -43,6 +43,7 @@ from .authorizer import ProviderAuthorizerOptions
 from .biscuit import ROLE_ROUTER, VerifiedBiscuit, require_role
 from .discovery import DiscoveredProvider, ServiceType, find_providers, parse_service_target, provide, service_key
 from .host import create_mesh_host
+from .identity import canonical_peer_id
 from .mcp_client import ToolCallResult, ToolInfo, open_mcp_session, tool_call_result
 from .relay import STOP_PROTOCOL, dial_through_relay, reserve_relay, split_circuit_address, stop_stream_handler
 from .serve import (
@@ -80,6 +81,23 @@ DEFAULT_CONTROL_PLANE_SYNC_JITTER = 2.0
 # that admitted this member, so the caller never assembles a `/p2p-circuit`
 # address. A multiaddr is dialed as given.
 Peer = Union[DiscoveredProvider, str, multiaddr.Multiaddr]
+
+
+def parse_peer_id(text: str) -> ID:
+    """The libp2p peer ID for a string in any encoding libp2p accepts."""
+    return ID.from_base58(canonical_peer_id(text))
+
+
+def canonical_peer_ids(ids: Sequence[str]) -> list[str]:
+    """Canonicalizes a list from the control plane, dropping entries that are
+    not peer IDs: they can match nothing, so they ban nothing."""
+    out: list[str] = []
+    for text in ids:
+        try:
+            out.append(canonical_peer_id(text))
+        except ValueError:
+            continue
+    return out
 
 
 class _MeshsubNoise(logging.Filter):
@@ -156,9 +174,9 @@ class MeshSession:
         if isinstance(peer, multiaddr.Multiaddr) or (isinstance(peer, str) and peer.startswith("/")):
             return await self._connect_addr(multiaddr.Multiaddr(str(peer)))
         if isinstance(peer, str):
-            target, advertised = ID.from_base58(peer), []
+            target, advertised = parse_peer_id(peer), []
         else:
-            target, advertised = ID.from_base58(peer.peer_id), [multiaddr.Multiaddr(a) for a in peer.addrs]
+            target, advertised = parse_peer_id(peer.peer_id), [multiaddr.Multiaddr(a) for a in peer.addrs]
         self._refuse_banned(target)
         if target in self.host.get_connected_peers():
             return target
@@ -273,9 +291,9 @@ class MeshSession:
         async with self._sync_lock:
             result = await trio.to_thread.run_sync(self.mesh.sync_control_plane)
             if result.banned_peer_ids is not None:
-                newly_banned, _ = self.banned.reconcile(result.banned_peer_ids, result.fetched_at)
-                for peer_id in newly_banned:
-                    await self._evict(peer_id)
+                newly_banned, _ = self.banned.reconcile(canonical_peer_ids(result.banned_peer_ids), result.fetched_at)
+                for peer in newly_banned:
+                    await self._evict(peer)
             if self._serving:
                 try:
                     await self.sync_policy()
@@ -287,11 +305,11 @@ class MeshSession:
         """Asks for a pull soon, after a random delay so a fleet told at once does not pull at once."""
         self._sync_trigger.set()
 
-    async def _evict(self, peer_id: str) -> None:
+    async def _evict(self, banned_peer: str) -> None:
         """Drops a banned peer: its admission and its connections."""
-        self.authenticated_peers.pop(peer_id, None)
+        self.authenticated_peers.pop(banned_peer, None)
         try:
-            await self.host.disconnect(ID.from_base58(peer_id))
+            await self.host.disconnect(ID.from_base58(banned_peer))
         except Exception:  # noqa: BLE001 - not connected, or already gone
             pass
 

@@ -31,7 +31,7 @@ from .controlplane import (
 )
 from .credential import MeshCredential, decode_auth_response, encode_auth_frame
 from .discovery import DHT_PROTOCOL, DiscoveredProvider, find_providers, parse_service_target, provide, service_key
-from .identity import Identity, libp2p_public_key, peer_id_from_public_key, verify_ed25519
+from .identity import Identity, canonical_peer_id, libp2p_public_key, peer_id_from_public_key, verify_ed25519
 from .mcp_client import LabelsNotSatisfiedError, ToolCallResult, ToolInfo, open_mcp_session, require_labels
 from .mesh import AgentMesh, ControlPlaneSync
 from .relay import dial_through_relay, reserve_relay
@@ -96,6 +96,7 @@ __all__ = [
     "auth_stream_handler",
     "authenticate_with_peer",
     "authorize_caller",
+    "canonical_peer_id",
     "decode_auth_response",
     "dial_through_relay",
     "encode_auth_frame",

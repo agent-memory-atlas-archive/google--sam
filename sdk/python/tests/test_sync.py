@@ -26,12 +26,15 @@ import biscuit_auth as ba
 import multiaddr
 import pytest
 import trio
+from cid import make_cid
 from libp2p.peer.peerinfo import info_from_p2p_addr
 
+from agent_mesh import base58
 from agent_mesh._proto import sam_pb2 as pb
 from agent_mesh.auth import AUTH_PROTOCOL, auth_stream_handler, authenticate_with_peer
 from agent_mesh.biscuit import ROLE_ROUTER, verify_peer_biscuit
 from agent_mesh.controlplane import ROLE_NODE
+from agent_mesh.discovery import DiscoveredProvider
 from agent_mesh.identity import Identity
 from agent_mesh.mesh import AgentMesh
 from agent_mesh.relay import HOP_PROTOCOL as RELAY_HOP_PROTOCOL
@@ -164,15 +167,30 @@ def test_mesh_event_verifies_only_under_a_trusted_key_and_only_when_fresh():
         return event.SerializeToString(deterministic=True)
 
     now_ms = int(time.time() * 1000)
-    banned = sign(pb.MeshEvent(type=pb.MeshEvent.BANNED, peer_id="12D3KooWx", event_time=_ts_ms(now_ms)))
-    assert verify_mesh_event(banned, [key.pub], now_ms).peer_id == "12D3KooWx"
+    target = Identity.generate().peer_id
+    banned = sign(pb.MeshEvent(type=pb.MeshEvent.BANNED, peer_id=target, event_time=_ts_ms(now_ms)))
+    assert verify_mesh_event(banned, [key.pub], now_ms).peer_id == target
     assert verify_mesh_event(banned, [SigningKey().pub], now_ms) is None
     tampered = bytearray(banned)
     tampered[-1] ^= 1
     assert verify_mesh_event(bytes(tampered), [key.pub], now_ms) is None
-    stale = sign(pb.MeshEvent(type=pb.MeshEvent.BANNED, peer_id="12D3KooWx", event_time=_ts_ms(now_ms - EVENT_FRESHNESS_MS - 1)))
+    stale = sign(pb.MeshEvent(type=pb.MeshEvent.BANNED, peer_id=target, event_time=_ts_ms(now_ms - EVENT_FRESHNESS_MS - 1)))
     assert verify_mesh_event(stale, [key.pub], now_ms) is None
     assert verify_mesh_event(b"\x01\x02\x03", [key.pub], now_ms) is None
+
+    # The ban set is keyed on the base58 form; an event naming the peer in its
+    # CIDv1 form bans the same peer, and one naming no peer bans nobody.
+    banned_by_cid = sign(pb.MeshEvent(type=pb.MeshEvent.BANNED, peer_id=cid_form(target), event_time=_ts_ms(now_ms)))
+    assert verify_mesh_event(banned_by_cid, [key.pub], now_ms).peer_id == target
+    banned_nobody = sign(pb.MeshEvent(type=pb.MeshEvent.BANNED, peer_id="not-a-peer", event_time=_ts_ms(now_ms)))
+    assert verify_mesh_event(banned_nobody, [key.pub], now_ms) is None
+
+
+def cid_form(peer_id: str) -> str:
+    """The CIDv1 base32 encoding of a peer ID, as `peer.ToCid(id).String()` prints it."""
+    encoded = make_cid(1, "libp2p-key", base58.decode(peer_id)).encode("base32").decode()
+    assert encoded != peer_id
+    return encoded
 
 
 def test_pull_learns_a_key_rotation_and_refreshes_the_credential():
@@ -245,11 +263,25 @@ def test_banned_peer_is_disconnected_and_refused():
                     await peer.connect(info_from_p2p_addr(member_addr))
                     with pytest.raises(Exception):
                         await authenticate_with_peer(peer, session.host.get_id(), frame, [cp.current.pub])
-                    # ... and outbound, before any dial.
+                    # ... and outbound, before any dial, however the peer is named.
+                    cid = cid_form(peer_identity.peer_id)
                     with pytest.raises(PermissionError, match="banned"):
                         await session.connect(f"{cp.router_addr}/p2p-circuit/p2p/{peer_identity.peer_id}")
+                    with pytest.raises(PermissionError, match="banned"):
+                        await session.connect(f"{cp.router_addr}/p2p-circuit/p2p/{cid}")
+                    with pytest.raises(PermissionError, match="banned"):
+                        await session.connect(cid)
+                    with pytest.raises(PermissionError, match="banned"):
+                        await session.connect(DiscoveredProvider(peer_id=cid))
 
-                    # Lifted by the control plane: the next pull unbans it.
+                    # Lifted by the control plane: the next pull unbans it. A ban
+                    # list that names the peer in its CIDv1 form bans the same peer.
+                    cp.banned = []
+                    await session.sync()
+                    assert session.banned.peers() == []
+                    cp.banned = [cid, "not-a-peer"]
+                    await session.sync()
+                    assert session.banned.peers() == [peer_identity.peer_id]
                     cp.banned = []
                     await session.sync()
                     assert session.banned.peers() == []

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 export { AgentMesh, type AgentMeshOptions, type ControlPlaneSync, type EnrollOptions } from "./mesh.ts";
-export { Identity, peerIdFromPublicKey, libp2pPublicKey, verifyEd25519 } from "./identity.ts";
+export { Identity, canonicalPeerId, peerIdFromPublicKey, libp2pPublicKey, verifyEd25519 } from "./identity.ts";
 export {
   ControlPlaneClient,
   ControlPlaneError,

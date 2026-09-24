@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 
+import multiaddr
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
@@ -46,6 +47,19 @@ def libp2p_public_key(public_key_raw: bytes) -> bytes:
 def peer_id_from_public_key(public_key_raw: bytes) -> str:
     """The peer ID libp2p derives from an ed25519 public key (base58btc, "12D3Koo...")."""
     return base58.encode(_IDENTITY_MULTIHASH_PREFIX + libp2p_public_key(public_key_raw))
+
+
+def canonical_peer_id(text: str) -> str:
+    """The base58btc form of a peer ID written in any encoding libp2p accepts
+    (base58btc multihash, CIDv1). Every key, ban set and comparison in SAM is
+    on this form, as peer.ID.String() in Go; a string read off the wire or from
+    a caller goes through here before it is used as one. Raises ValueError when
+    the text is not a peer ID at all."""
+    # py-multiaddr's p2p codec decodes both encodings and prints base58btc.
+    try:
+        return multiaddr.Multiaddr("/p2p/" + text).value_for_protocol("p2p")
+    except Exception as err:  # noqa: BLE001 - the library raises its own parse error types
+        raise ValueError(f"{text!r} is not a peer ID: {err}") from err
 
 
 def verify_ed25519(public_key_raw: bytes, data: bytes, signature: bytes) -> bool:
