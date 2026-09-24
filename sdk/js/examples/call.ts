@@ -5,26 +5,44 @@
 //   node call.js a2a://greeter /card
 //   node call.js inference://ollama /v1/models
 //
-// SAM_CONTROL_PLANE_URL names the mesh. SAM_BOOTSTRAP_TOKEN_PATH is the file
-// holding the token the mesh operator gave you; the first run spends it and
-// keeps the identity and credential in SAM_STATE_DIR, later runs resume from
-// there without it.
+// SAM_CONTROL_PLANE_URL names the mesh. The first run enrolls with the file
+// SAM_BOOTSTRAP_TOKEN_PATH (a token the mesh operator gave you) or
+// SAM_JWT_PATH (a workload identity token your platform issues, such as a
+// Kubernetes projected service account token), and keeps the identity and
+// credential in SAM_STATE_DIR; later runs resume from there without it.
 import { homedir } from "node:os";
-import { AgentMesh } from "@sam-mesh/sdk";
+import { AgentMesh, type DiscoveredProvider } from "@sam-mesh/sdk";
 
 const [service = "mcp://greeter", toolOrPath = "greet", args = '{"name": "world"}'] = process.argv.slice(2);
 
 const mesh = await AgentMesh.enroll({
   controlPlaneUrl: process.env.SAM_CONTROL_PLANE_URL ?? "https://mesh.example.com",
   bootstrapTokenPath: process.env.SAM_BOOTSTRAP_TOKEN_PATH,
+  jwtPath: process.env.SAM_JWT_PATH,
   stateDir: process.env.SAM_STATE_DIR ?? `${homedir()}/.config/sam-mesh/caller`,
+  // A plaintext http:// control plane is otherwise accepted only on loopback.
+  allowInsecure: process.env.SAM_INSECURE_CONTROL_PLANE === "true",
 });
 const session = await mesh.join();
 console.log(`on the mesh as ${session.peerId}`);
 
-const [provider] = await session.discover(service);
-if (provider === undefined) {
+const providers = await session.discover(service);
+if (providers.length === 0) {
   throw new Error(`no member of the mesh serves ${service}`);
+}
+// A provider record can outlive its member; the first that answers is used.
+let provider: DiscoveredProvider | undefined;
+for (const candidate of providers) {
+  try {
+    await session.connect(candidate);
+    provider = candidate;
+    break;
+  } catch (err) {
+    console.error(`${candidate.peerId}: ${(err as Error).message}`);
+  }
+}
+if (provider === undefined) {
+  throw new Error(`no provider of ${service} is reachable`);
 }
 console.log(`${service} is served by ${provider.peerId}`);
 

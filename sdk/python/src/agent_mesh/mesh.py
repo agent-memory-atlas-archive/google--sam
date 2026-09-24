@@ -74,6 +74,7 @@ class AgentMesh:
         bootstrap_token: Optional[str] = None,
         bootstrap_token_path: Optional[str | os.PathLike[str]] = None,
         jwt: Optional[str] = None,
+        jwt_path: Optional[str | os.PathLike[str]] = None,
         state_dir: Optional[str | os.PathLike[str]] = None,
         identity: Optional[Identity] = None,
         role: str = ROLE_NODE,
@@ -89,9 +90,11 @@ class AgentMesh:
         plane for the saved identity, that member is returned and no token is
         needed, so a program can call enroll on every start and read the token
         from its environment only on the first. Otherwise exactly one of
-        bootstrap_token, bootstrap_token_path or jwt must be given; a token is
-        better read from a file than passed as a value. Delete the state
-        directory to enroll afresh, for instance with other labels."""
+        bootstrap_token, bootstrap_token_path, jwt or jwt_path must be given; a
+        token is better read from a file than passed as a value, and jwt_path
+        also takes a platform's workload identity token, such as a Kubernetes
+        projected service account token. Delete the state directory to enroll
+        afresh, for instance with other labels."""
         state = Path(state_dir).expanduser() if state_dir is not None else None
         saved = _load_identity(state)
         identity = identity or saved or Identity.generate()
@@ -100,13 +103,16 @@ class AgentMesh:
             credential = _load_credential(state)
             if credential is not None and credential.control_plane_url.rstrip("/") == control_plane.url.rstrip("/") and credential.time_to_live_seconds() > _REUSE_MIN_TTL_SECONDS:
                 return cls(identity, control_plane, credential, state)
-        given = sum(v is not None for v in (bootstrap_token, bootstrap_token_path, jwt))
+        given = sum(v is not None for v in (bootstrap_token, bootstrap_token_path, jwt, jwt_path))
         if given != 1:
             where = f" (no credential to resume in {state})" if state is not None else ""
-            raise ValueError(f"exactly one of bootstrap_token, bootstrap_token_path or jwt is required{where}")
+            raise ValueError(f"exactly one of bootstrap_token, bootstrap_token_path, jwt or jwt_path is required{where}")
 
         enrollment: Enrollment
-        if jwt is not None:
+        if jwt is not None or jwt_path is not None:
+            if jwt_path is not None:
+                jwt = Path(jwt_path).expanduser().read_text(encoding="utf-8").strip()
+            assert jwt is not None
             enrollment = control_plane.register(identity, jwt, role=role, labels=labels)
         else:
             if bootstrap_token_path is not None:

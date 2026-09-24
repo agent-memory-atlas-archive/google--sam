@@ -42,7 +42,8 @@ from .auth import AUTH_PROTOCOL, MCP_PROTOCOL, auth_stream_handler, authenticate
 from .authorizer import ProviderAuthorizerOptions
 from .biscuit import ROLE_ROUTER, VerifiedBiscuit, require_role
 from .discovery import DiscoveredProvider, ServiceType, find_providers, parse_service_target, provide, service_key
-from .host import create_mesh_host
+from .host import create_mesh_host, dial_addrs, peer_info
+from .identity import canonical_peer_id
 from .mcp_client import ToolCallResult, ToolInfo, open_mcp_session, tool_call_result
 from .relay import STOP_PROTOCOL, dial_through_relay, reserve_relay, split_circuit_address, stop_stream_handler
 from .serve import (
@@ -74,12 +75,43 @@ DEFAULT_CONTROL_PLANE_SYNC = 15 * 60.0
 FIRST_CONTROL_PLANE_SYNC = 2.0
 DEFAULT_CONTROL_PLANE_SYNC_JITTER = 2.0
 
+# sam-node's swarm dial timeout. py-libp2p has none of its own: a SYN to an
+# address nobody answers waits on the kernel, about two minutes, and is then
+# retried, and a provider record can name a pod a rollout just replaced.
+DIAL_TIMEOUT = 15.0
+
 # How a caller names the peer it wants to reach: a provider `discover` returned,
 # a peer id, or a multiaddr. For a provider or a peer id the SDK dials the
 # addresses the peer advertised and then the relayed path through every router
 # that admitted this member, so the caller never assembles a `/p2p-circuit`
 # address. A multiaddr is dialed as given.
 Peer = Union[DiscoveredProvider, str, multiaddr.Multiaddr]
+
+
+def parse_peer_id(text: str) -> ID:
+    """The libp2p peer ID for a string in any encoding libp2p accepts."""
+    return ID.from_base58(canonical_peer_id(text))
+
+
+async def dial(host: IHost, info: PeerInfo) -> None:
+    """host.connect, bounded by DIAL_TIMEOUT."""
+    try:
+        with trio.fail_after(DIAL_TIMEOUT):
+            await host.connect(info)
+    except trio.TooSlowError:
+        raise ConnectionError(f"no connection to {info.peer_id} within {DIAL_TIMEOUT:g}s") from None
+
+
+def canonical_peer_ids(ids: Sequence[str]) -> list[str]:
+    """Canonicalizes a list from the control plane, dropping entries that are
+    not peer IDs: they can match nothing, so they ban nothing."""
+    out: list[str] = []
+    for text in ids:
+        try:
+            out.append(canonical_peer_id(text))
+        except ValueError:
+            continue
+    return out
 
 
 class _MeshsubNoise(logging.Filter):
@@ -156,18 +188,25 @@ class MeshSession:
         if isinstance(peer, multiaddr.Multiaddr) or (isinstance(peer, str) and peer.startswith("/")):
             return await self._connect_addr(multiaddr.Multiaddr(str(peer)))
         if isinstance(peer, str):
-            target, advertised = ID.from_base58(peer), []
+            target, advertised = parse_peer_id(peer), []
         else:
-            target, advertised = ID.from_base58(peer.peer_id), [multiaddr.Multiaddr(a) for a in peer.addrs]
+            target, advertised = parse_peer_id(peer.peer_id), [multiaddr.Multiaddr(a) for a in peer.addrs]
         self._refuse_banned(target)
         if target in self.host.get_connected_peers():
             return target
         failures: list[str] = []
         suffix = f"/p2p/{target}"
-        direct = [multiaddr.Multiaddr(str(a).removesuffix(suffix)) for a in advertised if "/p2p-circuit" not in str(a)]
+        direct: list[multiaddr.Multiaddr] = []
+        for a in advertised:
+            if "/p2p-circuit" in str(a):
+                continue
+            try:
+                direct.extend(multiaddr.Multiaddr(str(m).removesuffix(suffix)) for m in await dial_addrs(a))
+            except Exception as err:  # noqa: BLE001 - an address this host cannot use; the others are tried
+                failures.append(f"{a}: {err}")
         if direct:
             try:
-                await self.host.connect(PeerInfo(target, direct))
+                await dial(self.host, PeerInfo(target, direct))
                 return target
             except Exception as err:  # noqa: BLE001 - the relayed path is tried next
                 failures.append(f"direct {[str(a) for a in direct]}: {err}")
@@ -186,13 +225,13 @@ class MeshSession:
             self._refuse_banned(target)
             relay = info_from_p2p_addr(relay_addr)
             if relay.peer_id not in self.host.get_connected_peers():
-                await self.host.connect(relay)
+                await dial(self.host, await peer_info(relay_addr))
             if target not in self.host.get_connected_peers():
                 await dial_through_relay(self.host, relay.peer_id, target)
             return target
-        info = info_from_p2p_addr(ma)
+        info = await peer_info(ma)
         self._refuse_banned(info.peer_id)
-        await self.host.connect(info)
+        await dial(self.host, info)
         return info.peer_id
 
     def _refuse_banned(self, peer_id: ID) -> None:
@@ -273,9 +312,9 @@ class MeshSession:
         async with self._sync_lock:
             result = await trio.to_thread.run_sync(self.mesh.sync_control_plane)
             if result.banned_peer_ids is not None:
-                newly_banned, _ = self.banned.reconcile(result.banned_peer_ids, result.fetched_at)
-                for peer_id in newly_banned:
-                    await self._evict(peer_id)
+                newly_banned, _ = self.banned.reconcile(canonical_peer_ids(result.banned_peer_ids), result.fetched_at)
+                for peer in newly_banned:
+                    await self._evict(peer)
             if self._serving:
                 try:
                     await self.sync_policy()
@@ -287,11 +326,11 @@ class MeshSession:
         """Asks for a pull soon, after a random delay so a fleet told at once does not pull at once."""
         self._sync_trigger.set()
 
-    async def _evict(self, peer_id: str) -> None:
+    async def _evict(self, banned_peer: str) -> None:
         """Drops a banned peer: its admission and its connections."""
-        self.authenticated_peers.pop(peer_id, None)
+        self.authenticated_peers.pop(banned_peer, None)
         try:
-            await self.host.disconnect(ID.from_base58(peer_id))
+            await self.host.disconnect(ID.from_base58(banned_peer))
         except Exception:  # noqa: BLE001 - not connected, or already gone
             pass
 
@@ -521,8 +560,8 @@ async def _admit(host: IHost, mesh: "AgentMesh", router_addrs: list[multiaddr.Mu
     failures: list[str] = []
     for addr in router_addrs:
         try:
-            info = info_from_p2p_addr(addr)
-            await host.connect(info)
+            info = await peer_info(addr)
+            await dial(host, info)
             credential = await authenticate_with_peer(host, info.peer_id, mesh.auth_frame(), mesh.credential.control_plane_keys)
             # Enforced under the key that verified the token; a relay that
             # is not a router must not become our way onto the mesh.

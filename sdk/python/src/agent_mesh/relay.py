@@ -34,6 +34,7 @@ from libp2p.peer.id import ID
 from libp2p.utils.varint import encode_varint_prefixed, read_varint_prefixed_bytes
 
 from ._proto import circuit_pb2 as circuit
+from .identity import canonical_peer_id
 
 logger = logging.getLogger("agent_mesh")
 
@@ -52,7 +53,7 @@ def split_circuit_address(addr: multiaddr.Multiaddr) -> tuple[multiaddr.Multiadd
     target = tail.removeprefix("/p2p/")
     if not target:
         raise ValueError(f"{addr} names no target peer after /p2p-circuit")
-    return multiaddr.Multiaddr(relay_text), ID.from_base58(target)
+    return multiaddr.Multiaddr(relay_text), ID.from_base58(canonical_peer_id(target))
 
 
 async def reserve_relay(host: IHost, relay_peer_id: ID) -> circuit.Reservation:

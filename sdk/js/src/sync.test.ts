@@ -25,6 +25,7 @@ import { circuitRelayServer, circuitRelayTransport } from "@libp2p/circuit-relay
 import { privateKeyFromProtobuf } from "@libp2p/crypto/keys";
 import { identify } from "@libp2p/identify";
 import type { Libp2p } from "@libp2p/interface";
+import { peerIdFromString } from "@libp2p/peer-id";
 import { tcp } from "@libp2p/tcp";
 import { tls } from "@libp2p/tls";
 import { createLibp2p } from "libp2p";
@@ -190,15 +191,25 @@ test("a mesh event verifies only under a trusted key and only when fresh", () =>
     return toBinary(MeshEventSchema, { ...event, signature: key.identity.sign(unsigned) });
   };
   const now = new Date();
-  const banned = sign(create(MeshEventSchema, { type: MeshEvent_Type.BANNED, peerId: "12D3KooWx", eventTime: timestampFromMs(now.getTime()) }));
-  assert.equal(verifyMeshEvent(banned, [key.pub], now)?.peerId, "12D3KooWx");
+  const target = Identity.generate().peerId;
+  const banned = sign(create(MeshEventSchema, { type: MeshEvent_Type.BANNED, peerId: target, eventTime: timestampFromMs(now.getTime()) }));
+  assert.equal(verifyMeshEvent(banned, [key.pub], now)?.peerId, target);
   assert.equal(verifyMeshEvent(banned, [new SigningKey().pub], now), undefined, "untrusted key");
   const tampered = new Uint8Array(banned);
   tampered[tampered.length - 1] = (tampered[tampered.length - 1] ?? 0) ^ 1;
   assert.equal(verifyMeshEvent(tampered, [key.pub], now), undefined, "tampered signature");
-  const stale = sign(create(MeshEventSchema, { type: MeshEvent_Type.BANNED, peerId: "12D3KooWx", eventTime: timestampFromMs(now.getTime() - EVENT_FRESHNESS_MS - 1) }));
+  const stale = sign(create(MeshEventSchema, { type: MeshEvent_Type.BANNED, peerId: target, eventTime: timestampFromMs(now.getTime() - EVENT_FRESHNESS_MS - 1) }));
   assert.equal(verifyMeshEvent(stale, [key.pub], now), undefined, "stale");
   assert.equal(verifyMeshEvent(new Uint8Array([1, 2, 3]), [key.pub], now), undefined, "garbage");
+
+  // The ban set is keyed on the base58 form; an event naming the peer in
+  // its CIDv1 form bans the same peer, and one naming no peer bans nobody.
+  const cidForm = peerIdFromString(target).toCID().toString();
+  assert.notEqual(cidForm, target);
+  const bannedByCID = sign(create(MeshEventSchema, { type: MeshEvent_Type.BANNED, peerId: cidForm, eventTime: timestampFromMs(now.getTime()) }));
+  assert.equal(verifyMeshEvent(bannedByCID, [key.pub], now)?.peerId, target);
+  const bannedNobody = sign(create(MeshEventSchema, { type: MeshEvent_Type.BANNED, peerId: "not-a-peer", eventTime: timestampFromMs(now.getTime()) }));
+  assert.equal(verifyMeshEvent(bannedNobody, [key.pub], now), undefined, "not a peer id");
 });
 
 test("a pull learns a key rotation and refreshes the credential under the new key", async () => {
@@ -273,13 +284,23 @@ test("a banned peer is hung up on and refused at the gate and the handshake", as
 
     // Its token still verifies, and it is still refused: a new connection at the gate ...
     await assert.rejects(peer.dial(relayed).then((c) => authenticateWithPeer(c, frame, [cp.current.pub])));
-    // ... and outbound, before any dial.
+    // ... and outbound, before any dial, however the peer is named.
+    const cidForm = peerIdFromString(peerIdentity.peerId).toCID().toString();
     await assert.rejects(session.connect(`${routerAddr}/p2p-circuit/p2p/${peerIdentity.peerId}`), /banned/);
+    await assert.rejects(session.connect(`${routerAddr}/p2p-circuit/p2p/${cidForm}`), /banned/);
+    await assert.rejects(session.connect(cidForm), /banned/);
+    await assert.rejects(session.connect({ peerId: cidForm, addrs: [] }), /banned/);
 
-    // Lifted by the control plane: the next pull unbans it.
+    // Lifted by the control plane: the next pull unbans it. A ban list that
+    // names the peer in its CIDv1 form bans the same peer.
     cp.banned = [];
     await session.sync();
     assert.deepEqual(session.banned.peers(), []);
+    cp.banned = [cidForm, "not-a-peer"];
+    await session.sync();
+    assert.deepEqual(session.banned.peers(), [peerIdentity.peerId]);
+    cp.banned = [];
+    await session.sync();
   } finally {
     await peer.stop();
     await session.close();

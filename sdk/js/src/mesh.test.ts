@@ -24,6 +24,8 @@ import {
   AuthFrameSchema,
   AuthResponseSchema,
   BootstrapEnrollResponseSchema,
+  EnrollRequestSchema,
+  EnrollResponseSchema,
   EnrollmentStatus,
   KeysResponseSchema,
   TokenRefreshResponseSchema,
@@ -66,6 +68,22 @@ function fakeControlPlane(keysOk = true): { fetch: typeof fetch; issued: number 
       case "POST /refresh":
         state.issued++;
         return proto(toBinary(TokenRefreshResponseSchema, create(TokenRefreshResponseSchema, { biscuitToken: text(`biscuit-${state.issued}`), expireTime: timestampFromMs(Date.now() + 7200_000) })));
+      case "POST /register": {
+        // The biscuit names the JWT that was presented, so a test can see which.
+        const jwt = fromBinary(EnrollRequestSchema, new Uint8Array(await req.arrayBuffer())).jwt;
+        state.issued++;
+        return proto(
+          toBinary(
+            EnrollResponseSchema,
+            create(EnrollResponseSchema, {
+              biscuitToken: text(`biscuit-for-${jwt}`),
+              controlPlanePublicKey: cpKey.publicKeyRaw,
+              routerAddresses: ["/dns4/router.example/tcp/4001/p2p/12D3KooWP8iKhDf3iCMo2H3butNVfdTUtYwYWYQ75jTGnynXPFMp"],
+              expireTime: timestampFromMs(Date.now() + 3600_000),
+            }),
+          ),
+        );
+      }
       case "GET /keys":
         return keysOk ? proto(toBinary(KeysResponseSchema, signedKeys())) : new Response("boom", { status: 500 });
       default:
@@ -161,7 +179,22 @@ test("enroll refuses ambiguous credentials", async () => {
   const cp = fakeControlPlane();
   await assert.rejects(AgentMesh.enroll({ controlPlaneUrl: "http://127.0.0.1:1", fetch: cp.fetch }), /exactly one of/);
   await assert.rejects(AgentMesh.enroll({ controlPlaneUrl: "http://127.0.0.1:1", bootstrapToken: "a", jwt: "b", fetch: cp.fetch }), /exactly one of/);
+  await assert.rejects(AgentMesh.enroll({ controlPlaneUrl: "http://127.0.0.1:1", jwt: "a", jwtPath: "/nonexistent", fetch: cp.fetch }), /exactly one of/);
   assert.equal(cp.issued, 0);
+});
+
+test("enroll reads a workload identity token from jwtPath", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "sam-sdk-"));
+  try {
+    const cp = fakeControlPlane();
+    const jwtPath = join(dir, "token");
+    await writeFile(jwtPath, "eyJ.projected.token\n");
+    const mesh = await AgentMesh.enroll({ controlPlaneUrl: "http://127.0.0.1:1", jwtPath, fetch: cp.fetch });
+    assert.deepEqual(mesh.credential.biscuit, text("biscuit-for-eyJ.projected.token"));
+    await assert.rejects(AgentMesh.enroll({ controlPlaneUrl: "http://127.0.0.1:1", jwtPath: join(dir, "missing"), fetch: cp.fetch }), /ENOENT/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("authFrame is the AuthFrame protobuf with this member's biscuit", async () => {

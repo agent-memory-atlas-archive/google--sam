@@ -16,6 +16,7 @@
 // derives, so the same key works in the SDK, in sam-node and on the wire.
 
 import { createPrivateKey, createPublicKey, sign, verify, type KeyObject } from "node:crypto";
+import { peerIdFromString } from "@libp2p/peer-id";
 import { encodeBase58 } from "./base58.ts";
 
 const PUBLIC_KEY_SIZE = 32;
@@ -64,6 +65,21 @@ export function libp2pPublicKey(publicKeyRaw: Uint8Array): Uint8Array {
 /** The peer ID libp2p derives from an ed25519 public key (base58btc, "12D3Koo..."). */
 export function peerIdFromPublicKey(publicKeyRaw: Uint8Array): string {
   return encodeBase58(concat(IDENTITY_MULTIHASH_PREFIX, libp2pPublicKey(publicKeyRaw)));
+}
+
+/**
+ * The base58btc form of a peer ID written in any encoding libp2p accepts
+ * (base58btc multihash, CIDv1). Every key, ban set and comparison in SAM is
+ * on this form, as peer.ID.String() in Go; a string read off the wire or
+ * from a caller goes through here before it is used as one. Throws when the
+ * text is not a peer ID at all.
+ */
+export function canonicalPeerId(text: string): string {
+  try {
+    return peerIdFromString(text).toString();
+  } catch (err) {
+    throw new Error(`${JSON.stringify(text)} is not a peer ID: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 export class Identity {

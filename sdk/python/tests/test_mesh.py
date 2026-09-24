@@ -55,6 +55,16 @@ class FakeControlPlane:
 
     def transport(self, method, url, headers, body):
         path = urllib.parse.urlsplit(url).path
+        if (method, path) == ("POST", "/register"):
+            # The biscuit names the JWT that was presented, so a test can see which.
+            jwt = pb.EnrollRequest.FromString(body).jwt
+            self.issued += 1
+            return 200, pb.EnrollResponse(
+                biscuit_token=f"biscuit-for-{jwt}".encode(),
+                control_plane_public_key=CP_KEY.public_key_raw,
+                router_addresses=["/dns4/router.example/tcp/4001/p2p/12D3KooWP8iKhDf3iCMo2H3butNVfdTUtYwYWYQ75jTGnynXPFMp"],
+                expire_time=_ts_s(int(time.time()) + 3600),
+            ).SerializeToString()
         if (method, path) == ("POST", "/enroll"):
             self.issued += 1
             return 200, pb.BootstrapEnrollResponse(
@@ -149,7 +159,19 @@ def test_enroll_refuses_ambiguous_credentials():
         AgentMesh.enroll("http://127.0.0.1:1", transport=cp.transport)
     with pytest.raises(ValueError, match="exactly one of"):
         AgentMesh.enroll("http://127.0.0.1:1", bootstrap_token="a", jwt="b", transport=cp.transport)
+    with pytest.raises(ValueError, match="exactly one of"):
+        AgentMesh.enroll("http://127.0.0.1:1", jwt="a", jwt_path="/nonexistent", transport=cp.transport)
     assert cp.issued == 0
+
+
+def test_enroll_reads_a_workload_identity_token_from_jwt_path(tmp_path):
+    cp = FakeControlPlane()
+    token = tmp_path / "token"
+    token.write_text("eyJ.projected.token\n")
+    mesh = AgentMesh.enroll("http://127.0.0.1:1", jwt_path=token, transport=cp.transport)
+    assert mesh.credential.biscuit == b"biscuit-for-eyJ.projected.token"
+    with pytest.raises(FileNotFoundError):
+        AgentMesh.enroll("http://127.0.0.1:1", jwt_path=tmp_path / "missing", transport=cp.transport)
 
 
 def test_load_without_identity_says_enroll_first(tmp_path):

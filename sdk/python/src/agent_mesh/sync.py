@@ -22,7 +22,7 @@ import time
 from typing import Optional, Sequence
 
 from ._proto import sam_pb2 as pb
-from .identity import verify_ed25519
+from .identity import canonical_peer_id, verify_ed25519
 
 # The GossipSub topic the control plane publishes mesh events on (api.GossipEvents).
 GOSSIP_EVENTS_TOPIC = "/sam/mesh/events/v1"
@@ -71,8 +71,9 @@ class BanSet:
 def verify_mesh_event(data: bytes, trusted_keys: Sequence[bytes], now_ms: Optional[int] = None) -> Optional[pb.MeshEvent]:
     """Verifies a MeshEvent as sam-node's verifyEvent does: the signature covers
     the deterministic encoding of the event with the signature cleared, under
-    any trusted control plane key. Returns the event, or None when it does not
-    verify or is not fresh."""
+    any trusted control plane key. Returns the event, with a banned peer's id in
+    canonical form, or None when it does not verify, is not fresh, or bans
+    something that is not a peer ID."""
     try:
         event = pb.MeshEvent.FromString(data)
     except Exception:  # noqa: BLE001 - undecodable is unverifiable
@@ -87,4 +88,10 @@ def verify_mesh_event(data: bytes, trusted_keys: Sequence[bytes], now_ms: Option
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     if not event.HasField("event_time") or abs(now_ms - event.event_time.ToMilliseconds()) > EVENT_FRESHNESS_MS:
         return None
+    if event.type == pb.MeshEvent.BANNED:
+        # Canonicalized after the signature check, which covers the bytes as sent.
+        try:
+            event.peer_id = canonical_peer_id(event.peer_id)
+        except ValueError:
+            return None
     return event

@@ -17,7 +17,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { decodeBase58, encodeBase58 } from "./base58.ts";
 import { enrollChallenge } from "./challenges.ts";
-import { Identity, libp2pPublicKey, peerIdFromPublicKey, verifyEd25519 } from "./identity.ts";
+import { Identity, canonicalPeerId, libp2pPublicKey, peerIdFromPublicKey, verifyEd25519 } from "./identity.ts";
 
 interface Vector {
   seed: string;
@@ -72,6 +72,16 @@ test("generated identities are distinct and self-verify", () => {
 
 test("libp2pPublicKey refuses the wrong size", () => {
   assert.throws(() => libp2pPublicKey(new Uint8Array(33)), /32 bytes/);
+});
+
+test("canonicalPeerId is the base58 form for every encoding libp2p accepts", () => {
+  // The CIDv1 form of a known ed25519 peer, as `peer.ToCid(id).String()` prints it.
+  const base58 = "12D3KooWA4Xop1JaT3MHxwYMkCepYsv4iPVopMXwCz5iHYdBfeSB";
+  const cidv1 = "bafzaajaiaejcaa5ba677htqqxyoxbxiy45f4bglh4tldbg5fbvpr3xegmqjfkmny";
+  assert.equal(canonicalPeerId(base58), base58);
+  assert.equal(canonicalPeerId(cidv1), base58);
+  assert.throws(() => canonicalPeerId("not-a-peer"), /is not a peer ID/);
+  assert.throws(() => canonicalPeerId(""), /is not a peer ID/);
 });
 
 test("base58btc round-trips and keeps leading zeros", () => {

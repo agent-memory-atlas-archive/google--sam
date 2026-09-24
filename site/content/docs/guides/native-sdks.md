@@ -76,7 +76,18 @@ export SAM_BOOTSTRAP_TOKEN_PATH=~/sam-one/join-token
 A plain `http://` URL is accepted only for a control plane on the same
 machine. Anything else needs `https://`, because the control plane is the
 trust root of every member and the SDK refuses to fetch it over plaintext
-from a remote address.
+from a remote address. Inside a network you already trust, such as a
+Kubernetes cluster where the control plane is a cluster-local service, set
+`SAM_INSECURE_CONTROL_PLANE=true` (`allowInsecure` in code), the same choice
+as `sam-node --insecure-control-plane`.
+
+On a platform that issues workload identity tokens, a program needs no
+bootstrap token. A mesh whose control plane trusts the platform's issuer
+enrolls the program from that token instead; on Kubernetes that is a
+projected service account token, as [Headless enrollment](../headless-enrollment/)
+shows for `sam-node`. Set `SAM_JWT_PATH` to the token file rather than
+`SAM_BOOTSTRAP_TOKEN_PATH`. That is how the public testnets run these same
+programs as canaries beside the `sam-node` ones.
 
 ## 2. Install the SDK
 
@@ -111,31 +122,38 @@ JavaScript, `serve.js`:
 // members may call; the SDK turns the others away before anything reaches
 // this code or Ollama.
 //
-//   node serve.js
+//   node serve.js            # publishes mcp://greeter and a2a://greeter
+//   node serve.js greeter-2  # the same under another name
 //
-// SAM_CONTROL_PLANE_URL names the mesh. SAM_BOOTSTRAP_TOKEN_PATH is the file
-// holding the token the mesh operator gave you; the first run spends it and
-// keeps the identity and credential in SAM_STATE_DIR, later runs resume from
-// there without it.
+// SAM_CONTROL_PLANE_URL names the mesh. The first run enrolls with the file
+// SAM_BOOTSTRAP_TOKEN_PATH (a token the mesh operator gave you) or
+// SAM_JWT_PATH (a workload identity token your platform issues, such as a
+// Kubernetes projected service account token), and keeps the identity and
+// credential in SAM_STATE_DIR; later runs resume from there without it.
 import { homedir } from "node:os";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { AgentMesh } from "@sam-mesh/sdk";
 import { z } from "zod";
 
+const [name = "greeter"] = process.argv.slice(2);
+
 const mesh = await AgentMesh.enroll({
   controlPlaneUrl: process.env.SAM_CONTROL_PLANE_URL ?? "https://mesh.example.com",
   bootstrapTokenPath: process.env.SAM_BOOTSTRAP_TOKEN_PATH,
-  stateDir: process.env.SAM_STATE_DIR ?? `${homedir()}/.config/sam-mesh/greeter`,
+  jwtPath: process.env.SAM_JWT_PATH,
+  stateDir: process.env.SAM_STATE_DIR ?? `${homedir()}/.config/sam-mesh/${name}`,
+  // A plaintext http:// control plane is otherwise accepted only on loopback.
+  allowInsecure: process.env.SAM_INSECURE_CONTROL_PLANE === "true",
 });
 const session = await mesh.join();
 
 await session.serve({
   type: "mcp",
-  name: "greeter",
+  name,
   createServer: () => {
-    const server = new McpServer({ name: "greeter", version: "1.0.0" });
-    server.registerTool("greet", { description: "Greets someone by name", inputSchema: { name: z.string() } }, async ({ name }) => ({
-      content: [{ type: "text", text: `hello ${name}` }],
+    const server = new McpServer({ name, version: "1.0.0" });
+    server.registerTool("greet", { description: "Greets someone by name", inputSchema: { name: z.string() } }, async ({ name: who }) => ({
+      content: [{ type: "text", text: `hello ${who}` }],
     }));
     return server;
   },
@@ -143,8 +161,8 @@ await session.serve({
 
 await session.serve({
   type: "a2a",
-  name: "greeter",
-  target: (request, caller) => Response.json({ name: "greeter", path: new URL(request.url).pathname, caller: caller.peerId }),
+  name,
+  target: (request, caller) => Response.json({ name, path: new URL(request.url).pathname, caller: caller.peerId }),
 });
 
 if (process.env.OLLAMA_URL !== undefined) {
@@ -169,30 +187,38 @@ beside this program as an inference service. The mesh policy decides which
 members may call; the SDK turns the others away before anything reaches this
 code or Ollama.
 
-    python serve.py
+    python serve.py            # publishes mcp://greeter and a2a://greeter
+    python serve.py greeter-2  # the same under another name
 
-SAM_CONTROL_PLANE_URL names the mesh. SAM_BOOTSTRAP_TOKEN_PATH is the file
-holding the token the mesh operator gave you; the first run spends it and
-keeps the identity and credential in SAM_STATE_DIR, later runs resume from
-there without it.
+SAM_CONTROL_PLANE_URL names the mesh. The first run enrolls with the file
+SAM_BOOTSTRAP_TOKEN_PATH (a token the mesh operator gave you) or SAM_JWT_PATH
+(a workload identity token your platform issues, such as a Kubernetes
+projected service account token), and keeps the identity and credential in
+SAM_STATE_DIR; later runs resume from there without it.
 """
 
 import json
 import os
+import sys
 
 import trio
 from agent_mesh import AgentMesh, HTTPRequest, HTTPResponse, HTTPService, MCPService, VerifiedBiscuit
 from mcp.server.mcpserver import MCPServer
 
+service_name = sys.argv[1] if len(sys.argv) > 1 else "greeter"
+
 mesh = AgentMesh.enroll(
     os.environ.get("SAM_CONTROL_PLANE_URL", "https://mesh.example.com"),
     bootstrap_token_path=os.environ.get("SAM_BOOTSTRAP_TOKEN_PATH"),
-    state_dir=os.environ.get("SAM_STATE_DIR", "~/.config/sam-mesh/greeter"),
+    jwt_path=os.environ.get("SAM_JWT_PATH"),
+    state_dir=os.environ.get("SAM_STATE_DIR", f"~/.config/sam-mesh/{service_name}"),
+    # A plaintext http:// control plane is otherwise accepted only on loopback.
+    allow_insecure=os.environ.get("SAM_INSECURE_CONTROL_PLANE") == "true",
 )
 
 
 def create_server() -> MCPServer:
-    server = MCPServer("greeter")
+    server = MCPServer(service_name)
 
     @server.tool(description="Greets someone by name")
     def greet(name: str) -> str:
@@ -202,14 +228,14 @@ def create_server() -> MCPServer:
 
 
 async def card(request: HTTPRequest, caller: VerifiedBiscuit) -> HTTPResponse:
-    body = json.dumps({"name": "greeter", "path": request.path, "caller": caller.peer_id})
+    body = json.dumps({"name": service_name, "path": request.path, "caller": caller.peer_id})
     return HTTPResponse(status=200, headers={"content-type": "application/json"}, body=body.encode())
 
 
 async def main() -> None:
     async with mesh.join() as session:
-        await session.serve(MCPService(name="greeter", create_server=create_server))
-        await session.serve(HTTPService(type="a2a", name="greeter", target=card))
+        await session.serve(MCPService(name=service_name, create_server=create_server))
+        await session.serve(HTTPService(type="a2a", name=service_name, target=card))
         if "OLLAMA_URL" in os.environ:
             await session.serve(HTTPService(type="inference", name="ollama", target=os.environ["OLLAMA_URL"]))
 
@@ -257,26 +283,44 @@ JavaScript, `call.js`:
 //   node call.js a2a://greeter /card
 //   node call.js inference://ollama /v1/models
 //
-// SAM_CONTROL_PLANE_URL names the mesh. SAM_BOOTSTRAP_TOKEN_PATH is the file
-// holding the token the mesh operator gave you; the first run spends it and
-// keeps the identity and credential in SAM_STATE_DIR, later runs resume from
-// there without it.
+// SAM_CONTROL_PLANE_URL names the mesh. The first run enrolls with the file
+// SAM_BOOTSTRAP_TOKEN_PATH (a token the mesh operator gave you) or
+// SAM_JWT_PATH (a workload identity token your platform issues, such as a
+// Kubernetes projected service account token), and keeps the identity and
+// credential in SAM_STATE_DIR; later runs resume from there without it.
 import { homedir } from "node:os";
-import { AgentMesh } from "@sam-mesh/sdk";
+import { AgentMesh, type DiscoveredProvider } from "@sam-mesh/sdk";
 
 const [service = "mcp://greeter", toolOrPath = "greet", args = '{"name": "world"}'] = process.argv.slice(2);
 
 const mesh = await AgentMesh.enroll({
   controlPlaneUrl: process.env.SAM_CONTROL_PLANE_URL ?? "https://mesh.example.com",
   bootstrapTokenPath: process.env.SAM_BOOTSTRAP_TOKEN_PATH,
+  jwtPath: process.env.SAM_JWT_PATH,
   stateDir: process.env.SAM_STATE_DIR ?? `${homedir()}/.config/sam-mesh/caller`,
+  // A plaintext http:// control plane is otherwise accepted only on loopback.
+  allowInsecure: process.env.SAM_INSECURE_CONTROL_PLANE === "true",
 });
 const session = await mesh.join();
 console.log(`on the mesh as ${session.peerId}`);
 
-const [provider] = await session.discover(service);
-if (provider === undefined) {
+const providers = await session.discover(service);
+if (providers.length === 0) {
   throw new Error(`no member of the mesh serves ${service}`);
+}
+// A provider record can outlive its member; the first that answers is used.
+let provider: DiscoveredProvider | undefined;
+for (const candidate of providers) {
+  try {
+    await session.connect(candidate);
+    provider = candidate;
+    break;
+  } catch (err) {
+    console.error(`${candidate.peerId}: ${(err as Error).message}`);
+  }
+}
+if (provider === undefined) {
+  throw new Error(`no provider of ${service} is reachable`);
 }
 console.log(`${service} is served by ${provider.peerId}`);
 
@@ -305,10 +349,11 @@ path of an inference or A2A service.
     python call.py a2a://greeter /card
     python call.py inference://ollama /v1/models
 
-SAM_CONTROL_PLANE_URL names the mesh. SAM_BOOTSTRAP_TOKEN_PATH is the file
-holding the token the mesh operator gave you; the first run spends it and
-keeps the identity and credential in SAM_STATE_DIR, later runs resume from
-there without it.
+SAM_CONTROL_PLANE_URL names the mesh. The first run enrolls with the file
+SAM_BOOTSTRAP_TOKEN_PATH (a token the mesh operator gave you) or SAM_JWT_PATH
+(a workload identity token your platform issues, such as a Kubernetes
+projected service account token), and keeps the identity and credential in
+SAM_STATE_DIR; later runs resume from there without it.
 """
 
 import json
@@ -326,7 +371,10 @@ args = json.loads(argv[2]) if len(argv) > 2 else {"name": "world"}
 mesh = AgentMesh.enroll(
     os.environ.get("SAM_CONTROL_PLANE_URL", "https://mesh.example.com"),
     bootstrap_token_path=os.environ.get("SAM_BOOTSTRAP_TOKEN_PATH"),
+    jwt_path=os.environ.get("SAM_JWT_PATH"),
     state_dir=os.environ.get("SAM_STATE_DIR", "~/.config/sam-mesh/caller"),
+    # A plaintext http:// control plane is otherwise accepted only on loopback.
+    allow_insecure=os.environ.get("SAM_INSECURE_CONTROL_PLANE") == "true",
 )
 
 
@@ -337,7 +385,15 @@ async def main() -> None:
         providers = await session.discover(service)
         if not providers:
             raise SystemExit(f"no member of the mesh serves {service}")
-        provider = providers[0]
+        # A provider record can outlive its member; the first that answers is used.
+        for provider in providers:
+            try:
+                await session.connect(provider)
+                break
+            except (ConnectionError, PermissionError) as err:
+                print(f"{provider.peer_id}: {err}", file=sys.stderr)
+        else:
+            raise SystemExit(f"no provider of {service} is reachable")
         print(f"{service} is served by {provider.peer_id}")
 
         if service.startswith("mcp://"):

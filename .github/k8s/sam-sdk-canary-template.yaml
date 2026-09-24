@@ -1,0 +1,124 @@
+# Two members with no sam-node beside them: the JavaScript and Python SDK
+# example servers (sdk/js/examples/serve.ts, sdk/python/examples/serve.py),
+# unchanged, each publishing mcp://greeter-<lang> and a2a://greeter-<lang>.
+# They enroll with the pod's projected service account token, the way every
+# other canary does, and keep their identity in an emptyDir, so a restart
+# resumes and a new pod enrolls afresh. What the mesh sees from them is what a
+# user of the packages gets.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: js-canary-${ENV_NAME}
+  namespace: sam-canary-${ENV_NAME}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: js-canary-${ENV_NAME}
+  template:
+    metadata:
+      labels:
+        app: js-canary-${ENV_NAME}
+        sam-canary: "true"
+    spec:
+      serviceAccountName: sam-node-sa
+      containers:
+      - name: sdk
+        image: ghcr.io/google/sam-sdk-js:${IMAGE_TAG}
+        args: ["build/examples/serve.js", "greeter-js"]
+        env:
+        - name: SAM_CONTROL_PLANE_URL
+          value: "http://sam-control-plane-${ENV_NAME}.${NAMESPACE}.svc.cluster.local:8080"
+        - name: SAM_INSECURE_CONTROL_PLANE
+          value: "true"
+        - name: SAM_JWT_PATH
+          value: /var/run/secrets/tokens/sam-token
+        - name: SAM_STATE_DIR
+          value: /var/run/sam/state
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        volumeMounts:
+        - name: sam-token
+          mountPath: /var/run/secrets/tokens
+          readOnly: true
+        - name: sam-state
+          mountPath: /var/run/sam
+      volumes:
+      - name: sam-state
+        emptyDir: {}
+      - name: sam-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: sam-token
+              expirationSeconds: 3600
+              audience: "sam-control-plane-audience"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: python-canary-${ENV_NAME}
+  namespace: sam-canary-${ENV_NAME}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: python-canary-${ENV_NAME}
+  template:
+    metadata:
+      labels:
+        app: python-canary-${ENV_NAME}
+        sam-canary: "true"
+    spec:
+      serviceAccountName: sam-node-sa
+      containers:
+      - name: sdk
+        image: ghcr.io/google/sam-sdk-python:${IMAGE_TAG}
+        args: ["examples/serve.py", "greeter-py"]
+        env:
+        - name: SAM_CONTROL_PLANE_URL
+          value: "http://sam-control-plane-${ENV_NAME}.${NAMESPACE}.svc.cluster.local:8080"
+        - name: SAM_INSECURE_CONTROL_PLANE
+          value: "true"
+        - name: SAM_JWT_PATH
+          value: /var/run/secrets/tokens/sam-token
+        - name: SAM_STATE_DIR
+          value: /var/run/sam/state
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        volumeMounts:
+        - name: sam-token
+          mountPath: /var/run/secrets/tokens
+          readOnly: true
+        - name: sam-state
+          mountPath: /var/run/sam
+      volumes:
+      - name: sam-state
+        emptyDir: {}
+      - name: sam-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: sam-token
+              expirationSeconds: 3600
+              audience: "sam-control-plane-audience"

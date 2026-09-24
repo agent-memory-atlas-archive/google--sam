@@ -436,6 +436,22 @@ holds against the control plane's records.
   that verifies only under the new one, and still authenticating with the
   `sam-node`.
 
+### On the testnets
+
+Both testnets run the example programs, unchanged, as canaries beside the
+`sam-node` ones (`.github/k8s/sam-sdk-canary-template.yaml`): the JavaScript
+and the Python `serve` publish `mcp://greeter-js` / `a2a://greeter-js` and
+`…-py`, enrolled with the pod's projected service account token through
+`SAM_JWT_PATH`. Two CronJobs cross every implementation boundary every 15
+minutes and once per rollout: the `sam-node` cold-path probe now also calls
+both greeters (node → SDK, MCP through `call_remote_tool` and A2A through
+the egress proxy), and the SDK cold-path probe
+(`sam-sdk-probe-cronjob-template.yaml`) runs each SDK's `call` against the
+everything canary (SDK → node) and the other SDK's greeter (SDK → SDK). The
+images (`Dockerfile.sam-sdk-js`, `Dockerfile.sam-sdk-python`) are built per
+commit by `deploy.yaml`, so `bananas` runs the SDKs at the same commit as
+the Go components they talk to.
+
 ### Later
 
 - The connector interface for platforms (issue #480): `Attach`, `Detach`,
