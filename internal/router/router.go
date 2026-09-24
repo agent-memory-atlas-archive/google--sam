@@ -358,14 +358,15 @@ func (r *Router) Start() error {
 		libp2p.EnableAutoNATv2(),
 		libp2p.EnableNATService(),
 		libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
-			if r.config.AllowLoopback {
-				return addrs
-			}
 			var filtered []multiaddr.Multiaddr
 			for _, addr := range addrs {
-				if !isLoopbackOrLinkLocal(addr) {
-					filtered = append(filtered, addr)
+				if isLinkLocal(addr) {
+					continue
 				}
+				if !r.config.AllowLoopback && isLoopbackOrLinkLocal(addr) {
+					continue
+				}
+				filtered = append(filtered, addr)
 			}
 			return filtered
 		}),
@@ -1359,6 +1360,22 @@ func getOrGeneratePeerKey(keyPath string) (crypto.PrivKey, error) {
 		return nil, err
 	}
 	return priv, nil
+}
+
+func isLinkLocal(addr multiaddr.Multiaddr) bool {
+	for _, proto := range addr.Protocols() {
+		if proto.Code == multiaddr.P_IP4 || proto.Code == multiaddr.P_IP6 {
+			value, err := addr.ValueForProtocol(proto.Code)
+			if err == nil {
+				if ip := net.ParseIP(value); ip != nil {
+					if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 func isLoopbackOrLinkLocal(addr multiaddr.Multiaddr) bool {

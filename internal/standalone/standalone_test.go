@@ -14,7 +14,18 @@
 
 package standalone
 
-import "testing"
+import (
+	"crypto/tls"
+	"net/http"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/google/sam/api"
+	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"google.golang.org/protobuf/proto"
+)
 
 func TestWsListenMultiaddr(t *testing.T) {
 	cases := []struct {
@@ -77,3 +88,118 @@ func TestExternalMultiaddr(t *testing.T) {
 		}
 	}
 }
+
+func TestEnsureRouterKeyDeterministic(t *testing.T) {
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+	key1 := filepath.Join(dir1, routerKeyFile)
+	key2 := filepath.Join(dir2, routerKeyFile)
+
+	if err := ensureRouterKey(key1, "sam_adm_fixed_secret"); err != nil {
+		t.Fatalf("ensureRouterKey(key1): %v", err)
+	}
+	if err := ensureRouterKey(key2, "sam_adm_fixed_secret"); err != nil {
+		t.Fatalf("ensureRouterKey(key2): %v", err)
+	}
+
+	b1, err := os.ReadFile(key1)
+	if err != nil {
+		t.Fatalf("ReadFile(key1): %v", err)
+	}
+	b2, err := os.ReadFile(key2)
+	if err != nil {
+		t.Fatalf("ReadFile(key2): %v", err)
+	}
+	p1, err := crypto.UnmarshalPrivateKey(b1)
+	if err != nil {
+		t.Fatalf("UnmarshalPrivateKey(b1): %v", err)
+	}
+	p2, err := crypto.UnmarshalPrivateKey(b2)
+	if err != nil {
+		t.Fatalf("UnmarshalPrivateKey(b2): %v", err)
+	}
+	id1, _ := peer.IDFromPrivateKey(p1)
+	id2, _ := peer.IDFromPrivateKey(p2)
+	if id1 != id2 {
+		t.Fatalf("peer IDs differ for same adminToken: %s vs %s", id1, id2)
+	}
+
+	// Existing key file must not be overwritten by a different admin token.
+	if err := ensureRouterKey(key1, "sam_adm_other_secret"); err != nil {
+		t.Fatalf("ensureRouterKey existing: %v", err)
+	}
+	b1After, err := os.ReadFile(key1)
+	if err != nil {
+		t.Fatalf("ReadFile(key1 after): %v", err)
+	}
+	if string(b1) != string(b1After) {
+		t.Fatalf("ensureRouterKey overwrote an existing router.key")
+	}
+}
+
+func TestInferredRequestMultiaddr(t *testing.T) {
+	const testPeerID = "12D3KooWBzUDQCkZhz2rWrYBhpjcCH8VnrRNcwCW6DoF36iADYrY"
+
+	reqCloudRun, _ := http.NewRequest(http.MethodGet, "http://0.0.0.0:8080/info", nil)
+	reqCloudRun.Host = "sam-one-xyz-uc.a.run.app"
+	reqCloudRun.Header.Set("X-Forwarded-Proto", "https")
+	got, ok := inferredRequestMultiaddr(reqCloudRun, testPeerID)
+	want := "/dns4/sam-one-xyz-uc.a.run.app/tcp/443/wss/p2p/" + testPeerID
+	if !ok || got != want {
+		t.Fatalf("CloudRun inferredRequestMultiaddr = (%q, %v), want (%q, true)", got, ok, want)
+	}
+
+	reqTLS, _ := http.NewRequest(http.MethodGet, "https://mesh.example.com:8443/info", nil)
+	reqTLS.Host = "mesh.example.com:8443"
+	reqTLS.TLS = &tls.ConnectionState{}
+	got, ok = inferredRequestMultiaddr(reqTLS, testPeerID)
+	want = "/dns4/mesh.example.com/tcp/8443/wss/p2p/" + testPeerID
+	if !ok || got != want {
+		t.Fatalf("TLS inferredRequestMultiaddr = (%q, %v), want (%q, true)", got, ok, want)
+	}
+
+	reqLoopback, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:8080/info", nil)
+	reqLoopback.Host = "127.0.0.1:8080"
+	if got, ok := inferredRequestMultiaddr(reqLoopback, testPeerID); ok {
+		t.Fatalf("Loopback HTTP should not infer external multiaddr, got %q", got)
+	}
+}
+
+func TestPrependInferredRouterAddr(t *testing.T) {
+	const inferred = "/dns4/sam-one-xyz.a.run.app/tcp/443/wss/p2p/12D3KooWBzUDQCkZhz2rWrYBhpjcCH8VnrRNcwCW6DoF36iADYrY"
+	const local = "/ip4/127.0.0.1/tcp/8080/ws/p2p/12D3KooWBzUDQCkZhz2rWrYBhpjcCH8VnrRNcwCW6DoF36iADYrY"
+
+	enrollIn, _ := proto.Marshal(&api.BootstrapEnrollResponse{
+		RouterAddresses: []string{local},
+	})
+	enrollOutBytes, ok := prependInferredRouterAddr("/enroll", enrollIn, inferred)
+	if !ok {
+		t.Fatal("prependInferredRouterAddr(/enroll) returned false")
+	}
+	var enrollOut api.BootstrapEnrollResponse
+	if err := proto.Unmarshal(enrollOutBytes, &enrollOut); err != nil {
+		t.Fatalf("Unmarshal BootstrapEnrollResponse: %v", err)
+	}
+	if len(enrollOut.RouterAddresses) != 2 || enrollOut.RouterAddresses[0] != inferred || enrollOut.RouterAddresses[1] != local {
+		t.Fatalf("BootstrapEnrollResponse.RouterAddresses = %v, want [%s %s]", enrollOut.RouterAddresses, inferred, local)
+	}
+}
+
+func TestResponseRecorder(t *testing.T) {
+	rec := newResponseRecorder()
+	rec.Header().Set("Content-Length", "12")
+	rec.WriteHeader(http.StatusCreated)
+	if _, err := rec.Write([]byte("hello world!")); err != nil {
+		t.Fatalf("rec.Write: %v", err)
+	}
+	if rec.code != http.StatusCreated {
+		t.Fatalf("rec.code = %d, want %d", rec.code, http.StatusCreated)
+	}
+	if got := rec.body.String(); got != "hello world!" {
+		t.Fatalf("rec.body = %q, want %q", got, "hello world!")
+	}
+	if got := rec.Header().Get("Content-Length"); got != "12" {
+		t.Fatalf("rec.Header(Content-Length) = %q, want 12", got)
+	}
+}
+

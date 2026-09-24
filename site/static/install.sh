@@ -22,14 +22,14 @@ case "${ARCH}" in
     *)          echo "Unsupported architecture: ${ARCH}"; exit 1;;
 esac
 
-# Get latest release version
+# Get latest release version via GitHub redirect (avoids api.github.com rate limits)
 echo "Fetching latest release information..."
-LATEST_RELEASE_URL="https://api.github.com/repos/${REPO}/releases/latest"
-# `|| true`: with pipefail, a grep that matches nothing would kill the script
-# here instead of reaching the friendly error below.
-VERSION=$(curl -s $LATEST_RELEASE_URL | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
+VERSION=$(curl -fsSL -o /dev/null -w "%{url_effective}" "https://github.com/${REPO}/releases/latest" | sed 's|.*/||' || true)
+if [ -z "$VERSION" ] || [ "$VERSION" = "releases" ]; then
+    VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=1" | grep '"tag_name":' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/' || true)
+fi
 
-if [ -z "$VERSION" ]; then
+if [ -z "$VERSION" ] || [ "$VERSION" = "releases" ]; then
     echo "Error: Could not find the latest release."
     exit 1
 fi
@@ -56,7 +56,7 @@ tar -xzf "${TAR_NAME}"
 
 echo "Installing to ${INSTALL_DIR} (may require sudo)..."
 INSTALLED_BINS=()
-for b in sam-node sam-control-plane sam-router mcp-client sam-box sam-console nano-init; do
+for b in sam-one sam-node sam-control-plane sam-router mcp-client sam-box sam-console nano-init; do
     if [ -f "$b" ]; then
         INSTALLED_BINS+=("$b")
     fi

@@ -6,37 +6,28 @@ aliases:
   - /docs/user/cloud-run-deployment/
 ---
 
-`sam-one` serves its HTTP API, the console and the router's WebSocket
-transport on one port. That is the shape Cloud Run expects. This guide
-deploys it there, joins nodes from anywhere, and lists what changes when
-`sam-one` runs on Cloud Run. The same steps apply to any platform that
-forwards HTTP and WebSockets to a container.
+`sam-one` serves its HTTP API, the web console, and the router's WebSocket
+transport on a single port (`8080`), and ships as a pre-built container image
+(`ghcr.io/google/sam-one:latest`). Because `sam-one` automatically infers its
+public `wss://` router address from Cloud Run's `Host` and `X-Forwarded-Proto`
+headers on `/info` and `/enroll` and derives a deterministic router `PeerID`
+from `SAM_ADMIN_TOKEN`, you can deploy a standalone control plane and router to
+Google Cloud Run in a single command.
 
-## 1. Build and push
+*(Note: For multi-cloud VM deployments on GCP, AWS, Azure, OCI, or Kubernetes,
+see the [SkyPilot guide](../skypilot/).)*
+
+## 1. Deploy `sam-one` to Cloud Run
 
 ```bash
-PROJECT=my-project
+PROJECT=my-gcp-project
 REGION=us-central1
-IMG=${REGION}-docker.pkg.dev/${PROJECT}/sam-mesh/sam-one:latest
-
-docker build -f Dockerfile.sam-one -t "$IMG" .
-gcloud auth configure-docker ${REGION}-docker.pkg.dev
-docker push "$IMG"
-```
-
-## 2. Deploy
-
-Cloud Run has no persistent disk, so the join and admin tokens are set
-through environment variables. Without this, a new instance would generate
-new tokens and nodes that enrolled earlier could not renew.
-
-```bash
 JOIN_TOKEN="sam_tok_$(openssl rand -hex 16)"
 ADMIN_TOKEN="sam_adm_$(openssl rand -hex 16)"
 
 gcloud run deploy sam-one \
   --project "$PROJECT" --region "$REGION" \
-  --image "$IMG" \
+  --image ghcr.io/google/sam-one:latest \
   --allow-unauthenticated \
   --min-instances 1 --max-instances 1 \
   --port 8080 \
@@ -45,88 +36,96 @@ gcloud run deploy sam-one \
   --set-env-vars "SAM_TOKEN=${JOIN_TOKEN},SAM_ADMIN_TOKEN=${ADMIN_TOKEN}"
 ```
 
-Each flag is needed:
+### Production persistence with PostgreSQL
+
+By default, Cloud Run's container filesystem is in-memory. When an instance
+restarts, `sam-one` preserves its router `PeerID` (derived from
+`SAM_ADMIN_TOKEN`) and pinned tokens (`SAM_TOKEN`, `SAM_ADMIN_TOKEN`), and
+active nodes re-enroll automatically.
+
+For full state durability across container revisions and restarts (preserving
+enrolled peers, minted tokens, and console policy edits), connect `sam-one` to
+a PostgreSQL database (such as Cloud SQL, AlloyDB, or a serverless Postgres
+instance for testing):
+
+```bash
+  --args="--data-dir=/data,--port=8080,--db-driver=postgres,--db-dsn=${POSTGRES_DSN}"
+```
+
+Why each Cloud Run flag matters:
 
 - `--min-instances 1 --max-instances 1`: the router's DHT and relay state
-  live in the one process. Two instances would be two separate meshes behind
-  one URL.
+  live in the single process. Two instances would form two separate meshes
+  behind one URL.
 - `--no-cpu-throttling`: the router runs background loops (lease renewal,
-  key sync, DHT maintenance) between requests.
-- `--timeout 3600`: Cloud Run limits the lifetime of a streaming request,
-  and each node's WebSocket connection is one. Nodes reconnect when the limit
-  closes a connection, but a low value causes unnecessary reconnects.
-- `--allow-unauthenticated`: the mesh authenticates its own callers. Cloud
-  Run's IAM check would block nodes before they could present a credential.
+  key sync, DHT maintenance) between HTTP requests.
+- `--timeout 3600`: Cloud Run bounds the lifetime of a streaming request,
+  and each node's WebSocket connection is one. Nodes reconnect automatically
+  when the limit closes a connection.
+- `--allow-unauthenticated`: the mesh authenticates its own callers using
+  Biscuit credentials and tokens.
 
-The router needs to know its public URL so that it can advertise an address
-that nodes can dial. The URL only exists after the first deploy:
+## 2. Obtain your Control Plane URL
+
+`gcloud run deploy` prints your `Service URL` when deployment completes:
+
+```text
+Service [sam-one] revision [sam-one-00001-xxx] has been deployed and is serving 100 percent of traffic.
+Service URL: https://sam-one-628944397724.us-central1.run.app
+```
+
+You can also query it at any time:
 
 ```bash
 URL=$(gcloud run services describe sam-one --project "$PROJECT" --region "$REGION" \
   --format='value(status.url)')
-
-gcloud run services update sam-one --project "$PROJECT" --region "$REGION" \
-  --update-env-vars "SAM_EXTERNAL_URL=${URL}"
+curl -s "$URL/readyz"   # {"status":"ready"}
 ```
 
-## 3. Verify
+## 3. Verify the dataplane with two nodes
 
-```bash
-curl -s "$URL/readyz"              # 200
-curl -s "$URL/info" | head -c 200  # contains /dns4/<host>/tcp/443/wss/p2p/<peer-id>
-```
+Once your control plane URL (`$URL`) is ready, verify end-to-end service
+discovery, Biscuit authorization, and WebSocket relay routing across two nodes:
 
-The console is at `$URL/console`. Use `/readyz` for probes. `/healthz` is
-reserved by Cloud Run's frontend on `run.app` domains and never reaches the
-container.
+1. **Save the bootstrap token** (or mint one with `sam-one token create`):
+   ```bash
+   echo -n "$JOIN_TOKEN" > join-token
+   ```
+2. **Start Node A (exposing an inference service)**:
+   ```bash
+   cat > node-a.yaml <<'EOF'
+   version: "v1alpha1"
+   services:
+     - type: inference
+       name: prod-llm
+       target_url: "http://127.0.0.1:11434"
+   EOF
 
-## 4. Join nodes
+   sam-node run --control-plane "$URL" \
+     --bootstrap-token-path join-token \
+     --config node-a.yaml --data-dir ~/node-a --bind-addr=
+   ```
+3. **Start Node B and call Node A's service through the mesh**:
+   ```bash
+   sam-node run --control-plane "$URL" \
+     --bootstrap-token-path join-token \
+     --data-dir ~/node-b --bind-addr=
 
-```bash
-echo -n "$JOIN_TOKEN" > join-token
-sam-node run --control-plane "$URL" --bootstrap-token-path join-token
-```
+   curl -s --unix-socket ~/node-b/sam.sock http://localhost/v1/models
+   curl -s --unix-socket ~/node-b/sam.sock http://localhost/v1/chat/completions \
+     -H 'Content-Type: application/json' \
+     -d '{"model":"gemma3:1b","messages":[{"role":"user","content":"Ping across the mesh"}]}'
+   ```
 
-The node enrolls over HTTPS, reads the router's `wss` address from `/info`,
-and connects through the same port. Nodes behind NAT reach each other
-through relay circuits on the Cloud Run instance, so neither node needs an
-inbound port. Pass `--announce-private=false` to the nodes so that they do
-not advertise LAN addresses that no remote peer can use.
-
-Publishing and calling a service works as in
-[your own mesh](../../getting-started/your-own-mesh/): declare the service in
-`sam-node.yaml` on one node, and call it through
-`/sam/<peer-id>/<type>/<name>/` on another.
-
-## 5. Administer
+## 4. Administer from your workstation
 
 `sam-one` is also the admin client. With `SAM_ADMIN_TOKEN` exported:
 
 ```bash
+export SAM_ADMIN_TOKEN="$ADMIN_TOKEN"
 sam-one token create --server "$URL" --role sam:role:node --max-usages 1
 sam-one token qr     --server "$URL"
 sam-one token list   --server "$URL"
 sam-one token revoke <token-id> --server "$URL"
 sam-one admin ban <peer-id>     --server "$URL"
 ```
-
-## What Cloud Run changes
-
-- **State is ephemeral.** The SQLite database is in the container's memory.
-  When an instance restarts, it forgets enrolled nodes and minted tokens,
-  and the router gets a new peer ID. Nodes read `/info` again and re-enroll
-  with the pinned join token. For state that survives restarts, point
-  `--db-driver postgres --db-dsn <dsn>` at a managed database, or run
-  `sam-one` on a VM with a disk.
-- **Rollouts overlap.** During a deploy, `/info` may advertise the new
-  instance while some WebSocket upgrades still reach the old one. Nodes
-  detect the peer ID mismatch and retry. Joins succeed once the old revision
-  has drained.
-- **One source IP for everyone.** All traffic arrives from a small number of
-  frontend proxies. `sam-one` raises libp2p's per-source-IP connection limit
-  for this automatically. A separate `sam-router` behind a proxy needs
-  `--conns-per-source-ip` raised by hand.
-- **Policy.** First boot seeds the open development policy. Build a
-  `--policy-file` into the image or post a policy after the deploy, and run
-  with `--no-join-token` once you mint per-device tokens. The
-  [sam-one reference](../../reference/sam-one/) lists the flags.

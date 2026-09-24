@@ -33,20 +33,27 @@ On Windows, download `sam_Windows_x86_64.zip` from the
 [releases page](https://github.com/google/sam/releases) and put `sam-node.exe`
 on your `PATH`.
 
-## 2. Enroll
+## 2. Enroll with a control plane
 
-A node needs an identity before it can join a mesh. `sam-node join` obtains one
-by logging you in with the mesh's identity provider and registering the node's
-key with the control plane:
+Every node joins a mesh by enrolling with a running **control plane** at its
+**URL**:
+
+- **Shared public testnet (used below)**: `https://bananas.sam-mesh.dev` is an already-running control plane open to any developer; it authenticates in your browser.
+- **Your own control plane**: start your own control plane with `sam-one` on your workstation or in the cloud ([Your own mesh](../your-own-mesh/), [Cloud Run](../../guides/cloud-run/), or [SkyPilot](../../guides/skypilot/)) and copy the `API URL` and `sam-node join` command printed in the `sam-one` startup banner.
+
+Enroll your node against the public testnet control plane:
 
 ```bash
 sam-node join https://bananas.sam-mesh.dev
 ```
 
 The command opens a browser for the login. If no browser is available, it
-prints a URL and a code to enter on another device. When the login completes,
-the credential is stored under `~/.config/sam-mesh/`. You do this once per
-machine. Later starts reuse the stored identity and renew it automatically.
+prints a URL and a code to enter on another device. (When joining your own
+`sam-one` server before setting up OIDC, pass `--bootstrap-token-path <join-token-file>`
+as shown in the `sam-one` banner instead of logging in through a browser.)
+When enrollment completes, the credential is stored under `~/.config/sam-mesh/`.
+You do this once per machine. Later starts reuse the stored identity and renew
+it automatically.
 
 ## 3. Run the node
 

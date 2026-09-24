@@ -148,6 +148,31 @@ while :; do sleep 1; done
 	}
 }
 
+func TestCloudflareOpenNamedTunnel(t *testing.T) {
+	bin := stubCloudflared(t, `
+[ "$1" = tunnel ] && [ "$2" = --no-autoupdate ] && [ "$3" = run ] && [ "$4" = --url ] || { echo "bad args: $*" >&2; exit 2; }
+[ "$TUNNEL_TOKEN" = "cf_secret_tok" ] || { echo "missing env TUNNEL_TOKEN" >&2; exit 3; }
+echo "INF Registered tunnel connection connIndex=0" >&2
+trap 'exit 0' TERM
+while :; do sleep 1; done
+`)
+	p := &Cloudflare{
+		Binary:      bin,
+		Timeout:     5 * time.Second,
+		Token:       "cf_secret_tok",
+		ExternalURL: "https://mesh.example.com/",
+	}
+	tun, err := p.Open(context.Background(), "http://127.0.0.1:18080")
+	if err != nil {
+		t.Fatalf("Open named tunnel: %v", err)
+	}
+	defer func() { _ = tun.Close() }()
+
+	if got, want := tun.URL(), "https://mesh.example.com"; got != want {
+		t.Errorf("URL = %q, want %q", got, want)
+	}
+}
+
 func TestCloudflareOpenReportsEarlyExit(t *testing.T) {
 	bin := stubCloudflared(t, `echo "ERR failed to request quick tunnel" >&2; exit 1`)
 	p := &Cloudflare{Binary: bin, Timeout: 5 * time.Second}
