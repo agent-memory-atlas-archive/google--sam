@@ -14,12 +14,25 @@
 
 import type { Connection, Libp2p } from "@libp2p/interface";
 import { multiaddr, type Multiaddr } from "@multiformats/multiaddr";
-import { AUTH_HANDLER_OPTIONS, AUTH_PROTOCOL, authenticateWithPeer, authStreamHandler } from "./auth.ts";
+import { AUTH_HANDLER_OPTIONS, AUTH_PROTOCOL, MCP_PROTOCOL, authenticateWithPeer, authStreamHandler } from "./auth.ts";
 import { ROLE_ROUTER, requireRole, type VerifiedBiscuit } from "./biscuit.ts";
 import { serviceCID, type ServiceType } from "./discovery.ts";
 import { createMeshHost, listenThroughRelay, type MeshHostOptions } from "./host.ts";
 import { openMCPSession, type MCPSession, type MCPSessionOptions } from "./mcp.ts";
 import type { AgentMesh } from "./mesh.ts";
+import {
+  HTTP_PROTOCOL,
+  SERVE_HANDLER_OPTIONS,
+  ServiceRegistry,
+  httpIngressHandler,
+  httpRequestOverStream,
+  mcpStreamHandler,
+  type HTTPRequestOptions,
+  type HTTPResponse,
+  type ProviderOptions,
+  type ServedService,
+  type ServiceSpec,
+} from "./serve.ts";
 
 export interface JoinOptions extends MeshHostOptions {
   /**
@@ -32,6 +45,10 @@ export interface JoinOptions extends MeshHostOptions {
   refreshLeadMs?: number;
   /** Retry a failed refresh after this long. */
   refreshRetryMs?: number;
+  /** How often the mesh policy is re-read from the control plane while serving. */
+  policySyncIntervalMs?: number;
+  /** How often published services are re-announced in the DHT. */
+  provideIntervalMs?: number;
   /** Bounds the whole join. */
   signal?: AbortSignal;
 }
@@ -63,6 +80,10 @@ const DISCOVERY_TIMEOUT_MS = 5_000;
 const DEFAULT_REFRESH_LEAD_MS = 60 * 60 * 1000;
 const DEFAULT_REFRESH_RETRY_MS = 30 * 1000;
 const MIN_REFRESH_DELAY_MS = 2_000;
+/** sam-node's --control-plane-sync-interval default. */
+const DEFAULT_POLICY_SYNC_MS = 15 * 60 * 1000;
+/** How often provider records are refreshed; go-libp2p-kad-dht expires them after 48h. */
+const DEFAULT_PROVIDE_INTERVAL_MS = 10 * 60 * 1000;
 
 /**
  * A member that is on the mesh: a libp2p host authenticated with at least
@@ -75,9 +96,17 @@ export class MeshSession {
   readonly routers: AdmittedRouter[];
   /** Peers that passed the inbound auth handshake, with their credential's expiration. */
   readonly authenticatedPeers: Map<string, Date>;
+  /** The services this member publishes. */
+  readonly services = new ServiceRegistry();
   #refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  #policyTimer: ReturnType<typeof setInterval> | undefined;
+  #provideTimer: ReturnType<typeof setInterval> | undefined;
   readonly #refreshLeadMs: number;
   readonly #refreshRetryMs: number;
+  readonly #policySyncMs: number;
+  readonly #provideIntervalMs: number;
+  #policyRules: string[] | undefined;
+  #serving = false;
   #closed = false;
 
   constructor(mesh: AgentMesh, node: Libp2p, routers: AdmittedRouter[], authenticatedPeers: Map<string, Date>, options: JoinOptions) {
@@ -87,6 +116,8 @@ export class MeshSession {
     this.authenticatedPeers = authenticatedPeers;
     this.#refreshLeadMs = options.refreshLeadMs ?? DEFAULT_REFRESH_LEAD_MS;
     this.#refreshRetryMs = options.refreshRetryMs ?? DEFAULT_REFRESH_RETRY_MS;
+    this.#policySyncMs = options.policySyncIntervalMs ?? DEFAULT_POLICY_SYNC_MS;
+    this.#provideIntervalMs = options.provideIntervalMs ?? DEFAULT_PROVIDE_INTERVAL_MS;
     this.#scheduleRefresh();
   }
 
@@ -197,6 +228,90 @@ export class MeshSession {
     this.#scheduleRefresh();
   }
 
+  /**
+   * The mesh policy rules this member evaluates for callers, as the control
+   * plane rendered them (PolicyConfigGetResponse.datalog_rules). Empty until
+   * the first serve() or syncPolicy().
+   */
+  get policyRules(): string[] {
+    return this.#policyRules ?? [];
+  }
+
+  /** Re-reads the mesh policy from the control plane. */
+  async syncPolicy(): Promise<void> {
+    this.#policyRules = await this.mesh.controlPlane.policyRules(this.mesh.credential.biscuit);
+  }
+
+  /**
+   * Calls an inference or A2A service on a provider over /libp2p-http, the
+   * way sam-node's egress proxy does for /sam/<peer>/<type>/<name>/<path>.
+   */
+  async request(addr: string | Multiaddr, targetService: string, path: string, options: HTTPRequestOptions = {}): Promise<HTTPResponse> {
+    const conn = await this.connect(addr, options.signal);
+    return httpRequestOverStream(conn, this.mesh.credential.biscuit, targetService, path, options);
+  }
+
+  /**
+   * Publishes a service on the mesh: registers it, announces it in the DHT
+   * and reports it to the control plane's catalog. The first call fetches
+   * the mesh policy and starts answering /sam/mcp/1.0.0 and /libp2p-http;
+   * a policy that cannot be read fails the call, since a provider without
+   * it could only authorize what callers carry in their own tokens.
+   */
+  async serve(spec: ServiceSpec): Promise<void> {
+    if (!this.#serving) {
+      await this.syncPolicy();
+      const providerOptions: ProviderOptions = {
+        trustedKeys: () => this.mesh.credential.controlPlaneKeys,
+        ownBiscuit: () => this.mesh.credential.biscuit,
+        policyRules: () => this.policyRules,
+        onAuthorized: (peerId, verified) => this.authenticatedPeers.set(peerId, verified.expiration),
+      };
+      await this.node.handle(MCP_PROTOCOL, mcpStreamHandler(this.services, providerOptions, MCP_PROTOCOL), SERVE_HANDLER_OPTIONS);
+      await this.node.handle(HTTP_PROTOCOL, httpIngressHandler(this.services, providerOptions), SERVE_HANDLER_OPTIONS);
+      this.#policyTimer = setInterval(() => void this.syncPolicy().catch(() => {}), this.#policySyncMs);
+      this.#policyTimer.unref?.();
+      this.#provideTimer = setInterval(() => void this.provideAll().catch(() => {}), this.#provideIntervalMs);
+      this.#provideTimer.unref?.();
+      this.#serving = true;
+    }
+    this.services.add(spec);
+    await this.#provide(spec.type, spec.name);
+    await this.reportCatalog().catch(() => {});
+  }
+
+  /** Announces every registered service in the DHT again. */
+  async provideAll(): Promise<void> {
+    for (const s of this.services.list()) {
+      await this.#provide(s.type, s.name);
+    }
+  }
+
+  async #provide(type: ServiceType, name: string): Promise<void> {
+    // Once for the type and once for the name, as sam-node announces.
+    const signal = AbortSignal.timeout(DISCOVERY_TIMEOUT_MS);
+    for (const cid of [await serviceCID(type), await serviceCID(type, name)]) {
+      try {
+        await this.node.contentRouting.provide(cid, { signal });
+      } catch (err) {
+        // A provide that timed out on some peers still landed on the ones that answered.
+        if (!(err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError"))) {
+          throw err;
+        }
+      }
+    }
+  }
+
+  /** Reports the published services to the control plane's catalog (display only). */
+  async reportCatalog(): Promise<void> {
+    await this.mesh.controlPlane.reportCatalog(this.mesh.credential.biscuit, this.services.list());
+  }
+
+  /** The services this member publishes. */
+  get servedServices(): ServedService[] {
+    return this.services.list();
+  }
+
   #scheduleRefresh(): void {
     if (this.#closed) {
       return;
@@ -222,6 +337,8 @@ export class MeshSession {
   async close(): Promise<void> {
     this.#closed = true;
     clearTimeout(this.#refreshTimer);
+    clearInterval(this.#policyTimer);
+    clearInterval(this.#provideTimer);
     await this.node.stop();
   }
 }

@@ -24,6 +24,8 @@ and the js-libp2p packages (`libp2p`, `@libp2p/tcp`, `@libp2p/tls`,
 
 ```ts
 import { AgentMesh } from "@agent-mesh/sdk";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 
 const mesh = await AgentMesh.enroll({
   controlPlaneUrl: "https://hub.sam-mesh.dev",
@@ -47,6 +49,24 @@ const addr = `${session.routers[0].addr}/p2p-circuit/p2p/${provider.peerId}`;
 console.log(await session.listTools(addr, "mcp://calc"));
 const result = await session.callTool(addr, "mcp://calc", "add", { a: 1, b: 2 }, { requiredLabels: { region: "eu" } });
 console.log(result.text);
+
+// Publish services of your own. Callers are authorized with the mesh policy
+// before anything reaches your code or your backend.
+await session.serve({
+  type: "mcp",
+  name: "echo",
+  createServer: () => {
+    const server = new McpServer({ name: "echo", version: "1.0.0" });
+    server.tool("echo", { text: z.string() }, async ({ text }) => ({ content: [{ type: "text", text }] }));
+    return server;
+  },
+});
+await session.serve({ type: "inference", name: "llm", target: "http://127.0.0.1:8000" });
+await session.serve({ type: "a2a", name: "reviewer", target: (request, caller) => new Response(`hello ${caller.peerId}`) });
+
+// Call an inference or A2A service on another member.
+const models = await session.request(addr, "inference://llm", "/v1/models");
+console.log(models.status, models.text());
 await session.close();
 
 // Later, in a new process:
@@ -76,7 +96,13 @@ A plaintext `http://` control plane is accepted only on loopback. Pass
   reservation and the refresh loop.
 - `src/discovery.ts`, `src/mcp.ts`: service keys for the mesh DHT, and MCP
   over `/sam/mcp/1.0.0` (a `Transport` for the official MCP client).
-- `src/gen/`: generated from `api/sam.proto` by `hack/gen-sdk-proto.sh`.
+- `src/authorizer.ts`: the provider authorizer, as
+  `internal/node.(*SamNode).Authorize`, over the generated baseline Datalog
+  and the mesh policy rules from `GET /policies`.
+- `src/serve.ts`: the `/sam/mcp/1.0.0` server, the `/libp2p-http` server
+  and client, and the service registry behind `session.serve()`.
+- `src/gen/`: generated from `api/sam.proto` and `api/datalog.go` by
+  `hack/gen-sdk-proto.sh`.
 
 ## Test
 

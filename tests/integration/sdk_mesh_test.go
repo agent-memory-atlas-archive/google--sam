@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -38,6 +39,7 @@ import (
 	"github.com/google/sam/internal/identity"
 	"github.com/google/sam/internal/storage"
 	"github.com/libp2p/go-libp2p"
+	libp2phttp "github.com/libp2p/go-libp2p-http"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -128,8 +130,13 @@ var sdkMemberLaunchers = []sdkRunner{
 // credential gets no answer. Then each SDK member discovers the sam-node's
 // service in the DHT, lists and calls its tools over /sam/mcp/1.0.0 through
 // the router, reads the node's own catalog, and is refused a service the
-// node does not have. Any SDK whose toolchain is missing is skipped, and
-// the matrix shrinks to the members present.
+// node does not have. Then each SDK member publishes an MCP service and an
+// inference service of its own: the sam-node discovers and calls both
+// (call_remote_tool, and the egress proxy for /sam/<peer>/inference/...),
+// the other SDK member does the same over the mesh, and a Go peer holding a
+// role the policy grants nothing is refused at the AuthResponse. Any SDK
+// whose toolchain is missing is skipped, and the matrix shrinks to the
+// members present.
 func TestNativeSDKsMesh(t *testing.T) {
 	root := repoRoot(t)
 	oidcURL, mintToken := startCustomMockOIDC(t)
@@ -319,6 +326,102 @@ bindings:
 			// A service the node does not have gets the stream closed on it.
 			if res := m.callRaw(t, nodeRelayAddr, "mcp://no-such-service", "add", nil); res.OK {
 				t.Fatalf("%s called a service the node does not serve: %+v", m.name, res)
+			}
+		})
+	}
+
+	// Every SDK member becomes a provider: an MCP service with an echo tool
+	// and an inference service, both served in the runner's process. The
+	// policy rules it evaluates are the ones the control plane renders.
+	for _, m := range members {
+		m.serve(t, "mcp", "echo-"+m.name)
+		m.serve(t, "inference", "llm-"+m.name)
+	}
+	guest := newGuestGoPeer(t, ctx, cpPriv, routerAddr)
+	for _, m := range members {
+		m := m
+		t.Run(m.name+"-serves", func(t *testing.T) {
+			mcpService := "mcp://echo-" + m.name
+			inferenceService := "inference://llm-" + m.name
+			sdkPeer, _ := peer.Decode(m.report.PeerID)
+
+			// sam-node -> SDK tool, through the router, as an agent behind the
+			// node would with call_remote_tool.
+			answer, err := callMCPAllowError(t, nodeAPI, "node-token", "call_remote_tool", map[string]any{
+				"peer_id":   m.report.PeerID,
+				"tool_name": mcpService + "/echo",
+				"arguments": map[string]any{"text": "from-node"},
+			})
+			if err != nil || !strings.Contains(answer, m.name+":from-node") {
+				t.Fatalf("sam-node calling echo on %s: answer %q, err %v", m.name, answer, err)
+			}
+
+			// sam-node -> SDK inference, through the egress proxy: the node
+			// verifies the member's credential, then the member authorizes the
+			// node's and answers with who called.
+			status, body := egressGet(t, nodeAPI, "node-token", "/sam/"+m.report.PeerID+"/inference/llm-"+m.name+"/v1/models")
+			if status != 200 {
+				t.Fatalf("sam-node egress to %s inference: status %d, body %s", m.name, status, body)
+			}
+			var seen struct {
+				SDK  string `json:"sdk"`
+				Peer string `json:"peer"`
+				Path string `json:"path"`
+			}
+			if json.Unmarshal([]byte(body), &seen) != nil || seen.SDK != m.name || seen.Peer != samNode.peerID.String() || seen.Path != "/v1/models" {
+				t.Fatalf("sam-node egress to %s inference answered %s", m.name, body)
+			}
+
+			// SDK -> SDK: the other member finds the service in the DHT and
+			// calls both the tool and the inference endpoint through the router.
+			for _, other := range members {
+				if other == m {
+					continue
+				}
+				other.discoverUntil(t, "mcp", "echo-"+m.name, m.report.PeerID, 20*time.Second)
+				if tools := other.tools(t, m.report.RelayAddresses[0], mcpService); !contains(tools, "echo") {
+					t.Fatalf("%s listed %v on %s of %s, want echo", other.name, tools, mcpService, m.name)
+				}
+				if res := other.call(t, m.report.RelayAddresses[0], mcpService, "echo", map[string]any{"text": "from-" + other.name}); res.IsError || !contains(res.Text, m.name+":from-"+other.name) {
+					t.Fatalf("%s calling echo on %s: %+v", other.name, m.name, res)
+				}
+				res := other.http(t, m.report.RelayAddresses[0], inferenceService, "/v1/models")
+				if res.Status != 200 || !strings.Contains(res.Body, other.report.PeerID) {
+					t.Fatalf("%s calling %s on %s: %+v", other.name, inferenceService, m.name, res)
+				}
+				// The member's catalog lists what it publishes.
+				if r := other.call(t, m.report.RelayAddresses[0], "", "list_local_services", nil); r.IsError || !strings.Contains(strings.Join(r.Text, "\n"), "echo-"+m.name) {
+					t.Fatalf("%s reading %s's catalog: %+v", other.name, m.name, r)
+				}
+				// A service the member does not publish, but the policy grants:
+				// authorized, then the stream is closed, as sam-node does.
+				if r := other.callRaw(t, m.report.RelayAddresses[0], "mcp://not-served", "echo", nil); r.OK {
+					t.Fatalf("%s called a service %s does not serve: %+v", other.name, m.name, r)
+				}
+				if r := other.http(t, m.report.RelayAddresses[0], "inference://not-served", "/"); r.Status != 404 {
+					t.Fatalf("%s calling an inference service %s does not serve: %+v", other.name, m.name, r)
+				}
+			}
+
+			// A peer the control plane vouches for, but whose role the policy
+			// grants nothing, is refused at the AuthResponse with a reason, and
+			// with 403 on the HTTP path.
+			dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			if err := guest.Connect(dialCtx, peer.AddrInfo{ID: sdkPeer, Addrs: []multiaddr.Multiaddr{multiaddr.StringCast(m.report.RelayAddresses[0])}}); err != nil {
+				t.Fatalf("guest peer could not reach %s: %v", m.name, err)
+			}
+			guestBiscuit := guestHostBiscuit(t, cpPriv, guest.ID())
+			resp := mcpHandshake(t, ctx, guest, sdkPeer, guestBiscuit, mcpService)
+			if resp.Success || !strings.Contains(resp.Error, "not authorized") {
+				t.Fatalf("%s answered a guest's request for %s with %+v, want a refusal", m.name, mcpService, resp)
+			}
+			if status, _ := libp2pHTTPGet(t, ctx, guest, sdkPeer, guestBiscuit, "/inference/llm-"+m.name+"/v1/models"); status != 403 {
+				t.Fatalf("%s answered a guest's HTTP request with %d, want 403", m.name, status)
+			}
+			// The same peer with a node-role token is served: the refusal was the policy, not the peer.
+			if status, body := libp2pHTTPGet(t, ctx, guest, sdkPeer, goHostBiscuit(t, cpPriv, guest.ID()), "/inference/llm-"+m.name+"/v1/models"); status != 200 || !strings.Contains(body, guest.ID().String()) {
+				t.Fatalf("%s answered a node-role HTTP request with %d %s", m.name, status, body)
 			}
 		})
 	}
@@ -532,6 +635,46 @@ func (m *sdkMember) call(t *testing.T, addr, service, tool string, args map[stri
 	return res
 }
 
+// serve asks the member to publish a service served in its own process.
+func (m *sdkMember) serve(t *testing.T, serviceType, name string) {
+	t.Helper()
+	var res struct {
+		OK       bool     `json:"ok"`
+		Error    string   `json:"error"`
+		Services []string `json:"services"`
+	}
+	if line := m.send(t, map[string]string{"cmd": "serve", "type": serviceType, "name": name}); json.Unmarshal(line, &res) != nil {
+		t.Fatalf("%s member: serve answered %q", m.name, line)
+	}
+	if !res.OK {
+		t.Fatalf("%s member could not serve %s://%s: %s", m.name, serviceType, name, res.Error)
+	}
+	if !contains(res.Services, serviceType+"://"+name) {
+		t.Fatalf("%s member serves %v after publishing %s://%s", m.name, res.Services, serviceType, name)
+	}
+}
+
+// sdkHTTPResult answers an {"cmd":"http"} command.
+type sdkHTTPResult struct {
+	OK     bool   `json:"ok"`
+	Error  string `json:"error"`
+	Status int    `json:"status"`
+	Body   string `json:"body"`
+}
+
+// http asks the member to call an inference or A2A service over /libp2p-http.
+func (m *sdkMember) http(t *testing.T, addr, service, path string) sdkHTTPResult {
+	t.Helper()
+	var res sdkHTTPResult
+	if line := m.send(t, map[string]string{"cmd": "http", "addr": addr, "service": service, "path": path}); json.Unmarshal(line, &res) != nil {
+		t.Fatalf("%s member: http answered %q", m.name, line)
+	}
+	if !res.OK {
+		t.Fatalf("%s member could not call %s%s at %s: %s", m.name, service, path, addr, res.Error)
+	}
+	return res
+}
+
 func (m *sdkMember) quit(t *testing.T) {
 	t.Helper()
 	m.send(t, map[string]string{"cmd": "quit"})
@@ -618,6 +761,87 @@ func goHostBiscuit(t *testing.T, cpPriv ed25519.PrivateKey, id peer.ID) []byte {
 		t.Fatalf("failed to mint biscuit for %s: %v", id, err)
 	}
 	return b
+}
+
+// guestHostBiscuit is a valid control plane credential for a role the mesh
+// policy does not know, so it grants nothing anywhere.
+func guestHostBiscuit(t *testing.T, cpPriv ed25519.PrivateKey, id peer.ID) []byte {
+	t.Helper()
+	b, err := identity.MintBootstrapBiscuitToken(cpPriv, id, "sam:role:guest", time.Now().Add(time.Hour), nil, nil)
+	if err != nil {
+		t.Fatalf("failed to mint guest biscuit for %s: %v", id, err)
+	}
+	return b
+}
+
+// newGuestGoPeer is a Go peer admitted by the router with a node-role token;
+// what it presents to providers is chosen per request.
+func newGuestGoPeer(t *testing.T, ctx context.Context, cpPriv ed25519.PrivateKey, routerAddr string) host.Host {
+	t.Helper()
+	return newAdmittedGoPeer(t, ctx, cpPriv, routerAddr)
+}
+
+// mcpHandshake opens /sam/mcp/1.0.0 to target for targetService and returns
+// the provider's answer, as sam-node's ConnectMCPSession reads it.
+func mcpHandshake(t *testing.T, ctx context.Context, h host.Host, target peer.ID, biscuit []byte, targetService string) *api.AuthResponse {
+	t.Helper()
+	streamCtx, cancel := context.WithTimeout(network.WithAllowLimitedConn(ctx, "mcp"), 10*time.Second)
+	defer cancel()
+	s, err := h.NewStream(streamCtx, target, api.MCPProtocolID)
+	if err != nil {
+		t.Fatalf("open mcp stream to %s: %v", target, err)
+	}
+	defer func() { _ = s.Close() }()
+	_ = s.SetDeadline(time.Now().Add(10 * time.Second))
+	frame, _ := proto.Marshal(&api.AuthFrame{Biscuit: biscuit, TargetService: targetService})
+	if err := msgio.NewVarintWriter(s).WriteMsg(frame); err != nil {
+		t.Fatalf("write mcp auth frame to %s: %v", target, err)
+	}
+	msg, err := msgio.NewVarintReaderSize(s, 64*1024).ReadMsg()
+	if err != nil {
+		t.Fatalf("read mcp auth response from %s: %v", target, err)
+	}
+	var resp api.AuthResponse
+	if err := proto.Unmarshal(msg, &resp); err != nil {
+		t.Fatalf("mcp auth response from %s: %v", target, err)
+	}
+	return &resp
+}
+
+// libp2pHTTPGet is one GET over /libp2p-http with the biscuit in
+// X-Sam-Biscuit, the way sam-node's egress proxy sends it.
+func libp2pHTTPGet(t *testing.T, ctx context.Context, h host.Host, target peer.ID, biscuit []byte, path string) (int, string) {
+	t.Helper()
+	client := &http.Client{Transport: libp2phttp.NewTransport(h), Timeout: 15 * time.Second}
+	req, err := http.NewRequestWithContext(network.WithAllowLimitedConn(ctx, "http"), http.MethodGet, "libp2p://"+target.String()+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(api.HeaderSamBiscuit, base64.StdEncoding.EncodeToString(biscuit))
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s on %s: %v", path, target, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(body)
+}
+
+// egressGet is a GET through sam-node's egress proxy with the node API token.
+func egressGet(t *testing.T, apiAddr, token, path string) (int, string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, "http://"+apiAddr+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(api.HeaderSamAuthentication, "Bearer "+token)
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatalf("GET %s through the sidecar: %v", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(body)
 }
 
 // authHandshake runs the client side of /sam/auth/1.0.0 against target and

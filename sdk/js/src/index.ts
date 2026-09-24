@@ -44,3 +44,22 @@ export { AUTH_HANDLER_OPTIONS, AUTH_PROTOCOL, MCP_PROTOCOL, AuthRejectedError, a
 export { createMeshHost, type MeshHostOptions } from "./host.ts";
 export { DHT_PROTOCOL, parseServiceTarget, serviceCID, type ServiceType } from "./discovery.ts";
 export { LabelsNotSatisfiedError, StreamTransport, openMCPSession, requireLabels, type MCPSession, type MCPSessionOptions } from "./mcp.ts";
+export { AuthorizationError, authorizeCaller, type AuthorizeRequest, type ProviderAuthorizerOptions } from "./authorizer.ts";
+export {
+  HTTP_PROTOCOL,
+  ServiceRegistry,
+  httpIngressHandler,
+  httpRequestOverStream,
+  mcpStreamHandler,
+  streamToNodeDuplex,
+  type HTTPHandler,
+  type HTTPRequestOptions,
+  type HTTPResponse,
+  type HTTPServiceSpec,
+  type MCPServerLike,
+  type MCPServiceSpec,
+  type ProviderOptions,
+  type ServedService,
+  type ServiceSpec,
+} from "./serve.ts";
+export { BASELINE_DATALOG } from "./gen/datalog.ts";

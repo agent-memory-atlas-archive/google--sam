@@ -27,6 +27,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional, Sequence
 
+from google.protobuf.unknown_fields import UnknownFieldSet
+
 from . import challenges
 from ._proto import sam_pb2 as pb
 from .identity import PUBLIC_KEY_SIZE, Identity, verify_ed25519
@@ -271,6 +273,29 @@ class ControlPlaneClient:
         if not resp.biscuit_token:
             raise ValueError("refresh returned an empty biscuit")
         return RefreshResult(biscuit=resp.biscuit_token, expiration=resp.expires_at)
+
+    def policy_rules(self, biscuit: bytes) -> list[str]:
+        """GET /policies: the mesh policy as the Datalog rules a provider adds
+        to its authorizer, one per entry, rendered by the control plane. The
+        text is the contract; nothing here derives rules from roles and bindings."""
+        body = self._request("GET", "/policies", headers={"Authorization": "Bearer " + base64.b64encode(biscuit).decode()})
+        resp = pb.PolicyConfigGetResponse.FromString(body)
+        if len(UnknownFieldSet(resp)) > 0:
+            raise ValueError("control plane predates datalog_rules in its policy response; upgrade the control plane")
+        return list(resp.datalog_rules)
+
+    def report_catalog(self, biscuit: bytes, services: Sequence[tuple[str, str, str]]) -> None:
+        """POST /nodes/catalog: this member's published services as (type, name,
+        description), for the console. Display only; the control plane takes
+        the reporting peer from the biscuit."""
+        types = {"mcp": pb.SERVICE_TYPE_MCP, "inference": pb.SERVICE_TYPE_INFERENCE, "a2a": pb.SERVICE_TYPE_A2A}
+        report = pb.NodeCatalogReport(services=[pb.ServiceInfo(type=types[t], name=n, description=d) for t, n, d in services])
+        self._request(
+            "POST",
+            "/nodes/catalog",
+            report.SerializeToString(),
+            headers={"Authorization": "Bearer " + base64.b64encode(biscuit).decode()},
+        )
 
     def _request(self, method: str, path: str, body: Optional[bytes] = None, headers: Optional[Mapping[str, str]] = None) -> bytes:
         all_headers = {"Accept": PROTOBUF_CONTENT_TYPE, **(headers or {})}

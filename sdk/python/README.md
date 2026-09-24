@@ -24,7 +24,8 @@ Runtime dependencies are `cryptography`, `protobuf`, `biscuit-python`,
 
 ```python
 import trio
-from agent_mesh import AgentMesh
+from agent_mesh import AgentMesh, HTTPRequest, HTTPResponse, HTTPService, MCPService, VerifiedBiscuit
+from mcp.server.mcpserver import MCPServer
 
 mesh = AgentMesh.enroll(
     "https://hub.sam-mesh.dev",
@@ -49,6 +50,29 @@ async def main():
         print(await session.list_tools(addr, "mcp://calc"))
         result = await session.call_tool(addr, "mcp://calc", "add", {"a": 1, "b": 2}, required_labels={"region": "eu"})
         print(result.text)
+
+        # Publish services of your own. Callers are authorized with the mesh
+        # policy before anything reaches your code or your backend.
+        def create_server() -> MCPServer:
+            server = MCPServer("echo")
+
+            @server.tool()
+            def echo(text: str) -> str:
+                return text
+
+            return server
+
+        await session.serve(MCPService(name="echo", create_server=create_server))
+        await session.serve(HTTPService(type="inference", name="llm", target="http://127.0.0.1:8000"))
+
+        async def card(request: HTTPRequest, caller: VerifiedBiscuit) -> HTTPResponse:
+            return HTTPResponse(status=200, body=f"hello {caller.peer_id}".encode())
+
+        await session.serve(HTTPService(type="a2a", name="reviewer", target=card))
+
+        # Call an inference or A2A service on another member.
+        models = await session.request(addr, "inference://llm", "/v1/models")
+        print(models.status, models.text)
 
 
 trio.run(main)
@@ -83,10 +107,17 @@ A plaintext `http://` control plane is accepted only on loopback. Pass
   both sides, the circuit relay v2 client (reservation, dial, accept) and
   `MeshSession` with the refresh loop.
 - `agent_mesh.discovery`, `agent_mesh.mcp_client`: the bounded
-  GET_PROVIDERS walk on the mesh DHT, and MCP over `/sam/mcp/1.0.0` for
-  `mcp.ClientSession`.
-- `agent_mesh._proto`: generated from `api/sam.proto` and
-  `sdk/python/proto/circuit.proto` by `hack/gen-sdk-proto.sh`.
+  GET_PROVIDERS walk and ADD_PROVIDER on the mesh DHT, and MCP over
+  `/sam/mcp/1.0.0` for `mcp.ClientSession`.
+- `agent_mesh.authorizer`: the provider authorizer, as
+  `internal/node.(*SamNode).Authorize`, over the generated baseline Datalog
+  and the mesh policy rules from `GET /policies`.
+- `agent_mesh.serve`: the `/sam/mcp/1.0.0` server, the `/libp2p-http`
+  server and client (`h11` on the stream), and the service registry behind
+  `session.serve()`.
+- `agent_mesh._proto`, `agent_mesh._gen`: generated from `api/sam.proto`,
+  `sdk/python/proto/circuit.proto` and `api/datalog.go` by
+  `hack/gen-sdk-proto.sh`.
 
 ## Test
 

@@ -25,6 +25,10 @@ import {
   EnrollResponseSchema,
   EnrollmentStatus,
   KeysResponseSchema,
+  NodeCatalogReportSchema,
+  PolicyConfigGetResponseSchema,
+  ServiceInfoSchema,
+  ServiceType,
   TokenRefreshRequestSchema,
   TokenRefreshResponseSchema,
   type BootstrapEnrollResponse,
@@ -328,6 +332,36 @@ export class ControlPlaneClient {
       throw new Error("refresh returned an empty biscuit");
     }
     return { biscuit: resp.biscuitToken, expiration: Number(resp.expiresAt) };
+  }
+
+  /**
+   * GET /policies: the mesh policy as the Datalog rules a provider adds to
+   * its authorizer, one per entry, rendered by the control plane. The text
+   * is the contract; nothing here derives rules from roles and bindings.
+   */
+  async policyRules(biscuit: Uint8Array): Promise<string[]> {
+    const body = await this.#request("GET", "/policies", undefined, {
+      Authorization: `Bearer ${Buffer.from(biscuit).toString("base64")}`,
+    });
+    const resp = fromBinary(PolicyConfigGetResponseSchema, body);
+    if (resp.$unknown !== undefined && resp.$unknown.length > 0) {
+      throw new Error("control plane predates datalog_rules in its policy response; upgrade the control plane");
+    }
+    return resp.datalogRules;
+  }
+
+  /**
+   * POST /nodes/catalog: this member's published services, for the console.
+   * Display only; the control plane takes the reporting peer from the biscuit.
+   */
+  async reportCatalog(biscuit: Uint8Array, services: { type: "mcp" | "inference" | "a2a"; name: string; description: string }[]): Promise<void> {
+    const types = { mcp: ServiceType.MCP, inference: ServiceType.INFERENCE, a2a: ServiceType.A2A };
+    const report = create(NodeCatalogReportSchema, {
+      services: services.map((s) => create(ServiceInfoSchema, { type: types[s.type], name: s.name, description: s.description })),
+    });
+    await this.#request("POST", "/nodes/catalog", toBinary(NodeCatalogReportSchema, report), {
+      Authorization: `Bearer ${Buffer.from(biscuit).toString("base64")}`,
+    });
   }
 
   async #request(method: "GET" | "POST", path: string, body?: Uint8Array, headers: Record<string, string> = {}): Promise<Uint8Array> {

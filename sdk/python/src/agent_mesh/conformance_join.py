@@ -25,6 +25,15 @@ then takes JSON commands on stdin, one per line, until stdin closes:
                                            list a provider's tools
   {"cmd": "call", "addr": "<multiaddr>", "service": "mcp://calc",
    "tool": "add", "args": {...}}          call one tool
+  {"cmd": "serve", "type": "mcp", "name": "echo"}
+                                           publish an MCP service with an echo
+                                           tool served in this process
+  {"cmd": "serve", "type": "inference", "name": "llm", "target": "<url>"}
+                                           publish an HTTP service; without
+                                           target, a fake in this process
+  {"cmd": "http", "addr": "<multiaddr>", "service": "inference://llm",
+   "path": "/v1/models", "method": "GET", "body": "..."}
+                                           call an HTTP service over the mesh
   {"cmd": "peers"}                          peers that authenticated to us
   {"cmd": "quit"}                           leave the mesh and exit
 
@@ -40,8 +49,10 @@ import sys
 import traceback
 
 import trio
+from mcp.server.mcpserver import MCPServer
 
 from .mesh import AgentMesh
+from .serve import HTTPRequest, HTTPResponse, HTTPService, MCPService
 from .session import MeshSession
 
 
@@ -89,6 +100,45 @@ async def _handle(session: MeshSession, command: dict) -> dict:
             return {"cmd": cmd, "ok": True, "is_error": result.is_error, "text": result.text}
         if cmd == "peers":
             return {"cmd": cmd, "authenticated_peers": sorted(session.authenticated_peers)}
+        if cmd == "serve":
+            name = command.get("name", "")
+            service_type = command.get("type")
+            if service_type == "mcp":
+
+                def create_server() -> MCPServer:
+                    server = MCPServer(name)
+
+                    @server.tool()
+                    def echo(text: str) -> str:
+                        return f"python:{text}"
+
+                    return server
+
+                await session.serve(MCPService(name=name, create_server=create_server, description="echo served by the python SDK"))
+            elif service_type in ("inference", "a2a"):
+                target = command.get("target")
+                if not target:
+
+                    async def fake(request: HTTPRequest, caller) -> HTTPResponse:  # type: ignore[no-untyped-def]
+                        body = json.dumps({"sdk": "python", "peer": caller.peer_id, "method": request.method, "path": request.path.split("?")[0]})
+                        return HTTPResponse(status=200, headers={"content-type": "application/json"}, body=body.encode())
+
+                    target = fake
+                await session.serve(HTTPService(type=service_type, name=name, target=target, description=f"{service_type} served by the python SDK"))
+            else:
+                return {"cmd": cmd, "ok": False, "error": f"unknown service type {service_type!r}"}
+            return {"cmd": cmd, "ok": True, "services": [f"{t}://{n}" for t, n, _ in session.services.list()]}
+        if cmd == "http":
+            with trio.fail_after(15):
+                res = await session.request(
+                    command["addr"],
+                    command.get("service", ""),
+                    command.get("path", "/"),
+                    method=command.get("method", "GET"),
+                    headers=command.get("headers"),
+                    body=command.get("body"),
+                )
+            return {"cmd": cmd, "ok": True, "status": res.status, "headers": res.headers, "body": res.text}
         return {"cmd": cmd, "ok": False, "error": f"unknown command {cmd!r}"}
     except BaseException as err:  # noqa: BLE001 - the driver wants the failure, not a dead runner
         if isinstance(err, (KeyboardInterrupt, SystemExit, trio.Cancelled)):

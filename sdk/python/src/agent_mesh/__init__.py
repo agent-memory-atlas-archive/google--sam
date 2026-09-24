@@ -15,6 +15,7 @@
 """Native SDK for joining a SAM agent mesh from inside a Python process."""
 
 from .auth import AUTH_PROTOCOL, MCP_PROTOCOL, AuthRejectedError, auth_stream_handler, authenticate_with_peer
+from .authorizer import BASELINE_DATALOG, AuthorizationError, AuthorizeRequest, ProviderAuthorizerOptions, authorize_caller
 from .biscuit import ROLE_ROUTER, BiscuitVerificationError, VerifiedBiscuit, require_role, verify_peer_biscuit
 from .challenges import enroll_challenge, enroll_status_challenge, refresh_challenge, register_challenge
 from .controlplane import (
@@ -29,11 +30,24 @@ from .controlplane import (
     verify_keys_response,
 )
 from .credential import MeshCredential, decode_auth_response, encode_auth_frame
-from .discovery import DHT_PROTOCOL, DiscoveredProvider, find_providers, parse_service_target, service_key
+from .discovery import DHT_PROTOCOL, DiscoveredProvider, find_providers, parse_service_target, provide, service_key
 from .identity import Identity, libp2p_public_key, peer_id_from_public_key, verify_ed25519
 from .mcp_client import LabelsNotSatisfiedError, ToolCallResult, open_mcp_session, require_labels
 from .mesh import AgentMesh
 from .relay import dial_through_relay, reserve_relay
+from .serve import (
+    HTTP_PROTOCOL,
+    HTTPHandler,
+    HTTPRequest,
+    HTTPResponse,
+    HTTPService,
+    MCPService,
+    ProviderOptions,
+    ServiceRegistry,
+    http_ingress_handler,
+    http_request_over_stream,
+    mcp_stream_handler,
+)
 from .session import AdmittedRouter, MeshSession
 
 __version__ = "0.1.0"
@@ -43,6 +57,9 @@ __all__ = [
     "AdmittedRouter",
     "AgentMesh",
     "AuthRejectedError",
+    "AuthorizationError",
+    "AuthorizeRequest",
+    "BASELINE_DATALOG",
     "BiscuitVerificationError",
     "ControlPlaneClient",
     "ControlPlaneError",
@@ -50,29 +67,43 @@ __all__ = [
     "DiscoveredProvider",
     "Enrollment",
     "EnrollmentRejectedError",
+    "HTTP_PROTOCOL",
+    "HTTPHandler",
+    "HTTPRequest",
+    "HTTPResponse",
+    "HTTPService",
     "Identity",
     "InsecureControlPlaneURLError",
     "LabelsNotSatisfiedError",
     "MCP_PROTOCOL",
+    "MCPService",
     "MeshCredential",
     "MeshSession",
+    "ProviderAuthorizerOptions",
+    "ProviderOptions",
     "ROLE_NODE",
     "ROLE_ROUTER",
     "RefreshResult",
+    "ServiceRegistry",
     "ToolCallResult",
     "VerifiedBiscuit",
     "auth_stream_handler",
     "authenticate_with_peer",
+    "authorize_caller",
     "decode_auth_response",
     "dial_through_relay",
     "encode_auth_frame",
     "enroll_challenge",
     "enroll_status_challenge",
     "find_providers",
+    "http_ingress_handler",
+    "http_request_over_stream",
     "libp2p_public_key",
+    "mcp_stream_handler",
     "open_mcp_session",
     "parse_service_target",
     "peer_id_from_public_key",
+    "provide",
     "refresh_challenge",
     "register_challenge",
     "require_labels",

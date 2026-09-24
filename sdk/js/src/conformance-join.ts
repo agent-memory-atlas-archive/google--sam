@@ -26,13 +26,24 @@
 //                                            list a provider's tools
 //   {"cmd": "call", "addr": "<multiaddr>", "service": "mcp://calc",
 //    "tool": "add", "args": {...}}          call one tool
+//   {"cmd": "serve", "type": "mcp", "name": "echo"}
+//                                            publish an MCP service with an
+//                                            echo tool served in this process
+//   {"cmd": "serve", "type": "inference", "name": "llm", "target": "<url>"}
+//                                            publish an HTTP service; without
+//                                            target, a fake in this process
+//   {"cmd": "http", "addr": "<multiaddr>", "service": "inference://llm",
+//    "path": "/v1/models", "method": "GET", "body": "..."}
+//                                            call an HTTP service over the mesh
 //   {"cmd": "peers"}                          peers that authenticated to us
 //   {"cmd": "quit"}                           leave the mesh and exit
 //
 // Each command gets one JSON line back. Same environment as conformance.ts;
 // the Python SDK ships the same runner (python -m agent_mesh.conformance_join).
 
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createInterface } from "node:readline";
+import { z } from "zod";
 import type { ServiceType } from "./discovery.ts";
 import { AgentMesh } from "./mesh.ts";
 import type { MeshSession } from "./session.ts";
@@ -45,6 +56,11 @@ interface Command {
   service?: string;
   tool?: string;
   args?: Record<string, unknown>;
+  target?: string;
+  path?: string;
+  method?: string;
+  body?: string;
+  headers?: Record<string, string>;
 }
 
 function requireEnv(name: string): string {
@@ -91,6 +107,45 @@ async function handle(session: MeshSession, command: Command): Promise<unknown> 
       }
       case "peers":
         return { cmd: "peers", authenticated_peers: [...session.authenticatedPeers.keys()].sort() };
+      case "serve": {
+        const name = command.name ?? "";
+        if (command.type === "mcp") {
+          await session.serve({
+            type: "mcp",
+            name,
+            description: "echo served by the js SDK",
+            createServer: () => {
+              const server = new McpServer({ name, version: "0.0.1" });
+              server.tool("echo", { text: z.string() }, async ({ text }) => ({ content: [{ type: "text", text: `js:${text}` }] }));
+              return server;
+            },
+          });
+        } else if (command.type === "inference" || command.type === "a2a") {
+          await session.serve({
+            type: command.type,
+            name,
+            description: `${command.type} served by the js SDK`,
+            target:
+              command.target ??
+              ((request, caller) =>
+                new Response(JSON.stringify({ sdk: "js", peer: caller.peerId, method: request.method, path: new URL(request.url).pathname }), {
+                  headers: { "content-type": "application/json" },
+                })),
+          });
+        } else {
+          return failure("serve", new Error(`unknown service type ${JSON.stringify(command.type)}`));
+        }
+        return { cmd: "serve", ok: true, services: session.servedServices.map((s) => `${s.type}://${s.name}`) };
+      }
+      case "http": {
+        const res = await session.request(command.addr ?? "", command.service ?? "", command.path ?? "/", {
+          method: command.method ?? "GET",
+          ...(command.headers !== undefined ? { headers: command.headers } : {}),
+          ...(command.body !== undefined ? { body: command.body } : {}),
+          signal: AbortSignal.timeout(15_000),
+        });
+        return { cmd: "http", ok: true, status: res.status, headers: res.headers, body: res.text() };
+      }
       default:
         return failure(command.cmd, new Error(`unknown command ${JSON.stringify(command.cmd)}`));
     }

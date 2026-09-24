@@ -21,7 +21,7 @@ node and to the control plane, a `sam-node`.
 
 ## What exists today
 
-Milestones 1 to 3 are implemented and tested in both languages:
+Milestones 1 to 4 are implemented and tested in both languages:
 
 | Capability | JS | Python |
 | --- | --- | --- |
@@ -38,10 +38,17 @@ Milestones 1 to 3 are implemented and tested in both languages:
 | Service discovery in the mesh DHT (`/sam/kad/1.0.0`) | yes | yes |
 | `/sam/mcp/1.0.0` client: list and call a provider's tools, or its catalog | yes | yes |
 | Caller-side label requirements on the provider's credential | yes | yes |
+| Provider authorizer: the baseline Datalog and the mesh policy (`GET /policies`), evaluated as `sam-node` does | yes | yes |
+| `/sam/mcp/1.0.0` server: publish MCP services with an in-process MCP server; the member's own catalog | yes | yes |
+| `/libp2p-http` server: publish inference and A2A services, forwarded to a local URL or an in-process handler | yes | yes |
+| `/libp2p-http` client: call inference and A2A services on the mesh | yes | yes |
+| DHT provide with reprovide, `POST /nodes/catalog` self-report | yes | yes |
 
-A member built this way is on the mesh and uses it: it finds a service in
-the DHT and calls its tools through the router, verifying the provider on
-every call. It cannot yet serve tools of its own.
+A member built this way is on the mesh and uses it in both directions: it
+finds a service in the DHT and calls it through the router, verifying the
+provider on every call, and it publishes services of its own that a
+`sam-node` or another SDK member discovers and calls, authorizing every
+caller with the same Datalog the Go node evaluates.
 
 Facts about the libp2p implementations that the SDKs work around, each
 pinned by a test:
@@ -75,6 +82,15 @@ pinned by a test:
 - go-libp2p-kad-dht keys provider records by the multihash, not the CID.
   `sdk/testdata/service_keys.json` pins the keys both SDKs derive against
   `internal/node/service.go`.
+- go-libp2p-kad-dht stores an ADD_PROVIDER record only when the sender is
+  the provider it names and lists at least one address, and it answers
+  nothing. The Python SDK sends the record itself to the routers and to the
+  closer peers they name (`agent_mesh/discovery.py`); js-libp2p's
+  `contentRouting.provide` does the same in client mode.
+- go-libp2p-http is plain HTTP/1.1 on a stream, one request per stream,
+  with `Host` set to the peer ID. The JS SDK bridges the stream to a Node
+  duplex and runs Node's HTTP server and client on it; the Python SDK
+  drives `h11` over the stream.
 
 ## Wire contract
 
@@ -282,30 +298,52 @@ holds against the control plane's records.
   service the node does not have. The runners took `discover`, `tools` and
   `call` commands for it.
 
-### Milestone 4 — serve tools
+### Milestone 4 — serve tools (done)
 
-- Datalog as the contract (done, Go side): the baseline moved into a
-  generated artifact both SDKs embed, the control plane renders the mesh
-  policy as `datalog_rules`, and `sam-node` consumes that text like any
-  other member. See the authorization section above.
-- Provider authorizer in each SDK, built from the artifact and
-  `datalog_rules`, evaluated on every inbound `AuthFrame`.
-- `/sam/mcp/1.0.0` server: read the `AuthFrame`, run the authorizer, answer,
-  then hand the stream to an in-process MCP server.
-- `/libp2p-http` ingress for inference and A2A backends, forwarding
-  authorized requests to a local URL, and the client side to call them.
-- DHT provide for each registered service, reprovided on the node's
-  interval; `POST /nodes/catalog` self-report.
-- Test: a `sam-node` calls a tool and an inference endpoint served by each
-  SDK member, the SDK members call each other, and a caller whose role
-  grants nothing is refused at the `AuthResponse`.
+- Datalog as the contract, Go side: the baseline moved into a generated
+  artifact both SDKs embed, the control plane renders the mesh policy as
+  `datalog_rules`, and `sam-node` consumes that text like any other member.
+  See the authorization section above.
+- Provider authorizer in each SDK (`authorizer.ts`, `authorizer.py`), built
+  from the artifact and `datalog_rules`, evaluated on every inbound
+  `AuthFrame` and every `/libp2p-http` request in the order
+  `internal/node/middleware.go` uses.
+- `/sam/mcp/1.0.0` server: read the `AuthFrame`, authorize, answer with the
+  member's credential, then hand the stream to the service's MCP server
+  (`@modelcontextprotocol/sdk` `McpServer`; `mcp.server.mcpserver.MCPServer`
+  run over pumped streams). A denied caller gets `AuthResponse{success:
+  false}` with the reason; a granted service the member does not publish
+  closes the stream after the answer, as `sam-node` does. The empty target is
+  the member's catalog (`list_local_services`).
+- `/libp2p-http` server for inference and A2A: the path is
+  `/<type>/<name>/<upstream>`, the biscuit is `X-Sam-Biscuit`; after
+  authorization the request goes to a local URL or an in-process handler
+  with the biscuit and agent headers stripped and `X-Peer-Id` set to the
+  verified caller. `session.request(addr, "inference://<name>", path)` is
+  the client side.
+- `session.serve(spec)` registers the service, fetches the mesh policy on
+  the first call and re-reads it on `sam-node`'s sync interval, announces
+  the service in the DHT (type and name, reprovided periodically) and
+  reports it to `POST /nodes/catalog`.
+- Tests. Unit: each SDK's handlers behind an in-process host, called with
+  its own clients: an MCP tool, the catalog, a proxied backend that sees
+  `X-Peer-Id` and never the biscuit, an in-process handler, and refusals for
+  a role that grants nothing, an ungranted service, a missing service, a
+  missing biscuit and a dotted path; plus the authorizer alone against the
+  decisions `internal/node/middleware_test.go` pins. Integration: in the
+  mesh of `sdk_mesh_test.go` each SDK member publishes `mcp://echo-<sdk>`
+  and `inference://llm-<sdk>`; the `sam-node` calls the tool with
+  `call_remote_tool` and the inference endpoint through its egress proxy,
+  the other SDK member discovers both in the DHT and calls them through the
+  router, and a Go peer the control plane vouches for but whose role the
+  policy grants nothing is refused at the `AuthResponse` and with 403 on
+  the HTTP path, then served once it presents a node-role token. About 9
+  seconds for the whole mesh.
 
 ### Milestone 5 — parity and release
 
-- Control plane sync loop (`/keys`, bans, router addresses, policy) and
-  gossip event handling for bans and key rotation.
-- Inference and A2A egress over libp2p HTTP (`libp2phttp`), following the
-  sidecar's `/sam/<peer>/<type>/<name>/` proxy.
+- Control plane sync loop (`/keys`, bans, router addresses) and gossip
+  event handling for bans, key rotation and policy updates.
 - Publishing: `@agent-mesh/sdk` to npm and `agent-mesh` to PyPI from the
   release workflow, versioned with the repository.
 - Docs: a guide under `site/content/docs/guides/` and the connector
@@ -344,8 +382,8 @@ both so nothing skips there. The SDK members in the mesh test are the
 runners `sdk/js/src/conformance-join.ts` and
 `sdk/python/src/agent_mesh/conformance_join.py`: each joins, prints what it
 holds, then takes JSON commands on stdin (`auth`, `discover`, `tools`,
-`call`, `peers`, `quit`) so the Go test can drive both languages through the
-same script.
+`call`, `serve`, `http`, `peers`, `quit`) so the Go test can drive both
+languages through the same script.
 
 Interoperability facts that the tests pin: `sdk/testdata/identity_vectors.json`
 holds key encodings, peer IDs and challenge signatures produced with
