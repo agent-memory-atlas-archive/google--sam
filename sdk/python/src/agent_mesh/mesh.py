@@ -27,6 +27,8 @@ from .identity import Identity
 
 _IDENTITY_FILE = "identity.key"
 _CREDENTIAL_FILE = "credential.json"
+# A saved credential with less validity left than this is not worth resuming; enroll again instead.
+_REUSE_MIN_TTL_SECONDS = 5 * 60
 
 
 @dataclass(frozen=True)
@@ -82,21 +84,33 @@ class AgentMesh:
         transport: Optional[Transport] = None,
     ) -> "AgentMesh":
         """Enrolls with the control plane and returns a member holding a credential.
-        Exactly one of bootstrap_token, bootstrap_token_path or jwt must be given.
-        A bootstrap token is better read from a file than passed as a value."""
+
+        When state_dir already holds an unexpired credential from this control
+        plane for the saved identity, that member is returned and no token is
+        needed, so a program can call enroll on every start and read the token
+        from its environment only on the first. Otherwise exactly one of
+        bootstrap_token, bootstrap_token_path or jwt must be given; a token is
+        better read from a file than passed as a value. Delete the state
+        directory to enroll afresh, for instance with other labels."""
+        state = Path(state_dir).expanduser() if state_dir is not None else None
+        saved = _load_identity(state)
+        identity = identity or saved or Identity.generate()
+        control_plane = ControlPlaneClient(control_plane_url, allow_insecure=allow_insecure, transport=transport)
+        if state is not None and saved is not None and saved.peer_id == identity.peer_id:
+            credential = _load_credential(state)
+            if credential is not None and credential.control_plane_url == control_plane.url and credential.time_to_live_seconds() > _REUSE_MIN_TTL_SECONDS:
+                return cls(identity, control_plane, credential, state)
         given = sum(v is not None for v in (bootstrap_token, bootstrap_token_path, jwt))
         if given != 1:
-            raise ValueError("exactly one of bootstrap_token, bootstrap_token_path or jwt is required")
-        state = Path(state_dir) if state_dir is not None else None
-        identity = identity or _load_identity(state) or Identity.generate()
-        control_plane = ControlPlaneClient(control_plane_url, allow_insecure=allow_insecure, transport=transport)
+            where = f" (no credential to resume in {state})" if state is not None else ""
+            raise ValueError(f"exactly one of bootstrap_token, bootstrap_token_path or jwt is required{where}")
 
         enrollment: Enrollment
         if jwt is not None:
             enrollment = control_plane.register(identity, jwt, role=role, labels=labels)
         else:
             if bootstrap_token_path is not None:
-                bootstrap_token = Path(bootstrap_token_path).read_text().strip()
+                bootstrap_token = Path(bootstrap_token_path).expanduser().read_text().strip()
             assert bootstrap_token is not None
             enrollment = control_plane.enroll_bootstrap(
                 identity, bootstrap_token, role=role, labels=labels, poll_interval=poll_interval, cancel=cancel
@@ -136,12 +150,16 @@ class AgentMesh:
         allow_insecure: bool = False,
         transport: Optional[Transport] = None,
     ) -> "AgentMesh":
-        """Resumes a member from a state directory written by an earlier enroll()."""
-        state = Path(state_dir)
+        """Resumes a member from a state directory written by an earlier enroll(),
+        for a process that must never hold an enrollment token. The control plane
+        URL comes from the saved credential."""
+        state = Path(state_dir).expanduser()
         identity = identity or _load_identity(state)
         if identity is None:
             raise FileNotFoundError(f"no identity in {state}; enroll first")
-        credential = MeshCredential.from_json((state / _CREDENTIAL_FILE).read_text())
+        credential = _load_credential(state)
+        if credential is None:
+            raise FileNotFoundError(f"no credential in {state}; enroll first")
         control_plane = ControlPlaneClient(credential.control_plane_url, allow_insecure=allow_insecure, transport=transport)
         return cls(identity, control_plane, credential, state)
 
@@ -241,6 +259,13 @@ def _load_identity(state: Optional[Path]) -> Optional[Identity]:
         return None
     try:
         return Identity.from_libp2p_private_key((state / _IDENTITY_FILE).read_bytes())
+    except FileNotFoundError:
+        return None
+
+
+def _load_credential(state: Path) -> Optional[MeshCredential]:
+    try:
+        return MeshCredential.from_json((state / _CREDENTIAL_FILE).read_text())
     except FileNotFoundError:
         return None
 

@@ -96,7 +96,7 @@ async def _handle(session: MeshSession, command: dict) -> dict:
         if cmd == "tools":
             with trio.fail_after(15):
                 tools = await session.list_tools(command["addr"], command.get("service", ""))
-            return {"cmd": cmd, "ok": True, "tools": tools}
+            return {"cmd": cmd, "ok": True, "tools": [t.name for t in tools]}
         if cmd == "call":
             with trio.fail_after(15):
                 result = await session.call_tool(command["addr"], command.get("service", ""), command["tool"], command.get("args") or {})
@@ -169,9 +169,6 @@ async def _handle(session: MeshSession, command: dict) -> dict:
 async def main() -> None:
     # stdout carries the protocol lines only; every log goes to stderr.
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING, force=True)
-    # py-libp2p's pubsub tries meshsub with every new peer and the host logs
-    # an error for each one that does not run pubsub; that is expected here.
-    logging.getLogger("libp2p.host.basic_host").setLevel(logging.CRITICAL)
     control_plane_url = _require_env("SAM_CONTROL_PLANE_URL")
     bootstrap_token_path = _require_env("SAM_BOOTSTRAP_TOKEN_PATH")
     state_dir = _require_env("SAM_SDK_STATE_DIR")

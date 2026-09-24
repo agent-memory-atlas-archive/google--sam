@@ -60,6 +60,14 @@ def require_labels(provider: VerifiedBiscuit, required: Optional[Mapping[str, st
 
 
 @dataclass
+class ToolInfo:
+    """One entry of a provider's tool list."""
+
+    name: str
+    description: str | None = None
+
+
+@dataclass
 class ToolCallResult:
     """A tool call's outcome, as MCP reports it."""
 

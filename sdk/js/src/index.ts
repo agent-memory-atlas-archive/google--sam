@@ -38,11 +38,11 @@ export {
   type MeshCredential,
 } from "./credential.ts";
 export { enrollChallenge, enrollStatusChallenge, refreshChallenge, registerChallenge } from "./challenges.ts";
-export { MeshSession, type AdmittedRouter, type DiscoveredProvider, type JoinOptions, type ToolCallResult } from "./session.ts";
+export { MeshSession, type AdmittedRouter, type DiscoveredProvider, type JoinOptions, type Peer, type ToolCallResult } from "./session.ts";
 export { BiscuitVerificationError, ROLE_ROUTER, requireRole, verifyPeerBiscuit, type VerifiedBiscuit } from "./biscuit.ts";
 export { AUTH_HANDLER_OPTIONS, AUTH_PROTOCOL, MCP_PROTOCOL, AuthRejectedError, authenticateWithPeer, authStreamHandler } from "./auth.ts";
 export { createMeshHost, type MeshHost, type MeshHostOptions } from "./host.ts";
-export { DHT_PROTOCOL, parseServiceTarget, serviceCID, type ServiceType } from "./discovery.ts";
+export { DHT_PROTOCOL, isServiceType, parseServiceTarget, serviceCID, type ServiceType } from "./discovery.ts";
 export { LabelsNotSatisfiedError, StreamTransport, openMCPSession, requireLabels, type MCPSession, type MCPSessionOptions } from "./mcp.ts";
 export { AuthorizationError, authorizeCaller, type AuthorizeRequest, type ProviderAuthorizerOptions } from "./authorizer.ts";
 export {

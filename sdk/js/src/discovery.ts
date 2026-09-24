@@ -24,6 +24,10 @@ export const DHT_PROTOCOL = "/sam/kad/1.0.0";
 
 export type ServiceType = "mcp" | "inference" | "a2a";
 
+export function isServiceType(value: unknown): value is ServiceType {
+  return value === "mcp" || value === "inference" || value === "a2a";
+}
+
 /** The DHT key of a service: by type and name, or by type alone when name is omitted. */
 export async function serviceCID(type: ServiceType, name?: string): Promise<CID> {
   const key = ["sam:service", type, ...(name !== undefined && name !== "" ? [name] : [])].join(":");

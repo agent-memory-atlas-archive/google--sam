@@ -85,9 +85,36 @@ def test_enroll_persists_load_resumes_refresh_rotates(tmp_path):
     on_disk = json.loads((state / "credential.json").read_text())
     assert on_disk["biscuit"] == "YmlzY3VpdC0y"  # base64("biscuit-2")
 
-    # Re-enrolling from the same directory keeps the identity.
-    again = AgentMesh.enroll("http://127.0.0.1:1", bootstrap_token="sbt_secret", state_dir=state, transport=cp.transport)
+    # Enrolling again from the same directory resumes the saved credential
+    # without a token; another control plane or an expiring credential
+    # enrolls afresh with the same identity.
+    issued_before = cp.issued
+    again = AgentMesh.enroll("http://127.0.0.1:1", state_dir=state, transport=cp.transport)
     assert again.peer_id == mesh.peer_id
+    assert again.credential.biscuit == b"biscuit-2"
+    assert cp.issued == issued_before
+
+    with pytest.raises(ValueError, match="no credential to resume"):
+        AgentMesh.enroll("http://127.0.0.2:1", state_dir=state, transport=cp.transport)
+    elsewhere = AgentMesh.enroll("http://127.0.0.2:1", bootstrap_token="sbt_secret", state_dir=state, transport=cp.transport)
+    assert elsewhere.peer_id == mesh.peer_id
+    assert cp.issued == issued_before + 1
+    assert elsewhere.credential.control_plane_url == "http://127.0.0.2:1"
+
+    expiring = json.loads((state / "credential.json").read_text())
+    expiring["expiration"] = int(time.time()) + 60
+    (state / "credential.json").write_text(json.dumps(expiring))
+    AgentMesh.enroll("http://127.0.0.2:1", bootstrap_token="sbt_secret", state_dir=state, transport=cp.transport)
+    assert cp.issued == issued_before + 2
+
+
+def test_state_dir_and_token_path_expand_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "bootstrap.token").write_text("sbt_secret\n")
+    cp = FakeControlPlane()
+    mesh = AgentMesh.enroll("http://127.0.0.1:1", bootstrap_token_path="~/bootstrap.token", state_dir="~/state", transport=cp.transport)
+    assert (tmp_path / "state" / "credential.json").exists()
+    assert AgentMesh.load("~/state", transport=cp.transport).peer_id == mesh.peer_id
 
 
 def test_enroll_without_state_dir_keeps_enrollment_key_when_keys_fails():
@@ -109,7 +136,10 @@ def test_enroll_refuses_ambiguous_credentials():
 
 
 def test_load_without_identity_says_enroll_first(tmp_path):
-    with pytest.raises(FileNotFoundError, match="enroll first"):
+    with pytest.raises(FileNotFoundError, match="no identity"):
+        AgentMesh.load(tmp_path)
+    (tmp_path / "identity.key").write_bytes(Identity.generate().to_libp2p_private_key())
+    with pytest.raises(FileNotFoundError, match="no credential"):
         AgentMesh.load(tmp_path)
 
 

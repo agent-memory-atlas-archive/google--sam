@@ -98,7 +98,7 @@ test("enroll persists identity and credential, load resumes them, refresh rotate
     }
     assert.equal((await stat(join(dir, "state"))).mode & 0o777, 0o700);
 
-    const resumed = await AgentMesh.load({ controlPlaneUrl: "ignored://", stateDir: join(dir, "state"), fetch: cp.fetch });
+    const resumed = await AgentMesh.load({ stateDir: join(dir, "state"), fetch: cp.fetch });
     assert.equal(resumed.peerId, mesh.peerId);
     assert.deepEqual(resumed.credential.biscuit, text("biscuit-1"));
     assert.equal(resumed.controlPlane.url.toString(), "http://127.0.0.1:1/");
@@ -108,9 +108,37 @@ test("enroll persists identity and credential, load resumes them, refresh rotate
     const onDisk = JSON.parse(await readFile(join(dir, "state", "credential.json"), "utf8")) as { biscuit: string };
     assert.equal(Buffer.from(onDisk.biscuit, "base64").toString(), "biscuit-2");
 
-    // Re-enrolling from the same directory keeps the identity.
-    const again = await AgentMesh.enroll({ controlPlaneUrl: "http://127.0.0.1:1", stateDir: join(dir, "state"), bootstrapToken: "sbt_secret", fetch: cp.fetch });
+    // Enrolling again from the same directory resumes the saved credential
+    // without a token; another control plane or an expiring credential
+    // enrolls afresh with the same identity.
+    const issuedBefore = cp.issued;
+    const again = await AgentMesh.enroll({ controlPlaneUrl: "http://127.0.0.1:1", stateDir: join(dir, "state"), fetch: cp.fetch });
     assert.equal(again.peerId, mesh.peerId);
+    assert.deepEqual(again.credential.biscuit, text("biscuit-2"));
+    assert.equal(cp.issued, issuedBefore);
+
+    await assert.rejects(AgentMesh.enroll({ controlPlaneUrl: "http://127.0.0.2:1", stateDir: join(dir, "state"), fetch: cp.fetch }), /no credential to resume/);
+    const elsewhere = await AgentMesh.enroll({ controlPlaneUrl: "http://127.0.0.2:1", stateDir: join(dir, "state"), bootstrapToken: "sbt_secret", fetch: cp.fetch });
+    assert.equal(elsewhere.peerId, mesh.peerId);
+    assert.equal(cp.issued, issuedBefore + 1);
+    assert.equal(elsewhere.credential.controlPlaneUrl, "http://127.0.0.2:1/");
+
+    const expiring = JSON.parse(await readFile(join(dir, "state", "credential.json"), "utf8")) as { expiration: number };
+    expiring.expiration = Math.floor(Date.now() / 1000) + 60;
+    await writeFile(join(dir, "state", "credential.json"), JSON.stringify(expiring));
+    await AgentMesh.enroll({ controlPlaneUrl: "http://127.0.0.2:1", stateDir: join(dir, "state"), bootstrapToken: "sbt_secret", fetch: cp.fetch });
+    assert.equal(cp.issued, issuedBefore + 2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("load needs both the identity and the credential", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "sam-sdk-"));
+  try {
+    await assert.rejects(AgentMesh.load({ stateDir: dir }), /no identity/);
+    await writeFile(join(dir, "identity.key"), Identity.generate().toLibp2pPrivateKey());
+    await assert.rejects(AgentMesh.load({ stateDir: dir }), /no credential/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

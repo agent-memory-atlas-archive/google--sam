@@ -45,7 +45,7 @@ async function main(): Promise<void> {
   const mesh = await AgentMesh.enroll({ controlPlaneUrl, allowInsecure, stateDir, bootstrapTokenPath, pollIntervalMs: 200 });
   const enrolled = mesh.credential;
 
-  const reloaded = await AgentMesh.load({ controlPlaneUrl, allowInsecure, stateDir });
+  const reloaded = await AgentMesh.load({ allowInsecure, stateDir });
   const refreshed = await reloaded.refresh();
 
   process.stdout.write(

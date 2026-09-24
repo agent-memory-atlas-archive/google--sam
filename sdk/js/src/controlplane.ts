@@ -81,7 +81,7 @@ export class InsecureControlPlaneURLError extends Error {
 }
 
 export interface ControlPlaneClientOptions {
-  /** Base URL, e.g. https://hub.sam-mesh.dev. */
+  /** Base URL, e.g. https://mesh.example.com. */
   url: string;
   /** Accept plaintext http:// to a non-loopback host. Off by default. */
   allowInsecure?: boolean;

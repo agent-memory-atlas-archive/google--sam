@@ -15,15 +15,17 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ControlPlaneClient, ROLE_NODE, type Enrollment } from "./controlplane.ts";
-import { credentialFromJSON, credentialPredatesRotation, credentialToJSON, encodeAuthFrame, type MeshCredential } from "./credential.ts";
+import { credentialFromJSON, credentialPredatesRotation, credentialTimeToLiveSeconds, credentialToJSON, encodeAuthFrame, type MeshCredential } from "./credential.ts";
 import { Identity } from "./identity.ts";
 import { joinMesh, type JoinOptions, type MeshSession } from "./session.ts";
 
 const IDENTITY_FILE = "identity.key";
 const CREDENTIAL_FILE = "credential.json";
+/** A saved credential with less validity left than this is not worth resuming; enroll again instead. */
+const REUSE_MIN_TTL_SECONDS = 5 * 60;
 
 export interface AgentMeshOptions {
-  /** Base URL of the control plane, e.g. https://hub.sam-mesh.dev. */
+  /** Base URL of the control plane, e.g. https://mesh.example.com. */
   controlPlaneUrl: string;
   /** Accept plaintext http:// to a non-loopback control plane. Off by default. */
   allowInsecure?: boolean;
@@ -31,7 +33,7 @@ export interface AgentMeshOptions {
    * Directory that keeps the identity key and the credential across
    * restarts. Without it the identity lives only in this process.
    */
-  stateDir?: string;
+  stateDir?: string | undefined;
   /** Use this identity instead of the persisted or a freshly generated one. */
   identity?: Identity;
   /** Role to enroll as. Defaults to ROLE_NODE. */
@@ -44,11 +46,11 @@ export interface AgentMeshOptions {
 
 export interface EnrollOptions extends AgentMeshOptions {
   /** A bootstrap token value, when the caller already holds it in memory. */
-  bootstrapToken?: string;
+  bootstrapToken?: string | undefined;
   /** Path of a file holding the bootstrap token. Preferred over a value. */
-  bootstrapTokenPath?: string;
+  bootstrapTokenPath?: string | undefined;
   /** An OIDC ID token, for meshes that enroll identities interactively. */
-  jwt?: string;
+  jwt?: string | undefined;
   /** Bounds the wait for an operator to approve a pending enrollment. */
   signal?: AbortSignal;
   /** Overrides the control plane's suggested poll interval while pending. */
@@ -97,15 +99,29 @@ export class AgentMesh {
 
   /**
    * Enrolls with the control plane and returns a member holding a credential.
-   * Exactly one of bootstrapToken, bootstrapTokenPath or jwt must be given.
+   *
+   * When stateDir already holds an unexpired credential from this control
+   * plane for the saved identity, that member is returned and no token is
+   * needed, so a program can call enroll on every start and read the token
+   * from its environment only on the first. Otherwise exactly one of
+   * bootstrapToken, bootstrapTokenPath or jwt must be given. Delete the
+   * state directory to enroll afresh, for instance with other labels.
    */
   static async enroll(options: EnrollOptions): Promise<AgentMesh> {
+    const saved = await loadIdentity(options.stateDir);
+    const identity = options.identity ?? saved ?? Identity.generate();
+    const controlPlane = newClient(options);
+    if (options.stateDir !== undefined && saved !== undefined && saved.peerId === identity.peerId) {
+      const credential = await loadCredential(options.stateDir);
+      if (credential !== undefined && credential.controlPlaneUrl === controlPlane.url.toString() && credentialTimeToLiveSeconds(credential) > REUSE_MIN_TTL_SECONDS) {
+        return new AgentMesh(identity, controlPlane, credential, options.stateDir);
+      }
+    }
     const given = [options.bootstrapToken, options.bootstrapTokenPath, options.jwt].filter((v) => v !== undefined).length;
     if (given !== 1) {
-      throw new Error("exactly one of bootstrapToken, bootstrapTokenPath or jwt is required");
+      const where = options.stateDir !== undefined ? ` (no credential to resume in ${options.stateDir})` : "";
+      throw new Error(`exactly one of bootstrapToken, bootstrapTokenPath or jwt is required${where}`);
     }
-    const identity = options.identity ?? (await loadIdentity(options.stateDir)) ?? Identity.generate();
-    const controlPlane = newClient(options);
     const role = options.role ?? ROLE_NODE;
 
     let enrollment: Enrollment;
@@ -150,13 +166,20 @@ export class AgentMesh {
     return mesh;
   }
 
-  /** Resumes a member from a state directory written by an earlier enroll(). */
-  static async load(options: AgentMeshOptions & { stateDir: string }): Promise<AgentMesh> {
+  /**
+   * Resumes a member from a state directory written by an earlier enroll(),
+   * for a process that must never hold an enrollment token. The control
+   * plane URL comes from the saved credential.
+   */
+  static async load(options: Omit<AgentMeshOptions, "controlPlaneUrl"> & { stateDir: string }): Promise<AgentMesh> {
     const identity = options.identity ?? (await loadIdentity(options.stateDir));
     if (!identity) {
       throw new Error(`no identity in ${options.stateDir}; enroll first`);
     }
-    const credential = credentialFromJSON(await readFile(join(options.stateDir, CREDENTIAL_FILE), "utf8"));
+    const credential = await loadCredential(options.stateDir);
+    if (credential === undefined) {
+      throw new Error(`no credential in ${options.stateDir}; enroll first`);
+    }
     return new AgentMesh(identity, newClient({ ...options, controlPlaneUrl: credential.controlPlaneUrl }), credential, options.stateDir);
   }
 
@@ -293,6 +316,17 @@ async function loadIdentity(stateDir: string | undefined): Promise<Identity | un
   }
   try {
     return Identity.fromLibp2pPrivateKey(new Uint8Array(await readFile(join(stateDir, IDENTITY_FILE))));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw err;
+  }
+}
+
+async function loadCredential(stateDir: string): Promise<MeshCredential | undefined> {
+  try {
+    return credentialFromJSON(await readFile(join(stateDir, CREDENTIAL_FILE), "utf8"));
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;

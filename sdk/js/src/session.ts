@@ -15,10 +15,10 @@
 import type { Connection } from "@libp2p/interface";
 import { TopicValidatorResult } from "@libp2p/gossipsub";
 import { peerIdFromString } from "@libp2p/peer-id";
-import { multiaddr, type Multiaddr } from "@multiformats/multiaddr";
+import { isMultiaddr, multiaddr, type Multiaddr } from "@multiformats/multiaddr";
 import { AUTH_HANDLER_OPTIONS, AUTH_PROTOCOL, MCP_PROTOCOL, authenticateWithPeer, authStreamHandler } from "./auth.ts";
 import { ROLE_ROUTER, requireRole, type VerifiedBiscuit } from "./biscuit.ts";
-import { serviceCID, type ServiceType } from "./discovery.ts";
+import { isServiceType, parseServiceTarget, serviceCID, type ServiceType } from "./discovery.ts";
 import { createMeshHost, listenThroughRelay, type MeshHost, type MeshHostOptions } from "./host.ts";
 import { openMCPSession, type MCPSession, type MCPSessionOptions } from "./mcp.ts";
 import type { AgentMesh, ControlPlaneSync } from "./mesh.ts";
@@ -76,6 +76,15 @@ export interface DiscoveredProvider {
   /** Addresses the provider advertised; may be empty when the record carried none. */
   addrs: string[];
 }
+
+/**
+ * How a caller names the peer it wants to reach: a provider `discover`
+ * returned, a peer id, or a multiaddr. For a provider or a peer id the SDK
+ * dials the addresses the peer advertised and the relayed path through
+ * every router that admitted this member, so the caller never assembles a
+ * `/p2p-circuit` address. A multiaddr is dialed as given.
+ */
+export type Peer = DiscoveredProvider | string | Multiaddr;
 
 /** A tool call's outcome, as MCP reports it. */
 export interface ToolCallResult {
@@ -164,32 +173,57 @@ export class MeshSession {
   }
 
   /**
-   * Connects to a peer by address; a `/p2p-circuit` address goes through
-   * the named relay. Returns the connection, reused if one is already open.
-   * A banned peer is refused here and by the connection gater.
+   * Connects to a peer; see Peer for how it is named. Returns the
+   * connection, reused if one is already open. A banned peer is refused
+   * here and by the connection gater.
    */
-  connect(addr: string | Multiaddr, signal?: AbortSignal): Promise<Connection> {
-    const ma = typeof addr === "string" ? multiaddr(addr) : addr;
-    const target = ma.getComponents().findLast((c) => c.name === "p2p")?.value;
-    if (target !== undefined && this.banned.has(target)) {
-      return Promise.reject(new Error(`peer ${target} is banned by the control plane`));
+  connect(peer: Peer, signal?: AbortSignal): Promise<Connection> {
+    const { peerId, addrs } = this.dialTargets(peer);
+    if (peerId !== undefined && this.banned.has(peerId)) {
+      return Promise.reject(new Error(`peer ${peerId} is banned by the control plane`));
     }
-    return this.node.dial(ma, signal !== undefined ? { signal } : {});
+    return this.node.dial(addrs, signal !== undefined ? { signal } : {});
+  }
+
+  /** The addresses connect() dials for a peer, in the order libp2p tries them. */
+  dialTargets(peer: Peer): { peerId: string | undefined; addrs: Multiaddr[] } {
+    if (typeof peer === "string" && !peer.startsWith("/")) {
+      return { peerId: peer, addrs: this.relayedAddresses(peer) };
+    }
+    if (typeof peer === "string" || isMultiaddr(peer)) {
+      const ma = typeof peer === "string" ? multiaddr(peer) : peer;
+      return { peerId: targetPeerOf(ma), addrs: [ma] };
+    }
+    const advertised = peer.addrs.map((text) => {
+      const ma = multiaddr(text);
+      return targetPeerOf(ma) === undefined ? ma.encapsulate(`/p2p/${peer.peerId}`) : ma;
+    });
+    return { peerId: peer.peerId, addrs: [...advertised, ...this.relayedAddresses(peer.peerId)] };
+  }
+
+  /** `<router>/p2p-circuit/p2p/<peer>` through every router that admitted this member. */
+  relayedAddresses(peerId: string): Multiaddr[] {
+    return this.routers.map((r) => r.addr.encapsulate(`/p2p-circuit/p2p/${peerId}`));
   }
 
   /** Connects to a peer and runs the mutual auth handshake, returning its verified credential. */
-  async authenticate(addr: string | Multiaddr, signal?: AbortSignal): Promise<VerifiedBiscuit> {
-    const conn = await this.connect(addr, signal);
+  async authenticate(peer: Peer, signal?: AbortSignal): Promise<VerifiedBiscuit> {
+    const conn = await this.connect(peer, signal);
     return authenticateWithPeer(conn, this.mesh.authFrame(), this.mesh.credential.controlPlaneKeys);
   }
 
   /**
-   * Looks the DHT up for peers offering a service, by type and name, or by
-   * type alone when name is omitted. Bounded by the timeout; the DHT walk
-   * itself is what sam-node's discover does.
+   * Looks the DHT up for peers offering a service: `"mcp://calc"`, the
+   * same string callTool and request take, or a type alone (`"mcp"`) for
+   * every service of that type, or (type, name). Bounded by the timeout;
+   * the DHT walk itself is what sam-node's discover does.
    */
-  async discover(type: ServiceType, name?: string, options: { timeoutMs?: number; limit?: number } = {}): Promise<DiscoveredProvider[]> {
-    const cid = await serviceCID(type, name);
+  async discover(service: string, name?: string, options: { timeoutMs?: number; limit?: number } = {}): Promise<DiscoveredProvider[]> {
+    const target = service.includes("://") ? parseServiceTarget(service) : { type: service, name };
+    if (!isServiceType(target.type)) {
+      throw new Error(`service type must be mcp, inference or a2a, got ${JSON.stringify(target.type)}`);
+    }
+    const cid = await serviceCID(target.type, target.name);
     const signal = AbortSignal.timeout(options.timeoutMs ?? DISCOVERY_TIMEOUT_MS);
     const found = new Map<string, DiscoveredProvider>();
     try {
@@ -220,17 +254,17 @@ export class MeshSession {
   }
 
   /**
-   * Opens an MCP session with the provider at addr for targetService
-   * ("mcp://<name>", or "" for the provider's own catalog tools).
+   * Opens an MCP session with a provider for targetService ("mcp://<name>",
+   * or "" for the provider's own catalog tools).
    */
-  async openMCP(addr: string | Multiaddr, targetService: string, options: MCPSessionOptions = {}): Promise<MCPSession> {
-    const conn = await this.connect(addr, options.signal);
+  async openMCP(peer: Peer, targetService: string, options: MCPSessionOptions = {}): Promise<MCPSession> {
+    const conn = await this.connect(peer, options.signal);
     return openMCPSession(conn, this.mesh.authFrame(targetService, options.agent ?? ""), this.mesh.credential.controlPlaneKeys, options);
   }
 
   /** Lists the tools a provider serves for a service. */
-  async listTools(addr: string | Multiaddr, targetService: string, options: MCPSessionOptions = {}): Promise<{ name: string; description?: string }[]> {
-    const mcp = await this.openMCP(addr, targetService, options);
+  async listTools(peer: Peer, targetService: string, options: MCPSessionOptions = {}): Promise<{ name: string; description?: string }[]> {
+    const mcp = await this.openMCP(peer, targetService, options);
     try {
       const { tools } = await mcp.client.listTools();
       return tools.map((t) => (t.description !== undefined ? { name: t.name, description: t.description } : { name: t.name }));
@@ -240,8 +274,8 @@ export class MeshSession {
   }
 
   /** Calls one tool on a provider's service. */
-  async callTool(addr: string | Multiaddr, targetService: string, tool: string, args: Record<string, unknown> = {}, options: MCPSessionOptions = {}): Promise<ToolCallResult> {
-    const mcp = await this.openMCP(addr, targetService, options);
+  async callTool(peer: Peer, targetService: string, tool: string, args: Record<string, unknown> = {}, options: MCPSessionOptions = {}): Promise<ToolCallResult> {
+    const mcp = await this.openMCP(peer, targetService, options);
     try {
       const result = await mcp.client.callTool({ name: tool, arguments: args });
       const content = Array.isArray(result.content) ? (result.content as Array<{ type: string; text?: string }>) : [];
@@ -384,8 +418,8 @@ export class MeshSession {
    * Calls an inference or A2A service on a provider over /libp2p-http, the
    * way sam-node's egress proxy does for /sam/<peer>/<type>/<name>/<path>.
    */
-  async request(addr: string | Multiaddr, targetService: string, path: string, options: HTTPRequestOptions = {}): Promise<HTTPResponse> {
-    const conn = await this.connect(addr, options.signal);
+  async request(peer: Peer, targetService: string, path: string, options: HTTPRequestOptions = {}): Promise<HTTPResponse> {
+    const conn = await this.connect(peer, options.signal);
     return httpRequestOverStream(conn, this.mesh.credential.biscuit, targetService, path, options);
   }
 
@@ -508,7 +542,7 @@ export async function joinMesh(mesh: AgentMesh, options: JoinOptions = {}): Prom
 
     const failures: string[] = [];
     for (const addr of routerAddrs) {
-      const routerPeer = addr.getComponents().findLast((c) => c.name === "p2p")?.value;
+      const routerPeer = targetPeerOf(addr);
       if (routerPeer === undefined) {
         failures.push(`${addr.toString()}: no /p2p/<peer id> component`);
         continue;
@@ -537,4 +571,10 @@ export async function joinMesh(mesh: AgentMesh, options: JoinOptions = {}): Prom
   }
 
   return new MeshSession(mesh, node, admitted, authenticatedPeers, banned, options);
+}
+
+/** The peer a multiaddr ends at: its trailing `/p2p/<id>`, or undefined for a relay address with no target yet. */
+function targetPeerOf(ma: Multiaddr): string | undefined {
+  const last = ma.getComponents().at(-1);
+  return last?.name === "p2p" ? last.value : undefined;
 }

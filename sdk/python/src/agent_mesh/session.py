@@ -20,14 +20,14 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, AsyncIterator, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any, AsyncIterator, Mapping, Optional, Sequence, Union
 
 import multiaddr
 import trio
 from libp2p.abc import IHost
 from libp2p.custom_types import TProtocol
 from libp2p.peer.id import ID
-from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.peer.peerinfo import PeerInfo, info_from_p2p_addr
 from libp2p.pubsub.gossipsub import PROTOCOL_ID as GOSSIPSUB_V10
 from libp2p.pubsub.gossipsub import PROTOCOL_ID_V11 as GOSSIPSUB_V11
 from libp2p.pubsub.gossipsub import PROTOCOL_ID_V12 as GOSSIPSUB_V12
@@ -41,9 +41,9 @@ from ._proto import sam_pb2 as pb
 from .auth import AUTH_PROTOCOL, MCP_PROTOCOL, auth_stream_handler, authenticate_with_peer
 from .authorizer import ProviderAuthorizerOptions
 from .biscuit import ROLE_ROUTER, VerifiedBiscuit, require_role
-from .discovery import DiscoveredProvider, ServiceType, find_providers, provide, service_key
+from .discovery import DiscoveredProvider, ServiceType, find_providers, parse_service_target, provide, service_key
 from .host import create_mesh_host
-from .mcp_client import ToolCallResult, open_mcp_session, tool_call_result
+from .mcp_client import ToolCallResult, ToolInfo, open_mcp_session, tool_call_result
 from .relay import STOP_PROTOCOL, dial_through_relay, reserve_relay, split_circuit_address, stop_stream_handler
 from .serve import (
     HTTP_PROTOCOL,
@@ -73,6 +73,26 @@ DEFAULT_PROVIDE_INTERVAL = 10 * 60.0
 DEFAULT_CONTROL_PLANE_SYNC = 15 * 60.0
 FIRST_CONTROL_PLANE_SYNC = 2.0
 DEFAULT_CONTROL_PLANE_SYNC_JITTER = 2.0
+
+# How a caller names the peer it wants to reach: a provider `discover` returned,
+# a peer id, or a multiaddr. For a provider or a peer id the SDK dials the
+# addresses the peer advertised and then the relayed path through every router
+# that admitted this member, so the caller never assembles a `/p2p-circuit`
+# address. A multiaddr is dialed as given.
+Peer = Union[DiscoveredProvider, str, multiaddr.Multiaddr]
+
+
+class _MeshsubNoise(logging.Filter):
+    """py-libp2p's pubsub opens a meshsub stream to every new peer and the host
+    logs an error for each one that does not answer. Peers that leave during
+    that exchange and members without pubsub are ordinary on the mesh."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        return not ("Failed to open stream" in message and "/meshsub/" in message)
+
+
+_MESHSUB_NOISE = _MeshsubNoise()
 
 
 @dataclass(frozen=True)
@@ -130,10 +150,37 @@ class MeshSession:
                 out.append(f"{text}/p2p-circuit/p2p/{self.peer_id}")
         return out
 
-    async def connect(self, addr: str | multiaddr.Multiaddr) -> ID:
-        """Connects to a peer by address, through a relay when the address says
-        `/p2p-circuit`, and returns its peer ID. A banned peer is refused."""
-        ma = multiaddr.Multiaddr(str(addr))
+    async def connect(self, peer: Peer) -> ID:
+        """Connects to a peer, see `Peer`, and returns its peer ID. A banned
+        peer is refused."""
+        if isinstance(peer, multiaddr.Multiaddr) or (isinstance(peer, str) and peer.startswith("/")):
+            return await self._connect_addr(multiaddr.Multiaddr(str(peer)))
+        if isinstance(peer, str):
+            target, advertised = ID.from_base58(peer), []
+        else:
+            target, advertised = ID.from_base58(peer.peer_id), [multiaddr.Multiaddr(a) for a in peer.addrs]
+        self._refuse_banned(target)
+        if target in self.host.get_connected_peers():
+            return target
+        failures: list[str] = []
+        suffix = f"/p2p/{target}"
+        direct = [multiaddr.Multiaddr(str(a).removesuffix(suffix)) for a in advertised if "/p2p-circuit" not in str(a)]
+        if direct:
+            try:
+                await self.host.connect(PeerInfo(target, direct))
+                return target
+            except Exception as err:  # noqa: BLE001 - the relayed path is tried next
+                failures.append(f"direct {[str(a) for a in direct]}: {err}")
+        for r in self.routers:
+            try:
+                await self._connect_addr(multiaddr.Multiaddr(f"{r.addr}/p2p-circuit{suffix}"))
+                return target
+            except Exception as err:  # noqa: BLE001 - the next router is tried
+                failures.append(f"via router {r.peer_id}: {err}")
+        raise ConnectionError(f"cannot reach {target}:\n  " + "\n  ".join(failures))
+
+    async def _connect_addr(self, ma: multiaddr.Multiaddr) -> ID:
+        """Dials one multiaddr, through a relay when it says `/p2p-circuit`."""
         if "/p2p-circuit" in str(ma):
             relay_addr, target = split_circuit_address(ma)
             self._refuse_banned(target)
@@ -152,51 +199,56 @@ class MeshSession:
         if str(peer_id) in self.banned:
             raise PermissionError(f"peer {peer_id} is banned by the control plane")
 
-    async def authenticate(self, addr: str | multiaddr.Multiaddr) -> VerifiedBiscuit:
+    async def authenticate(self, peer: Peer) -> VerifiedBiscuit:
         """Connects to a peer and runs the mutual auth handshake, returning the
         peer's verified credential."""
-        peer_id = await self.connect(addr)
+        peer_id = await self.connect(peer)
         return await authenticate_with_peer(self.host, peer_id, self.mesh.auth_frame(), self.mesh.credential.control_plane_keys)
 
-    async def discover(self, service_type: ServiceType, name: str | None = None, limit: int = 20) -> list[DiscoveredProvider]:
-        """Looks the DHT up for peers offering a service, by type and name, or by
-        type alone. The routers we are connected to seed the walk."""
+    async def discover(self, service: str, name: str | None = None, limit: int = 20) -> list[DiscoveredProvider]:
+        """Looks the DHT up for peers offering a service: "mcp://calc", the same
+        string call_tool and request take, or a type alone ("mcp") for every
+        service of that type, or (type, name). The routers we are connected to
+        seed the walk."""
+        service_type, service_name = parse_service_target(service) if "://" in service else (service, name)
+        if service_type not in ("mcp", "inference", "a2a"):
+            raise ValueError(f"service type must be mcp, inference or a2a, got {service_type!r}")
         seeds = [ID.from_base58(r.peer_id) for r in self.routers]
-        return await find_providers(self.host, service_key(service_type, name), seeds, limit)
+        return await find_providers(self.host, service_key(service_type, service_name), seeds, limit)
 
     def open_mcp(
         self,
-        addr: str | multiaddr.Multiaddr,
+        peer: Peer,
         target_service: str,
         *,
         required_labels: Optional[Mapping[str, str]] = None,
         agent: str = "",
     ):  # type: ignore[no-untyped-def]
-        """Opens an MCP session with the provider at addr for target_service
+        """Opens an MCP session with a provider for target_service
         ("mcp://<name>", or "" for the provider's own catalog tools):
 
-            async with session.open_mcp(addr, "mcp://calc") as (mcp, provider): ...
+            async with session.open_mcp(provider, "mcp://calc") as (mcp, verified): ...
         """
 
         @asynccontextmanager
         async def opened() -> AsyncIterator[tuple[ClientSession, VerifiedBiscuit]]:
-            peer_id = await self.connect(addr)
+            peer_id = await self.connect(peer)
             frame = self.mesh.auth_frame(target_service, agent)
             async with open_mcp_session(self.host, peer_id, frame, self.mesh.credential.control_plane_keys, required_labels=required_labels) as opened_session:
                 yield opened_session
 
         return opened()
 
-    async def list_tools(self, addr: str | multiaddr.Multiaddr, target_service: str, **options: Any) -> list[str]:
+    async def list_tools(self, peer: Peer, target_service: str, **options: Any) -> list[ToolInfo]:
         """Lists the tools a provider serves for a service."""
-        async with self.open_mcp(addr, target_service, **options) as (mcp, _):
-            return [t.name for t in (await mcp.list_tools()).tools]
+        async with self.open_mcp(peer, target_service, **options) as (mcp, _):
+            return [ToolInfo(name=t.name, description=t.description) for t in (await mcp.list_tools()).tools]
 
     async def call_tool(
-        self, addr: str | multiaddr.Multiaddr, target_service: str, tool: str, args: Optional[Mapping[str, Any]] = None, **options: Any
+        self, peer: Peer, target_service: str, tool: str, args: Optional[Mapping[str, Any]] = None, **options: Any
     ) -> ToolCallResult:
         """Calls one tool on a provider's service."""
-        async with self.open_mcp(addr, target_service, **options) as (mcp, _):
+        async with self.open_mcp(peer, target_service, **options) as (mcp, _):
             result = await mcp.call_tool(tool, dict(args or {}))
             if not hasattr(result, "content"):
                 raise RuntimeError(f"tool {tool} answered with {type(result).__name__}, not a result")
@@ -295,7 +347,7 @@ class MeshSession:
 
     async def request(
         self,
-        addr: str | multiaddr.Multiaddr,
+        peer: Peer,
         target_service: str,
         path: str,
         *,
@@ -306,7 +358,7 @@ class MeshSession:
     ) -> HTTPResponse:
         """Calls an inference or A2A service on a provider over /libp2p-http,
         the way sam-node's egress proxy does for /sam/<peer>/<type>/<name>/<path>."""
-        peer_id = await self.connect(addr)
+        peer_id = await self.connect(peer)
         return await http_request_over_stream(
             self.host, peer_id, self.mesh.credential.biscuit, target_service, path, method=method, headers=headers, body=body, agent=agent
         )
@@ -431,6 +483,7 @@ async def join_mesh(
     # registers here. StrictSign, as every Go component pins it.
     gossipsub = GossipSub(protocols=[GOSSIPSUB_V12, GOSSIPSUB_V11, GOSSIPSUB_V10], degree=6, degree_low=4, degree_high=12)
     pubsub = Pubsub(host, gossipsub, strict_signing=True)
+    logging.getLogger("libp2p.host.basic_host").addFilter(_MESHSUB_NOISE)
 
     try:
         async with host.run(listen_addrs=listen), background_trio_service(pubsub), background_trio_service(gossipsub):

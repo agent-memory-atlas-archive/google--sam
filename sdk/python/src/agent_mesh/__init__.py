@@ -32,7 +32,7 @@ from .controlplane import (
 from .credential import MeshCredential, decode_auth_response, encode_auth_frame
 from .discovery import DHT_PROTOCOL, DiscoveredProvider, find_providers, parse_service_target, provide, service_key
 from .identity import Identity, libp2p_public_key, peer_id_from_public_key, verify_ed25519
-from .mcp_client import LabelsNotSatisfiedError, ToolCallResult, open_mcp_session, require_labels
+from .mcp_client import LabelsNotSatisfiedError, ToolCallResult, ToolInfo, open_mcp_session, require_labels
 from .mesh import AgentMesh, ControlPlaneSync
 from .relay import dial_through_relay, reserve_relay
 from .serve import (
@@ -48,7 +48,7 @@ from .serve import (
     http_request_over_stream,
     mcp_stream_handler,
 )
-from .session import AdmittedRouter, MeshSession
+from .session import AdmittedRouter, MeshSession, Peer
 from .sync import GOSSIP_EVENTS_TOPIC, BanSet, verify_mesh_event
 
 __version__ = "0.1.0"
@@ -83,6 +83,7 @@ __all__ = [
     "MCPService",
     "MeshCredential",
     "MeshSession",
+    "Peer",
     "ProviderAuthorizerOptions",
     "ProviderOptions",
     "ROLE_NODE",
@@ -90,6 +91,7 @@ __all__ = [
     "RefreshResult",
     "ServiceRegistry",
     "ToolCallResult",
+    "ToolInfo",
     "VerifiedBiscuit",
     "auth_stream_handler",
     "authenticate_with_peer",
