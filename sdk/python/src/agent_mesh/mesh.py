@@ -111,7 +111,7 @@ class AgentMesh:
         enrollment: Enrollment
         if jwt is not None or jwt_path is not None:
             if jwt_path is not None:
-                jwt = Path(jwt_path).expanduser().read_text().strip()
+                jwt = Path(jwt_path).expanduser().read_text(encoding="utf-8").strip()
             assert jwt is not None
             enrollment = control_plane.register(identity, jwt, role=role, labels=labels)
         else:
