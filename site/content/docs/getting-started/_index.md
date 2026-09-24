@@ -4,18 +4,22 @@ linkTitle: "Getting started"
 weight: 1
 ---
 
-To connect an agent or machine to a SAM mesh, `sam-node` only needs one thing:
-a **Control Plane URL** (`https://...`).
+Every SAM mesh has a **control plane** (which enrolls members, distributes
+policy, and runs the router) and the **members** (`sam-node` or native SDK
+programs) that connect to it.
 
-## How to obtain a Control Plane URL
+To connect an agent or machine to a mesh, you need **a running control plane
+and its URL** (`https://...`).
 
-Pick the option that matches what you want to do right now:
+## How to get a control plane and its URL
 
-| Option | Command to get your URL | Architecture & Ingress | Best for |
+Pick the option that matches what you want to do:
+
+| Control plane option | How to run it and obtain its URL | Architecture & Ingress | Best for |
 |---|---|---|---|
-| **1. Public Testnet** | Use **`https://bananas.sam-mesh.dev`** directly | Hosted shared playground (no setup required) | Trying SAM and calling your first remote tool or model in 60 seconds ([Quick start](quickstart/)). |
-| **2. Local / Workstation (`sam-one`)** | `sam-one --data-dir ~/sam-one --tunnel cloudflare --tunnel-install` | Single binary with SQLite + automatic HTTPS tunnel | Running a private mesh across workstations, VMs, and phones in seconds. Prints your HTTPS URL, join token, and QR code in the terminal ([Your own mesh](your-own-mesh/)). |
-| **3. Cloud Deployment (1 Command)** | **[Cloud Run](../guides/cloud-run/)**: `gcloud run deploy sam-one --image ghcr.io/google/sam-one:latest ...`<br>**[SkyPilot](../guides/skypilot/)**: `sky launch -c sam-hub deploy/skypilot/sam-one.yaml` | Managed TLS/WSS ingress + PostgreSQL or persistent disk *(can also run on cloud free tiers for testing)* | An always-on production control plane in your own cloud account without custom Docker builds or Kubernetes ([Cloud Run](../guides/cloud-run/) · [SkyPilot](../guides/skypilot/)). |
+| **1. Shared Public Testnet** | Already running — use **`https://bananas.sam-mesh.dev`** | Hosted shared control plane and router | Trying `sam-node` and calling your first remote tool or model in 60 seconds ([Quick start](quickstart/)). |
+| **2. Local Control Plane (`sam-one`)** | Run `sam-one --data-dir ~/sam-one --tunnel cloudflare --tunnel-install` and copy `API URL:` from the startup banner | Single binary (control plane + router + console) with SQLite and an HTTPS tunnel | Running your own private mesh from a workstation or VM in seconds ([Your own mesh](your-own-mesh/)). |
+| **3. Cloud Control Plane (`sam-one`)** | **[Cloud Run](../guides/cloud-run/)**: `gcloud run deploy sam-one --image ghcr.io/google/sam-one:latest ...`<br>**[SkyPilot](../guides/skypilot/)**: `sky launch -c sam-hub deploy/skypilot/sam-one.yaml` | Always-on `sam-one` with managed TLS/WSS ingress + PostgreSQL or persistent disk *(can also run on cloud free tiers for testing)* | Operating a dedicated production control plane in your own cloud account ([Cloud Run](../guides/cloud-run/) · [SkyPilot](../guides/skypilot/)). |
 
 ---
 

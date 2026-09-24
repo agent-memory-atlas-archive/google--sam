@@ -15,21 +15,22 @@ code as a Kubernetes deployment, so what you learn here applies there too.
 You need the `sam-one` and `sam-node` binaries. The
 [install script](../quickstart/#1-install) provides both.
 
-## 1. Start the control plane and get your URL
+## 1. Start the control plane and obtain its URL
 
-`sam-one` packages the control plane, the libp2p WebSocket router, and the web
-console into a single binary on one port. Whenever it starts—on your laptop, in
-a container, or on a cloud VM—it prints a startup banner containing your
-**Control Plane URL (`API URL`)**, your tokens, and the exact `sam-node join`
-command to copy-paste.
+Every SAM mesh needs a running control plane and router. `sam-one` packages the
+control plane, the libp2p WebSocket router, and the web console into a single
+binary on one port. When `sam-one` starts—on your machine, in a container, or
+on a cloud VM—it brings up the control plane and prints a startup banner
+containing its **URL (`API URL`)**, its tokens, and the `sam-node join` command
+for nodes to connect to it.
 
-### Where to get your Control Plane URL
+### Ways to run `sam-one` and obtain its URL
 
-| Where your nodes run | How to start `sam-one` | Control Plane URL you get |
+| Where your nodes run | How to run `sam-one` | Control plane URL you get |
 |---|---|---|
 | **Across machines, VMs, or phones** *(Instant HTTPS tunnel)* | `sam-one --data-dir ~/sam-one --tunnel cloudflare --tunnel-install` | Public `https://<name>.trycloudflare.com` URL + terminal QR code |
 | **Same machine only** *(Local development)* | `sam-one --data-dir ~/sam-one` | Local `http://127.0.0.1:<port>` URL |
-| **Custom domain behind NAT/firewall** *(Cloudflare Named Tunnel)* | `sam-one --data-dir ~/sam-one --tunnel cloudflare --tunnel-token-path ~/cf-token --external-url https://mesh.example.com` | Permanent `https://mesh.example.com` URL (no inbound firewall ports) |
+| **Custom domain behind NAT/firewall** | `sam-one --data-dir ~/sam-one --tunnel cloudflare --tunnel-token-path ~/token --external-url https://mesh.example.com` | Permanent `https://mesh.example.com` URL (no inbound firewall ports) |
 | **Always-on Cloud Deployment** *(Cloud Run, SkyPilot)* | See [Cloud Run](../../guides/cloud-run/) (`gcloud run deploy`) or [SkyPilot](../../guides/skypilot/) (`sky launch`) | `https://<svc>.a.run.app` or `https://mesh.example.com` |
 
 For example, starting `sam-one` locally:

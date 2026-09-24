@@ -33,14 +33,15 @@ On Windows, download `sam_Windows_x86_64.zip` from the
 [releases page](https://github.com/google/sam/releases) and put `sam-node.exe`
 on your `PATH`.
 
-## 2. Enroll with a Control Plane URL
+## 2. Enroll with a control plane
 
-Every node joins a mesh using its **Control Plane URL**:
+Every node joins a mesh by enrolling with a running **control plane** at its
+**URL**:
 
-- **Public playground (used below)**: `https://bananas.sam-mesh.dev` — open to any developer; authenticates in your browser.
-- **Your own mesh**: run `sam-one --tunnel cloudflare --tunnel-install` (or deploy `ghcr.io/google/sam-one:latest` via [SkyPilot, Fly.io, or Cloud Run](../your-own-mesh/#where-to-get-your-control-plane-url)) and copy the `API URL` and `sam-node join` command printed in the startup banner.
+- **Shared public testnet (used below)**: `https://bananas.sam-mesh.dev` is an already-running control plane open to any developer; it authenticates in your browser.
+- **Your own control plane**: start your own control plane with `sam-one` on your workstation or in the cloud ([Your own mesh](../your-own-mesh/), [Cloud Run](../../guides/cloud-run/), or [SkyPilot](../../guides/skypilot/)) and copy the `API URL` and `sam-node join` command printed in the `sam-one` startup banner.
 
-Enroll your node against the public testnet:
+Enroll your node against the public testnet control plane:
 
 ```bash
 sam-node join https://bananas.sam-mesh.dev
