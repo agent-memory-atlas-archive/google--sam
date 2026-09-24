@@ -619,8 +619,17 @@ async def _authenticate_router(host: IHost, mesh: "AgentMesh", peer_id: ID) -> V
 async def _reserve_again(host: IHost, mesh: "AgentMesh", router: AdmittedRouter) -> AdmittedRouter:
     peer_id = ID.from_base58(router.peer_id)
     credential = router.credential
-    if peer_id not in host.get_connected_peers():
-        await dial(host, await peer_info(router.addr))
-        credential = await _authenticate_router(host, mesh, peer_id)
-    reservation = await reserve_relay(host, peer_id)
+    try:
+        if peer_id not in host.get_connected_peers():
+            await dial(host, await peer_info(router.addr))
+            credential = await _authenticate_router(host, mesh, peer_id)
+        reservation = await reserve_relay(host, peer_id)
+    except Exception:
+        # A connection that failed us is not kept: it may be half-open, or up
+        # but unauthenticated. The retry then dials and authenticates again.
+        try:
+            await host.disconnect(peer_id)
+        except Exception:  # noqa: BLE001 - already gone
+            pass
+        raise
     return replace(router, credential=credential, reservation=reservation)
