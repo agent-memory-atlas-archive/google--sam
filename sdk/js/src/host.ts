@@ -22,10 +22,13 @@ import { circuitRelayTransport } from "@libp2p/circuit-relay-v2";
 import { privateKeyFromProtobuf } from "@libp2p/crypto/keys";
 import { identify } from "@libp2p/identify";
 import type { Libp2p } from "@libp2p/interface";
+import { kadDHT, passthroughMapper } from "@libp2p/kad-dht";
+import { ping } from "@libp2p/ping";
 import { tcp } from "@libp2p/tcp";
 import { tls } from "@libp2p/tls";
 import type { Multiaddr } from "@multiformats/multiaddr";
 import { createLibp2p } from "libp2p";
+import { DHT_PROTOCOL } from "./discovery.ts";
 import type { Identity } from "./identity.ts";
 
 export interface MeshHostOptions {
@@ -43,7 +46,14 @@ export async function createMeshHost(identity: Identity, options: MeshHostOption
     transports: [tcp(), circuitRelayTransport()],
     connectionEncrypters: [tls()],
     streamMuxers: [yamux()],
-    services: { identify: identify() },
+    services: {
+      identify: identify(),
+      ping: ping(),
+      // A client of the mesh DHT: it looks providers up and does not hold
+      // records. Peers keep their private addresses; a mesh member often
+      // is one, and the router relays to it.
+      dht: kadDHT({ protocol: DHT_PROTOCOL, clientMode: true, peerInfoMapper: passthroughMapper }),
+    },
   });
 }
 

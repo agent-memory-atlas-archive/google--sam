@@ -20,6 +20,12 @@
 //   {"cmd": "auth", "addr": "<multiaddr>"}  connect (through a relay when the
 //                                            address says /p2p-circuit) and
 //                                            run the auth handshake
+//   {"cmd": "discover", "type": "mcp", "name": "calc"}
+//                                            DHT lookup for a service's providers
+//   {"cmd": "tools", "addr": "<multiaddr>", "service": "mcp://calc"}
+//                                            list a provider's tools
+//   {"cmd": "call", "addr": "<multiaddr>", "service": "mcp://calc",
+//    "tool": "add", "args": {...}}          call one tool
 //   {"cmd": "peers"}                          peers that authenticated to us
 //   {"cmd": "quit"}                           leave the mesh and exit
 //
@@ -27,8 +33,19 @@
 // the Python SDK ships the same runner (python -m agent_mesh.conformance_join).
 
 import { createInterface } from "node:readline";
+import type { ServiceType } from "./discovery.ts";
 import { AgentMesh } from "./mesh.ts";
 import type { MeshSession } from "./session.ts";
+
+interface Command {
+  cmd?: string;
+  addr?: string;
+  type?: string;
+  name?: string;
+  service?: string;
+  tool?: string;
+  args?: Record<string, unknown>;
+}
 
 function requireEnv(name: string): string {
   const v = process.env[name];
@@ -42,10 +59,14 @@ function emit(obj: unknown): void {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
 
-async function handle(session: MeshSession, command: { cmd?: string; addr?: string }): Promise<unknown> {
-  switch (command.cmd) {
-    case "auth": {
-      try {
+function failure(cmd: string | undefined, err: unknown): unknown {
+  return { cmd, ok: false, error: err instanceof Error ? `${err.name}: ${err.message}` : String(err) };
+}
+
+async function handle(session: MeshSession, command: Command): Promise<unknown> {
+  try {
+    switch (command.cmd) {
+      case "auth": {
         const verified = await session.authenticate(command.addr ?? "", AbortSignal.timeout(15_000));
         return {
           cmd: "auth",
@@ -55,14 +76,26 @@ async function handle(session: MeshSession, command: { cmd?: string; addr?: stri
           labels: verified.labels,
           expiration: Math.floor(verified.expiration.getTime() / 1000),
         };
-      } catch (err) {
-        return { cmd: "auth", ok: false, error: err instanceof Error ? `${err.name}: ${err.message}` : String(err) };
       }
+      case "discover": {
+        const providers = await session.discover((command.type ?? "mcp") as ServiceType, command.name);
+        return { cmd: "discover", ok: true, providers: providers.map((p) => ({ peer_id: p.peerId, addrs: p.addrs })) };
+      }
+      case "tools": {
+        const tools = await session.listTools(command.addr ?? "", command.service ?? "", { signal: AbortSignal.timeout(15_000) });
+        return { cmd: "tools", ok: true, tools: tools.map((t) => t.name) };
+      }
+      case "call": {
+        const result = await session.callTool(command.addr ?? "", command.service ?? "", command.tool ?? "", command.args ?? {}, { signal: AbortSignal.timeout(15_000) });
+        return { cmd: "call", ok: true, is_error: result.isError, text: result.text };
+      }
+      case "peers":
+        return { cmd: "peers", authenticated_peers: [...session.authenticatedPeers.keys()].sort() };
+      default:
+        return failure(command.cmd, new Error(`unknown command ${JSON.stringify(command.cmd)}`));
     }
-    case "peers":
-      return { cmd: "peers", authenticated_peers: [...session.authenticatedPeers.keys()].sort() };
-    default:
-      return { cmd: command.cmd, ok: false, error: `unknown command ${JSON.stringify(command.cmd)}` };
+  } catch (err) {
+    return failure(command.cmd, err);
   }
 }
 
@@ -89,9 +122,9 @@ async function main(): Promise<void> {
     if (line.trim() === "") {
       continue;
     }
-    let command: { cmd?: string; addr?: string };
+    let command: Command;
     try {
-      command = JSON.parse(line) as { cmd?: string; addr?: string };
+      command = JSON.parse(line) as Command;
     } catch (err) {
       emit({ ok: false, error: `not JSON: ${err instanceof Error ? err.message : String(err)}` });
       continue;

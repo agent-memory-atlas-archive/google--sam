@@ -19,18 +19,21 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, AsyncIterator, Sequence
+from typing import TYPE_CHECKING, Any, AsyncIterator, Mapping, Optional, Sequence
 
 import multiaddr
 import trio
 from libp2p.abc import IHost
 from libp2p.peer.id import ID
 from libp2p.peer.peerinfo import info_from_p2p_addr
+from mcp import ClientSession
 
 from ._proto import circuit_pb2 as circuit
 from .auth import AUTH_PROTOCOL, auth_stream_handler, authenticate_with_peer
 from .biscuit import ROLE_ROUTER, VerifiedBiscuit, require_role
+from .discovery import DiscoveredProvider, ServiceType, find_providers, service_key
 from .host import create_mesh_host
+from .mcp_client import ToolCallResult, open_mcp_session, tool_call_result
 from .relay import STOP_PROTOCOL, dial_through_relay, reserve_relay, split_circuit_address, stop_stream_handler
 
 if TYPE_CHECKING:
@@ -106,6 +109,50 @@ class MeshSession:
         peer's verified credential."""
         peer_id = await self.connect(addr)
         return await authenticate_with_peer(self.host, peer_id, self.mesh.auth_frame(), self.mesh.credential.control_plane_keys)
+
+    async def discover(self, service_type: ServiceType, name: str | None = None, limit: int = 20) -> list[DiscoveredProvider]:
+        """Looks the DHT up for peers offering a service, by type and name, or by
+        type alone. The routers we are connected to seed the walk."""
+        seeds = [ID.from_base58(r.peer_id) for r in self.routers]
+        return await find_providers(self.host, service_key(service_type, name), seeds, limit)
+
+    def open_mcp(
+        self,
+        addr: str | multiaddr.Multiaddr,
+        target_service: str,
+        *,
+        required_labels: Optional[Mapping[str, str]] = None,
+        agent: str = "",
+    ):  # type: ignore[no-untyped-def]
+        """Opens an MCP session with the provider at addr for target_service
+        ("mcp://<name>", or "" for the provider's own catalog tools):
+
+            async with session.open_mcp(addr, "mcp://calc") as (mcp, provider): ...
+        """
+
+        @asynccontextmanager
+        async def opened() -> AsyncIterator[tuple[ClientSession, VerifiedBiscuit]]:
+            peer_id = await self.connect(addr)
+            frame = self.mesh.auth_frame(target_service, agent)
+            async with open_mcp_session(self.host, peer_id, frame, self.mesh.credential.control_plane_keys, required_labels=required_labels) as opened_session:
+                yield opened_session
+
+        return opened()
+
+    async def list_tools(self, addr: str | multiaddr.Multiaddr, target_service: str, **options: Any) -> list[str]:
+        """Lists the tools a provider serves for a service."""
+        async with self.open_mcp(addr, target_service, **options) as (mcp, _):
+            return [t.name for t in (await mcp.list_tools()).tools]
+
+    async def call_tool(
+        self, addr: str | multiaddr.Multiaddr, target_service: str, tool: str, args: Optional[Mapping[str, Any]] = None, **options: Any
+    ) -> ToolCallResult:
+        """Calls one tool on a provider's service."""
+        async with self.open_mcp(addr, target_service, **options) as (mcp, _):
+            result = await mcp.call_tool(tool, dict(args or {}))
+            if not hasattr(result, "content"):
+                raise RuntimeError(f"tool {tool} answered with {type(result).__name__}, not a result")
+            return tool_call_result(result)  # type: ignore[arg-type]
 
 
 async def _refresh_loop(mesh: "AgentMesh", lead: float, retry: float) -> None:

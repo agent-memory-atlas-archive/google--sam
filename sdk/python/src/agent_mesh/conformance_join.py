@@ -19,6 +19,12 @@ then takes JSON commands on stdin, one per line, until stdin closes:
   {"cmd": "auth", "addr": "<multiaddr>"}  connect (through a relay when the
                                            address says /p2p-circuit) and run
                                            the auth handshake
+  {"cmd": "discover", "type": "mcp", "name": "calc"}
+                                           DHT lookup for a service's providers
+  {"cmd": "tools", "addr": "<multiaddr>", "service": "mcp://calc"}
+                                           list a provider's tools
+  {"cmd": "call", "addr": "<multiaddr>", "service": "mcp://calc",
+   "tool": "add", "args": {...}}          call one tool
   {"cmd": "peers"}                          peers that authenticated to us
   {"cmd": "quit"}                           leave the mesh and exit
 
@@ -31,6 +37,7 @@ import json
 import logging
 import os
 import sys
+import traceback
 
 import trio
 
@@ -49,24 +56,46 @@ def _emit(obj: dict) -> None:
     print(json.dumps(obj), flush=True)
 
 
+def _root_cause(err: BaseException) -> BaseException:
+    # trio wraps a failure in one ExceptionGroup per nursery it crossed.
+    while isinstance(err, BaseExceptionGroup) and len(err.exceptions) == 1:
+        err = err.exceptions[0]
+    return err
+
+
 async def _handle(session: MeshSession, command: dict) -> dict:
     cmd = command.get("cmd")
-    if cmd == "auth":
-        try:
+    try:
+        if cmd == "auth":
             verified = await session.authenticate(command["addr"])
-        except Exception as err:  # noqa: BLE001 - the driver wants the failure, not a dead runner
-            return {"cmd": cmd, "ok": False, "error": f"{type(err).__name__}: {err}"}
-        return {
-            "cmd": cmd,
-            "ok": True,
-            "peer_id": verified.peer_id,
-            "roles": verified.roles,
-            "labels": verified.labels,
-            "expiration": int(verified.expiration.timestamp()),
-        }
-    if cmd == "peers":
-        return {"cmd": cmd, "authenticated_peers": sorted(session.authenticated_peers)}
-    return {"cmd": cmd, "ok": False, "error": f"unknown command {cmd!r}"}
+            return {
+                "cmd": cmd,
+                "ok": True,
+                "peer_id": verified.peer_id,
+                "roles": verified.roles,
+                "labels": verified.labels,
+                "expiration": int(verified.expiration.timestamp()),
+            }
+        if cmd == "discover":
+            providers = await session.discover(command.get("type", "mcp"), command.get("name"))
+            return {"cmd": cmd, "ok": True, "providers": [{"peer_id": p.peer_id, "addrs": p.addrs} for p in providers]}
+        if cmd == "tools":
+            with trio.fail_after(15):
+                tools = await session.list_tools(command["addr"], command.get("service", ""))
+            return {"cmd": cmd, "ok": True, "tools": tools}
+        if cmd == "call":
+            with trio.fail_after(15):
+                result = await session.call_tool(command["addr"], command.get("service", ""), command["tool"], command.get("args") or {})
+            return {"cmd": cmd, "ok": True, "is_error": result.is_error, "text": result.text}
+        if cmd == "peers":
+            return {"cmd": cmd, "authenticated_peers": sorted(session.authenticated_peers)}
+        return {"cmd": cmd, "ok": False, "error": f"unknown command {cmd!r}"}
+    except BaseException as err:  # noqa: BLE001 - the driver wants the failure, not a dead runner
+        if isinstance(err, (KeyboardInterrupt, SystemExit, trio.Cancelled)):
+            raise
+        cause = _root_cause(err)
+        traceback.print_exception(err, file=sys.stderr)
+        return {"cmd": cmd, "ok": False, "error": f"{type(cause).__name__}: {cause}"}
 
 
 async def main() -> None:

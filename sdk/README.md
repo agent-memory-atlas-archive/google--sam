@@ -21,7 +21,7 @@ node and to the control plane, a `sam-node`.
 
 ## What exists today
 
-Milestones 1 and 2 are implemented and tested in both languages:
+Milestones 1 to 3 are implemented and tested in both languages:
 
 | Capability | JS | Python |
 | --- | --- | --- |
@@ -35,10 +35,13 @@ Milestones 1 and 2 are implemented and tested in both languages:
 | libp2p host as `sam-node` configures it (TCP, TLS, yamux) | yes | yes |
 | `/sam/auth/1.0.0`, both sides; join = handshake with a router and check its role | yes | yes |
 | Circuit relay v2 reservation on the router; dial and accept through it | yes | yes |
+| Service discovery in the mesh DHT (`/sam/kad/1.0.0`) | yes | yes |
+| `/sam/mcp/1.0.0` client: list and call a provider's tools, or its catalog | yes | yes |
+| Caller-side label requirements on the provider's credential | yes | yes |
 
-A member built this way is on the mesh: authenticated with a router,
-reachable through it, verifying every peer that dials it and every peer it
-dials. It cannot yet discover or call tools.
+A member built this way is on the mesh and uses it: it finds a service in
+the DHT and calls its tools through the router, verifying the provider on
+every call. It cannot yet serve tools of its own.
 
 Facts about the libp2p implementations that the SDKs work around, each
 pinned by a test:
@@ -64,6 +67,14 @@ pinned by a test:
   `<relay>/p2p-circuit`, and a router refuses that before the auth
   handshake. The JS SDK starts the listener after the handshake, through the
   transport manager, which is not on the public `Libp2p` interface.
+- py-libp2p's Kademlia client takes a protocol prefix but its provider
+  lookups still speak `/ipfs/kad/1.0.0`, so it cannot reach the mesh DHT.
+  The Python SDK does a bounded GET_PROVIDERS walk itself on
+  `/sam/kad/1.0.0`, seeded by the routers (`agent_mesh/discovery.py`).
+  js-libp2p's `@libp2p/kad-dht` takes the protocol and works as is.
+- go-libp2p-kad-dht keys provider records by the multihash, not the CID.
+  `sdk/testdata/service_keys.json` pins the keys both SDKs derive against
+  `internal/node/service.go`.
 
 ## Wire contract
 
@@ -226,22 +237,30 @@ holds against the control plane's records.
   does the same and sends a forged frame; an address behind the router for
   a peer that is not on the mesh fails. About 7 seconds.
 
-### Milestone 3 — call tools
+### Milestone 3 — call tools (done)
 
-- Kademlia client with prefix `/sam` (JS: `@libp2p/kad-dht`; Python:
-  `libp2p.kad_dht`, to be checked against go-libp2p the way the relay was),
-  lookup by service type and name.
-- `/sam/mcp/1.0.0` client: send the `AuthFrame` with the target service,
-  verify the provider's biscuit, then run an MCP client over the
-  varint-framed stream. JS: a `Transport` for `@modelcontextprotocol/sdk`;
-  Python: a read/write stream pair for `mcp`.
-- Caller-side label requirements (`checkPeerLabels`) on the provider's
-  biscuit.
-- Public API: `session.discover(type, name)`,
-  `session.callTool("mcp://svc/tool", args)`, `session.listTools(peer, service)`.
-- Test: the mesh of `sdk_mesh_test.go` gains an MCP backend on the
-  `sam-node`; each SDK member discovers it and calls a tool through the
-  router, and the runners' command protocol gains `discover` and `call`.
+- Discovery: `session.discover(type, name)` looks the mesh DHT up for the
+  service key `internal/node/service.go` derives. JS: `@libp2p/kad-dht` in
+  client mode on `/sam/kad/1.0.0`; Python: the SDK's own bounded
+  GET_PROVIDERS walk on the same protocol (see the facts above).
+- `/sam/mcp/1.0.0` client: `session.openMCP(addr, "mcp://<name>")` sends
+  the `AuthFrame` naming the service, verifies the provider's credential
+  and the caller's required labels (`checkPeerLabels`), then runs the
+  official MCP client over the varint-framed stream. JS: a `Transport` for
+  `@modelcontextprotocol/sdk`; Python: a pair of memory streams pumped to
+  and from the libp2p stream for `mcp.ClientSession`. `""` as the target is
+  the provider's own catalog (`list_local_services`, `get_mesh_info`).
+- `session.listTools(addr, service)` and `session.callTool(addr, service,
+  tool, args)` on top of that.
+- Tests. Unit: each SDK calls a tool on an in-process provider that serves
+  `/sam/mcp/1.0.0` as `sam-node` does with the official MCP server behind
+  it, reads its catalog, and is refused for missing labels, an untrusted
+  provider, a forged caller credential and an unknown service. Integration:
+  the mesh of `sdk_mesh_test.go` has an MCP backend behind the `sam-node`
+  (`calc`, tool `add`); each SDK member discovers it in the DHT, lists and
+  calls `add` through the router, reads the node's catalog and is refused a
+  service the node does not have. The runners took `discover`, `tools` and
+  `call` commands for it.
 
 ### Milestone 4 — serve tools
 
@@ -298,8 +317,9 @@ whose toolchain is missing, and CI (`.github/workflows/sdk.yml`) installs
 both so nothing skips there. The SDK members in the mesh test are the
 runners `sdk/js/src/conformance-join.ts` and
 `sdk/python/src/agent_mesh/conformance_join.py`: each joins, prints what it
-holds, then takes JSON commands on stdin (`auth`, `peers`, `quit`) so the Go
-test can drive both languages through the same script.
+holds, then takes JSON commands on stdin (`auth`, `discover`, `tools`,
+`call`, `peers`, `quit`) so the Go test can drive both languages through the
+same script.
 
 Interoperability facts that the tests pin: `sdk/testdata/identity_vectors.json`
 holds key encodings, peer IDs and challenge signatures produced with

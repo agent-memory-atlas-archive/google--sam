@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -116,16 +117,19 @@ var sdkMemberLaunchers = []sdkRunner{
 }
 
 // TestNativeSDKsMesh runs one mesh: a control plane, a sam-router, a
-// sam-node and one member per SDK, all real. It then walks the connectivity
-// matrix. Every member authenticates with the router and gets a relay
-// reservation, which the router grants only to admitted peers. Each SDK
-// member reaches the sam-node directly and the other SDK member both
-// directly and through the router, and on every path both ends verify each
-// other's credential with the /sam/auth/1.0.0 handshake. The sam-node
-// reaches each SDK member through the router. A Go peer that is itself
-// admitted does the same and also checks that a forged credential gets no
-// answer. Any SDK whose toolchain is missing is skipped, and the matrix
-// shrinks to the members present.
+// sam-node serving an MCP service, and one member per SDK, all real. It
+// then walks the connectivity matrix. Every member authenticates with the
+// router and gets a relay reservation, which the router grants only to
+// admitted peers. Each SDK member reaches the sam-node directly and the
+// other SDK member both directly and through the router, and on every path
+// both ends verify each other's credential with the /sam/auth/1.0.0
+// handshake. The sam-node reaches each SDK member through the router. A Go
+// peer that is itself admitted does the same and also checks that a forged
+// credential gets no answer. Then each SDK member discovers the sam-node's
+// service in the DHT, lists and calls its tools over /sam/mcp/1.0.0 through
+// the router, reads the node's own catalog, and is refused a service the
+// node does not have. Any SDK whose toolchain is missing is skipped, and
+// the matrix shrinks to the members present.
 func TestNativeSDKsMesh(t *testing.T) {
 	root := repoRoot(t)
 	oidcURL, mintToken := startCustomMockOIDC(t)
@@ -156,9 +160,26 @@ func TestNativeSDKsMesh(t *testing.T) {
 	cpPort, _ := strconv.Atoi(portStr)
 
 	// The router enrolls through OIDC with group "routers" and the node with
-	// user mock-user; the policy binds both to their roles.
+	// user mock-user. Every member holds the node role, which may reach any
+	// service on any target; the SDK members get it from their bootstrap
+	// token and the node from its binding.
 	policyFile := filepath.Join(t.TempDir(), "policy.yaml")
-	writePolicyWithRouter(t, policyFile, fmt.Sprintf("bindings:\n  - members: [\"user:mock-user\"]\n    role: %s\nroles: []\n", api.RoleNode))
+	policy := fmt.Sprintf(`roles:
+  - name: %s
+    allowed_services: []
+    allowed_targets: ["*"]
+  - name: %s
+    allowed_services: ["*"]
+    allowed_targets: ["*"]
+bindings:
+  - role: %s
+    members: ["group:routers"]
+  - role: %s
+    members: ["user:mock-user"]
+`, api.RoleRouter, api.RoleNode, api.RoleRouter, api.RoleNode)
+	if err := os.WriteFile(policyFile, []byte(policy), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	injectPolicyYAML(t, cpPort, adminToken, policyFile)
 
 	routerAddr, _ := startRouter(t, t.TempDir(), cpPort, mintToken, "router")
@@ -170,9 +191,16 @@ func TestNativeSDKsMesh(t *testing.T) {
 		t.Fatalf("failed to load control plane signing key: %v", err)
 	}
 
-	// The Go node: a sam-node enrolled through OIDC, listening on loopback.
+	// The Go node: a sam-node enrolled through OIDC, listening on loopback,
+	// serving the MCP service "calc" from a backend this test runs.
+	const serviceName = "calc"
+	backend := httptest.NewServer(newBoundaryMCPHandler(t))
+	t.Cleanup(backend.Close)
 	nodeBin := buildBinary(t, "./cmd/sam-node")
 	nodeHome := filepath.Join(t.TempDir(), "node")
+	if err := os.MkdirAll(nodeHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	samNode := launchNode(t, nodeBin,
 		append(os.Environ(), "HOME="+nodeHome, "XDG_CONFIG_HOME="+filepath.Join(nodeHome, ".config")),
 		nodeHome, "run",
@@ -180,6 +208,8 @@ func TestNativeSDKsMesh(t *testing.T) {
 		"--jwt", mintToken(map[string]interface{}{"sub": "mock-user", "roles": []string{api.RoleNode}}),
 		"--allow-loopback",
 		"--api-token-path", tokenPath(t, "node-token"),
+		"--discovery-interval", "100ms",
+		"--config", writeNodeConfig(t, nodeHome, nil, svcDecl{Type: "mcp", Name: serviceName, TargetURL: backend.URL}),
 		"--log-level", "debug",
 	)
 	nodeAPI := samNode.waitForAPI(t)
@@ -263,6 +293,32 @@ func TestNativeSDKsMesh(t *testing.T) {
 			stranger, _ := peer.Decode("12D3KooWA4Xop1JaT3MHxwYMkCepYsv4iPVopMXwCz5iHYdBfeSB")
 			if res := m.authRaw(t, routerAddr+"/p2p-circuit/p2p/"+stranger.String()); res.OK {
 				t.Fatalf("%s reached a peer that is not on the mesh", m.name)
+			}
+
+			// Services. The node advertises calc in the DHT once its backend
+			// answered a probe; the member finds it there and calls it through
+			// the router, the way sam-node's call_remote_tool would.
+			providers := m.discoverUntil(t, "mcp", serviceName, samNode.peerID.String(), 20*time.Second)
+			if len(providers) != 1 {
+				t.Fatalf("%s discovered %+v for %s, want only the node", m.name, providers, serviceName)
+			}
+			nodeRelayAddr := routerAddr + "/p2p-circuit/p2p/" + samNode.peerID.String()
+			if tools := m.tools(t, nodeRelayAddr, "mcp://"+serviceName); !contains(tools, "add") {
+				t.Fatalf("%s listed %v on mcp://%s, want add", m.name, tools, serviceName)
+			}
+			if res := m.call(t, nodeRelayAddr, "mcp://"+serviceName, "add", map[string]any{"a": 1, "b": 2}); res.IsError || !contains(res.Text, "fake-result:add") {
+				t.Fatalf("%s calling add: %+v", m.name, res)
+			}
+			// The node's own catalog is the empty target.
+			if tools := m.tools(t, samNode.p2pAddr, ""); !contains(tools, "list_local_services") {
+				t.Fatalf("%s listed %v on the node's catalog", m.name, tools)
+			}
+			if res := m.call(t, samNode.p2pAddr, "", "list_local_services", nil); res.IsError || !strings.Contains(strings.Join(res.Text, "\n"), serviceName) {
+				t.Fatalf("%s list_local_services: %+v", m.name, res)
+			}
+			// A service the node does not have gets the stream closed on it.
+			if res := m.callRaw(t, nodeRelayAddr, "mcp://no-such-service", "add", nil); res.OK {
+				t.Fatalf("%s called a service the node does not serve: %+v", m.name, res)
 			}
 		})
 	}
@@ -386,6 +442,94 @@ func (m *sdkMember) peers(t *testing.T) []string {
 		t.Fatalf("%s member: peers answered %q", m.name, line)
 	}
 	return res.AuthenticatedPeers
+}
+
+// sdkProvider is one entry of a {"cmd":"discover"} answer.
+type sdkProvider struct {
+	PeerID string   `json:"peer_id"`
+	Addrs  []string `json:"addrs"`
+}
+
+// discoverUntil repeats the DHT lookup until wantPeer is among the providers
+// or the deadline passes; a node advertises a service only after probing
+// its backend, on its own schedule.
+func (m *sdkMember) discoverUntil(t *testing.T, serviceType, name, wantPeer string, timeout time.Duration) []sdkProvider {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var last []sdkProvider
+	for {
+		var res struct {
+			OK        bool          `json:"ok"`
+			Error     string        `json:"error"`
+			Providers []sdkProvider `json:"providers"`
+		}
+		if line := m.send(t, map[string]string{"cmd": "discover", "type": serviceType, "name": name}); json.Unmarshal(line, &res) != nil {
+			t.Fatalf("%s member: discover answered %q", m.name, line)
+		}
+		if !res.OK {
+			t.Fatalf("%s member: discover failed: %s", m.name, res.Error)
+		}
+		last = res.Providers
+		for _, p := range res.Providers {
+			if p.PeerID == wantPeer {
+				return res.Providers
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s member never discovered %s as a provider of %s://%s; last answer %+v", m.name, wantPeer, serviceType, name, last)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+func (m *sdkMember) tools(t *testing.T, addr, service string) []string {
+	t.Helper()
+	var res struct {
+		OK    bool     `json:"ok"`
+		Error string   `json:"error"`
+		Tools []string `json:"tools"`
+	}
+	if line := m.send(t, map[string]string{"cmd": "tools", "addr": addr, "service": service}); json.Unmarshal(line, &res) != nil {
+		t.Fatalf("%s member: tools answered %q", m.name, line)
+	}
+	if !res.OK {
+		t.Fatalf("%s member could not list tools of %q at %s: %s", m.name, service, addr, res.Error)
+	}
+	return res.Tools
+}
+
+// sdkCallResult answers a {"cmd":"call"} command.
+type sdkCallResult struct {
+	OK      bool     `json:"ok"`
+	Error   string   `json:"error"`
+	IsError bool     `json:"is_error"`
+	Text    []string `json:"text"`
+}
+
+func (m *sdkMember) callRaw(t *testing.T, addr, service, tool string, args map[string]any) sdkCallResult {
+	t.Helper()
+	if args == nil {
+		args = map[string]any{}
+	}
+	line, _ := json.Marshal(map[string]any{"cmd": "call", "addr": addr, "service": service, "tool": tool, "args": args})
+	if _, err := m.stdin.Write(append(line, '\n')); err != nil {
+		t.Fatalf("%s member: write command: %v", m.name, err)
+	}
+	var res sdkCallResult
+	if answer := m.readLine(t, 20*time.Second); json.Unmarshal(answer, &res) != nil {
+		t.Fatalf("%s member: call answered %q", m.name, answer)
+	}
+	return res
+}
+
+// call is callRaw that must reach the tool.
+func (m *sdkMember) call(t *testing.T, addr, service, tool string, args map[string]any) sdkCallResult {
+	t.Helper()
+	res := m.callRaw(t, addr, service, tool, args)
+	if !res.OK {
+		t.Fatalf("%s member could not call %s on %q at %s: %s", m.name, tool, service, addr, res.Error)
+	}
+	return res
 }
 
 func (m *sdkMember) quit(t *testing.T) {

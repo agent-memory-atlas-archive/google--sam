@@ -16,7 +16,9 @@ import type { Connection, Libp2p } from "@libp2p/interface";
 import { multiaddr, type Multiaddr } from "@multiformats/multiaddr";
 import { AUTH_HANDLER_OPTIONS, AUTH_PROTOCOL, authenticateWithPeer, authStreamHandler } from "./auth.ts";
 import { ROLE_ROUTER, requireRole, type VerifiedBiscuit } from "./biscuit.ts";
+import { serviceCID, type ServiceType } from "./discovery.ts";
 import { createMeshHost, listenThroughRelay, type MeshHostOptions } from "./host.ts";
+import { openMCPSession, type MCPSession, type MCPSessionOptions } from "./mcp.ts";
 import type { AgentMesh } from "./mesh.ts";
 
 export interface JoinOptions extends MeshHostOptions {
@@ -39,6 +41,24 @@ export interface AdmittedRouter {
   addr: Multiaddr;
   credential: VerifiedBiscuit;
 }
+
+/** A peer the DHT names as offering a service. */
+export interface DiscoveredProvider {
+  peerId: string;
+  /** Addresses the provider advertised; may be empty when the record carried none. */
+  addrs: string[];
+}
+
+/** A tool call's outcome, as MCP reports it. */
+export interface ToolCallResult {
+  isError: boolean;
+  /** Text content blocks, in order; other block types are left out. */
+  text: string[];
+  /** The raw MCP result. */
+  raw: unknown;
+}
+
+const DISCOVERY_TIMEOUT_MS = 5_000;
 
 const DEFAULT_REFRESH_LEAD_MS = 60 * 60 * 1000;
 const DEFAULT_REFRESH_RETRY_MS = 30 * 1000;
@@ -97,6 +117,78 @@ export class MeshSession {
   async authenticate(addr: string | Multiaddr, signal?: AbortSignal): Promise<VerifiedBiscuit> {
     const conn = await this.connect(addr, signal);
     return authenticateWithPeer(conn, this.mesh.authFrame(), this.mesh.credential.controlPlaneKeys);
+  }
+
+  /**
+   * Looks the DHT up for peers offering a service, by type and name, or by
+   * type alone when name is omitted. Bounded by the timeout; the DHT walk
+   * itself is what sam-node's discover does.
+   */
+  async discover(type: ServiceType, name?: string, options: { timeoutMs?: number; limit?: number } = {}): Promise<DiscoveredProvider[]> {
+    const cid = await serviceCID(type, name);
+    const signal = AbortSignal.timeout(options.timeoutMs ?? DISCOVERY_TIMEOUT_MS);
+    const found = new Map<string, DiscoveredProvider>();
+    try {
+      for await (const provider of this.node.contentRouting.findProviders(cid, { signal })) {
+        const peerId = provider.id.toString();
+        if (peerId === this.peerId) {
+          continue;
+        }
+        const entry = found.get(peerId) ?? { peerId, addrs: [] };
+        for (const ma of provider.multiaddrs) {
+          const text = ma.toString();
+          if (!entry.addrs.includes(text)) {
+            entry.addrs.push(text);
+          }
+        }
+        found.set(peerId, entry);
+        if (found.size >= (options.limit ?? 20)) {
+          break;
+        }
+      }
+    } catch (err) {
+      // The lookup ended on its deadline; what was found so far is the answer.
+      if (!(err instanceof Error && err.name === "TimeoutError") && !signal.aborted) {
+        throw err;
+      }
+    }
+    return [...found.values()];
+  }
+
+  /**
+   * Opens an MCP session with the provider at addr for targetService
+   * ("mcp://<name>", or "" for the provider's own catalog tools).
+   */
+  async openMCP(addr: string | Multiaddr, targetService: string, options: MCPSessionOptions = {}): Promise<MCPSession> {
+    const conn = await this.connect(addr, options.signal);
+    return openMCPSession(conn, this.mesh.authFrame(targetService, options.agent ?? ""), this.mesh.credential.controlPlaneKeys, options);
+  }
+
+  /** Lists the tools a provider serves for a service. */
+  async listTools(addr: string | Multiaddr, targetService: string, options: MCPSessionOptions = {}): Promise<{ name: string; description?: string }[]> {
+    const mcp = await this.openMCP(addr, targetService, options);
+    try {
+      const { tools } = await mcp.client.listTools();
+      return tools.map((t) => (t.description !== undefined ? { name: t.name, description: t.description } : { name: t.name }));
+    } finally {
+      await mcp.close();
+    }
+  }
+
+  /** Calls one tool on a provider's service. */
+  async callTool(addr: string | Multiaddr, targetService: string, tool: string, args: Record<string, unknown> = {}, options: MCPSessionOptions = {}): Promise<ToolCallResult> {
+    const mcp = await this.openMCP(addr, targetService, options);
+    try {
+      const result = await mcp.client.callTool({ name: tool, arguments: args });
+      const content = Array.isArray(result.content) ? (result.content as Array<{ type: string; text?: string }>) : [];
+      return {
+        isError: result.isError === true,
+        text: content.filter((c) => c.type === "text" && typeof c.text === "string").map((c) => c.text as string),
+        raw: result,
+      };
+    } finally {
+      await mcp.close();
+    }
   }
 
   /** Refreshes now and reschedules; exposed so a caller can force it. */

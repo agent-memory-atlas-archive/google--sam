@@ -29,7 +29,9 @@ from .controlplane import (
     verify_keys_response,
 )
 from .credential import MeshCredential, decode_auth_response, encode_auth_frame
+from .discovery import DHT_PROTOCOL, DiscoveredProvider, find_providers, parse_service_target, service_key
 from .identity import Identity, libp2p_public_key, peer_id_from_public_key, verify_ed25519
+from .mcp_client import LabelsNotSatisfiedError, ToolCallResult, open_mcp_session, require_labels
 from .mesh import AgentMesh
 from .relay import dial_through_relay, reserve_relay
 from .session import AdmittedRouter, MeshSession
@@ -44,16 +46,20 @@ __all__ = [
     "BiscuitVerificationError",
     "ControlPlaneClient",
     "ControlPlaneError",
+    "DHT_PROTOCOL",
+    "DiscoveredProvider",
     "Enrollment",
     "EnrollmentRejectedError",
     "Identity",
     "InsecureControlPlaneURLError",
+    "LabelsNotSatisfiedError",
     "MCP_PROTOCOL",
     "MeshCredential",
     "MeshSession",
     "ROLE_NODE",
     "ROLE_ROUTER",
     "RefreshResult",
+    "ToolCallResult",
     "VerifiedBiscuit",
     "auth_stream_handler",
     "authenticate_with_peer",
@@ -62,12 +68,17 @@ __all__ = [
     "encode_auth_frame",
     "enroll_challenge",
     "enroll_status_challenge",
+    "find_providers",
     "libp2p_public_key",
+    "open_mcp_session",
+    "parse_service_target",
     "peer_id_from_public_key",
     "refresh_challenge",
     "register_challenge",
+    "require_labels",
     "require_role",
     "reserve_relay",
+    "service_key",
     "validate_control_plane_url",
     "verify_ed25519",
     "verify_keys_response",

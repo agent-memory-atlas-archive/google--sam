@@ -3,9 +3,10 @@
 Native JavaScript SDK for joining a SAM agent mesh from inside the agent
 process. It replaces the `sam-node` sidecar for agents written for Node.js.
 
-Status: **milestone 2** (identity, enrollment, credential refresh, joining
-the mesh over libp2p with mutual authentication). Discovering and calling
-tools are the next milestones; see [../README.md](../README.md) for the plan.
+Status: **milestone 3** (identity, enrollment, credential refresh, joining
+the mesh over libp2p with mutual authentication, discovering services and
+calling their tools). Serving tools is the next milestone; see
+[../README.md](../README.md) for the plan.
 
 ## Install
 
@@ -14,9 +15,10 @@ cd sdk/js && npm ci && npm run build
 ```
 
 Requires Node.js 22.18 or later. Runtime dependencies are
-`@bufbuild/protobuf`, `@biscuit-auth/biscuit-wasm` and the js-libp2p
-packages (`libp2p`, `@libp2p/tcp`, `@libp2p/tls`, `@chainsafe/libp2p-yamux`,
-`@libp2p/circuit-relay-v2`, `@libp2p/identify`).
+`@bufbuild/protobuf`, `@biscuit-auth/biscuit-wasm`, `@modelcontextprotocol/sdk`
+and the js-libp2p packages (`libp2p`, `@libp2p/tcp`, `@libp2p/tls`,
+`@chainsafe/libp2p-yamux`, `@libp2p/circuit-relay-v2`, `@libp2p/identify`,
+`@libp2p/kad-dht`, `@libp2p/ping`).
 
 ## Use
 
@@ -38,6 +40,13 @@ console.log(session.relayAddresses.map(String));
 // Reach another member (directly or through a router) and verify it.
 const peer = await session.authenticate("/ip4/.../p2p/<router>/p2p-circuit/p2p/<peer>");
 console.log(peer.roles, peer.labels, peer.expiration);
+
+// Find a service in the mesh DHT and call one of its tools.
+const [provider] = await session.discover("mcp", "calc");
+const addr = `${session.routers[0].addr}/p2p-circuit/p2p/${provider.peerId}`;
+console.log(await session.listTools(addr, "mcp://calc"));
+const result = await session.callTool(addr, "mcp://calc", "add", { a: 1, b: 2 }, { requiredLabels: { region: "eu" } });
+console.log(result.text);
 await session.close();
 
 // Later, in a new process:
@@ -65,6 +74,8 @@ A plaintext `http://` control plane is accepted only on loopback. Pass
 - `src/host.ts`, `src/auth.ts`, `src/session.ts`: the libp2p host, the
   `/sam/auth/1.0.0` handshake on both sides, `MeshSession` with the relay
   reservation and the refresh loop.
+- `src/discovery.ts`, `src/mcp.ts`: service keys for the mesh DHT, and MCP
+  over `/sam/mcp/1.0.0` (a `Transport` for the official MCP client).
 - `src/gen/`: generated from `api/sam.proto` by `hack/gen-sdk-proto.sh`.
 
 ## Test

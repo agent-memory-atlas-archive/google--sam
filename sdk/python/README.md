@@ -4,9 +4,10 @@ Native Python SDK for joining a SAM agent mesh from inside the agent
 process. It replaces the `sam-node` sidecar for agents written in Python.
 Import it as `agent_mesh`.
 
-Status: **milestone 2** (identity, enrollment, credential refresh, joining
-the mesh over libp2p with mutual authentication). Discovering and calling
-tools are the next milestones; see [../README.md](../README.md) for the plan.
+Status: **milestone 3** (identity, enrollment, credential refresh, joining
+the mesh over libp2p with mutual authentication, discovering services and
+calling their tools). Serving tools is the next milestone; see
+[../README.md](../README.md) for the plan.
 
 ## Install
 
@@ -15,7 +16,9 @@ pip install -e 'sdk/python[test]'
 ```
 
 Runtime dependencies are `cryptography`, `protobuf`, `biscuit-python`,
-`libp2p` (py-libp2p 0.7, trio-based) and `multiaddr`. Python 3.11 or later.
+`libp2p` (py-libp2p 0.7, trio-based), `multiaddr` and `mcp` (2.x). Python
+3.11 or later. py-libp2p's `fastecdsa` builds from source against GMP
+(`libgmp-dev` on Debian).
 
 ## Use
 
@@ -39,6 +42,13 @@ async def main():
         # Reach another member (directly or through a router) and verify it.
         peer = await session.authenticate("/ip4/.../p2p/<router>/p2p-circuit/p2p/<peer>")
         print(peer.roles, peer.labels, peer.expiration)
+
+        # Find a service in the mesh DHT and call one of its tools.
+        provider = (await session.discover("mcp", "calc"))[0]
+        addr = f"{session.routers[0].addr}/p2p-circuit/p2p/{provider.peer_id}"
+        print(await session.list_tools(addr, "mcp://calc"))
+        result = await session.call_tool(addr, "mcp://calc", "add", {"a": 1, "b": 2}, required_labels={"region": "eu"})
+        print(result.text)
 
 
 trio.run(main)
@@ -72,6 +82,9 @@ A plaintext `http://` control plane is accepted only on loopback. Pass
   `agent_mesh.session`: the libp2p host, the `/sam/auth/1.0.0` handshake on
   both sides, the circuit relay v2 client (reservation, dial, accept) and
   `MeshSession` with the refresh loop.
+- `agent_mesh.discovery`, `agent_mesh.mcp_client`: the bounded
+  GET_PROVIDERS walk on the mesh DHT, and MCP over `/sam/mcp/1.0.0` for
+  `mcp.ClientSession`.
 - `agent_mesh._proto`: generated from `api/sam.proto` and
   `sdk/python/proto/circuit.proto` by `hack/gen-sdk-proto.sh`.
 

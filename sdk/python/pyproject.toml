@@ -10,9 +10,11 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = [
+    "anyio>=4",
     "biscuit-python>=0.4",
     "cryptography>=42",
     "libp2p>=0.7,<0.8",
+    "mcp>=2,<3",
     "multiaddr>=0.2",
     # py-libp2p requires protobuf<7; stay co-installable.
     "protobuf>=4.25,<7",
