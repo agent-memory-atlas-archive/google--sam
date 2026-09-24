@@ -28,6 +28,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func newTestPeerID(t *testing.T) peer.ID {
@@ -89,7 +90,7 @@ func TestRouterValidateMeshEvent(t *testing.T) {
 	from, target := newTestPeerID(t), newTestPeerID(t)
 
 	signed := func(key ed25519.PrivateKey, at time.Time) []byte {
-		event := &api.MeshEvent{Type: api.MeshEvent_BANNED, PeerId: target.String(), Timestamp: at.UnixMilli()}
+		event := &api.MeshEvent{Type: api.MeshEvent_BANNED, PeerId: target.String(), EventTime: timestamppb.New(at)}
 		unsigned, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
 		if err != nil {
 			t.Fatal(err)

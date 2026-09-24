@@ -1,0 +1,118 @@
+{
+  "_comment": "Biscuits minted with internal/identity.MintBootstrapBiscuitToken (biscuit-go v2). control_plane_key and trusted_keys are raw ed25519 public keys (hex); biscuit is standard base64. valid is what identity.VerifyBiscuitAndGetExpiry reports for peer_id under trusted_keys.",
+  "control_plane_key": "4fd099ccd47d7893dfe9ec24414ecb0d9b5420232aad30d91c465be33cbe65c4",
+  "node_token_labels": {
+    "region": "eu"
+  },
+  "vectors": [
+    {
+      "name": "node token verifies for its peer",
+      "biscuit": "EqUCCroBCgpleHBpcmF0aW9uCjQxMkQzS29vV0E0WG9wMUphVDNNSHh3WU1rQ2VwWXN2NGlQVm9wTVh3Q3o1aUhZZEJmZVNCCg5jbGllbnRfcGVlcl9pZAoGcmVnaW9uCgJldQoFbGFiZWwKDXNhbTpyb2xlOm5vZGUSABgDIg0KCwiACBIGIIDXjNIHIgkKBwgYEgMYgQgiCgoICIIIEgMYgQgiDwoNCIUIEgMYgwgSAxiECCIJCgcIBhIDGIYIEiQIABIgZEu7DUtv3qJ81Sm5wmg9qmruPkHiZjlqAx29OSagaZ8aQKnD453uvN8Ekk2X95Ar9zwYwFth8rQmOgjDlY/1wgmwYldny2ZcV5TvKXl3sHeVKwxGpuYI2MB/A5FY8dL1rQgiIgogCsZHENhe6A3gZkQSRFJry6nDss3zU7r7JqhbS60neUU=",
+      "peer_id": "12D3KooWA4Xop1JaT3MHxwYMkCepYsv4iPVopMXwCz5iHYdBfeSB",
+      "trusted_keys": [
+        "4fd099ccd47d7893dfe9ec24414ecb0d9b5420232aad30d91c465be33cbe65c4"
+      ],
+      "valid": true,
+      "expiration": 2051222400,
+      "roles": [
+        "sam:role:node"
+      ],
+      "has_router_role": false
+    },
+    {
+      "name": "node token verifies when the signer is one of several trusted keys",
+      "biscuit": "EqUCCroBCgpleHBpcmF0aW9uCjQxMkQzS29vV0E0WG9wMUphVDNNSHh3WU1rQ2VwWXN2NGlQVm9wTVh3Q3o1aUhZZEJmZVNCCg5jbGllbnRfcGVlcl9pZAoGcmVnaW9uCgJldQoFbGFiZWwKDXNhbTpyb2xlOm5vZGUSABgDIg0KCwiACBIGIIDXjNIHIgkKBwgYEgMYgQgiCgoICIIIEgMYgQgiDwoNCIUIEgMYgwgSAxiECCIJCgcIBhIDGIYIEiQIABIgZEu7DUtv3qJ81Sm5wmg9qmruPkHiZjlqAx29OSagaZ8aQKnD453uvN8Ekk2X95Ar9zwYwFth8rQmOgjDlY/1wgmwYldny2ZcV5TvKXl3sHeVKwxGpuYI2MB/A5FY8dL1rQgiIgogCsZHENhe6A3gZkQSRFJry6nDss3zU7r7JqhbS60neUU=",
+      "peer_id": "12D3KooWA4Xop1JaT3MHxwYMkCepYsv4iPVopMXwCz5iHYdBfeSB",
+      "trusted_keys": [
+        "74fca2a3b389fb1a64d9bf52cc0dd4c2964f3804c0cf7c755e8513c6db8198dc",
+        "4fd099ccd47d7893dfe9ec24414ecb0d9b5420232aad30d91c465be33cbe65c4"
+      ],
+      "valid": true,
+      "expiration": 2051222400,
+      "roles": [
+        "sam:role:node"
+      ],
+      "has_router_role": false
+    },
+    {
+      "name": "router token carries the router role",
+      "biscuit": "ErECCsYBCgpleHBpcmF0aW9uCjQxMkQzS29vV1A4aUtoRGYzaUNNbzJIM2J1dE5WZmRUVXRZd1lXWVE3NWpUR255blhQRk1wCg5jbGllbnRfcGVlcl9pZAoPc2FtOnJvbGU6cm91dGVyCgVyZWxheQoTdGFyZ2V0X3VucmVzdHJpY3RlZBIAGAMiDQoLCIAIEgYggNeM0gciCQoHCBgSAxiBCCIKCggIgggSAxiBCCIJCgcIBhIDGIMIIgkKBwgEEgMYhAgiBQoDCIUIEiQIABIgEan+x/Zyn3EyN9dkytqi0NYkhPjvxCpxC/2lBxjfDyoaQK7mjGDLy/CuVTs0l50ctE3aq1hZARdtLM2E9njdZMDhwr9zQNhmCoEtB86id6E/W8Ismu0t3bzKOgNaRNhVNgMiIgogcd8hyvwGyyLvkXsyI7Zz1ke65tknx89ZV22FuF7RBXM=",
+      "peer_id": "12D3KooWP8iKhDf3iCMo2H3butNVfdTUtYwYWYQ75jTGnynXPFMp",
+      "trusted_keys": [
+        "4fd099ccd47d7893dfe9ec24414ecb0d9b5420232aad30d91c465be33cbe65c4"
+      ],
+      "valid": true,
+      "expiration": 2051222400,
+      "roles": [
+        "sam:role:router"
+      ],
+      "has_router_role": true
+    },
+    {
+      "name": "token bound to another peer is refused",
+      "biscuit": "EqUCCroBCgpleHBpcmF0aW9uCjQxMkQzS29vV0E0WG9wMUphVDNNSHh3WU1rQ2VwWXN2NGlQVm9wTVh3Q3o1aUhZZEJmZVNCCg5jbGllbnRfcGVlcl9pZAoGcmVnaW9uCgJldQoFbGFiZWwKDXNhbTpyb2xlOm5vZGUSABgDIg0KCwiACBIGIIDXjNIHIgkKBwgYEgMYgQgiCgoICIIIEgMYgQgiDwoNCIUIEgMYgwgSAxiECCIJCgcIBhIDGIYIEiQIABIgZEu7DUtv3qJ81Sm5wmg9qmruPkHiZjlqAx29OSagaZ8aQKnD453uvN8Ekk2X95Ar9zwYwFth8rQmOgjDlY/1wgmwYldny2ZcV5TvKXl3sHeVKwxGpuYI2MB/A5FY8dL1rQgiIgogCsZHENhe6A3gZkQSRFJry6nDss3zU7r7JqhbS60neUU=",
+      "peer_id": "12D3KooWP8iKhDf3iCMo2H3butNVfdTUtYwYWYQ75jTGnynXPFMp",
+      "trusted_keys": [
+        "4fd099ccd47d7893dfe9ec24414ecb0d9b5420232aad30d91c465be33cbe65c4"
+      ],
+      "valid": false,
+      "reason": "not bound to peer",
+      "has_router_role": false
+    },
+    {
+      "name": "expired token is refused",
+      "biscuit": "EoECCpYBCgpleHBpcmF0aW9uCjQxMkQzS29vV0E0WG9wMUphVDNNSHh3WU1rQ2VwWXN2NGlQVm9wTVh3Q3o1aUhZZEJmZVNCCg5jbGllbnRfcGVlcl9pZAoNc2FtOnJvbGU6bm9kZRIAGAMiDQoLCIAIEgYggMKv8AUiCQoHCBgSAxiBCCIKCggIgggSAxiBCCIJCgcIBhIDGIMIEiQIABIgoPZcftk3ja08cojPf2GL1mxS9Hp4kiWx+SW++f19eZkaQAFJaKnnSD5+ApcDFR5MXRYUvDuw6+yXuMvtC06h0b6AA5DkuXNMVE+Uta0p7FrMdpfdUylSMlT7Vb0ASR4gSwsiIgogNYDc5YuH5ZouZ2DG73+lwyGg731neVEnY3dxTsTe0yA=",
+      "peer_id": "12D3KooWA4Xop1JaT3MHxwYMkCepYsv4iPVopMXwCz5iHYdBfeSB",
+      "trusted_keys": [
+        "4fd099ccd47d7893dfe9ec24414ecb0d9b5420232aad30d91c465be33cbe65c4"
+      ],
+      "valid": false,
+      "reason": "expired",
+      "has_router_role": false
+    },
+    {
+      "name": "token signed by an untrusted key is refused",
+      "biscuit": "EoECCpYBCgpleHBpcmF0aW9uCjQxMkQzS29vV0E0WG9wMUphVDNNSHh3WU1rQ2VwWXN2NGlQVm9wTVh3Q3o1aUhZZEJmZVNCCg5jbGllbnRfcGVlcl9pZAoNc2FtOnJvbGU6bm9kZRIAGAMiDQoLCIAIEgYggNeM0gciCQoHCBgSAxiBCCIKCggIgggSAxiBCCIJCgcIBhIDGIMIEiQIABIgLH6K1R5zUdIwvzO0AubjijjCp8QbSfSdnG6yJEg4BdUaQB3M924M3uZ3kN7G/UL3TdYV/ha+8diKnoE3Jy/YHnRjAEWYjn3/vo122CoimB5Nn9IijKPZoTAqdDVofRL24ggiIgogicr29FanYgaGRDcKr05/9OTr20Jciz5xSWJkPqlKpKs=",
+      "peer_id": "12D3KooWA4Xop1JaT3MHxwYMkCepYsv4iPVopMXwCz5iHYdBfeSB",
+      "trusted_keys": [
+        "4fd099ccd47d7893dfe9ec24414ecb0d9b5420232aad30d91c465be33cbe65c4"
+      ],
+      "valid": false,
+      "reason": "signature",
+      "has_router_role": false
+    },
+    {
+      "name": "token with an appended block is refused even for the bound peer",
+      "biscuit": "EqUCCroBCgpleHBpcmF0aW9uCjQxMkQzS29vV0E0WG9wMUphVDNNSHh3WU1rQ2VwWXN2NGlQVm9wTVh3Q3o1aUhZZEJmZVNCCg5jbGllbnRfcGVlcl9pZAoGcmVnaW9uCgJldQoFbGFiZWwKDXNhbTpyb2xlOm5vZGUSABgDIg0KCwiACBIGIIDXjNIHIgkKBwgYEgMYgQgiCgoICIIIEgMYgQgiDwoNCIUIEgMYgwgSAxiECCIJCgcIBhIDGIYIEiQIABIgZEu7DUtv3qJ81Sm5wmg9qmruPkHiZjlqAx29OSagaZ8aQKnD453uvN8Ekk2X95Ar9zwYwFth8rQmOgjDlY/1wgmwYldny2ZcV5TvKXl3sHeVKwxGpuYI2MB/A5FY8dL1rQgarwEKRQo0MTJEM0tvb1dQOGlLaERmM2lDTW8ySDNidXROVmZkVFV0WXdZV1lRNzVqVEdueW5YUEZNcBIAGAMiCQoHCBgSAxiHCBIkCAASIG3ccXHqENKuo3uJxviytjqMwcKepU0bgwdB3bH3onePGkDMkz29kwPRfdreIjjTfhNA7W+6O5xHSGZoLqv5vzsAiR0p/kdGkcZcFTGXWE7hVbtXJnqpiJG/2vpIv1kTUMsIIiIKIL2l0GXG7A3dPufrA7Itl2K0NgSz3D57Zf0FFUNiEqgd",
+      "peer_id": "12D3KooWA4Xop1JaT3MHxwYMkCepYsv4iPVopMXwCz5iHYdBfeSB",
+      "trusted_keys": [
+        "4fd099ccd47d7893dfe9ec24414ecb0d9b5420232aad30d91c465be33cbe65c4"
+      ],
+      "valid": false,
+      "reason": "appended block",
+      "has_router_role": false
+    },
+    {
+      "name": "appended node fact does not rebind the token",
+      "biscuit": "EqUCCroBCgpleHBpcmF0aW9uCjQxMkQzS29vV0E0WG9wMUphVDNNSHh3WU1rQ2VwWXN2NGlQVm9wTVh3Q3o1aUhZZEJmZVNCCg5jbGllbnRfcGVlcl9pZAoGcmVnaW9uCgJldQoFbGFiZWwKDXNhbTpyb2xlOm5vZGUSABgDIg0KCwiACBIGIIDXjNIHIgkKBwgYEgMYgQgiCgoICIIIEgMYgQgiDwoNCIUIEgMYgwgSAxiECCIJCgcIBhIDGIYIEiQIABIgZEu7DUtv3qJ81Sm5wmg9qmruPkHiZjlqAx29OSagaZ8aQKnD453uvN8Ekk2X95Ar9zwYwFth8rQmOgjDlY/1wgmwYldny2ZcV5TvKXl3sHeVKwxGpuYI2MB/A5FY8dL1rQgarwEKRQo0MTJEM0tvb1dQOGlLaERmM2lDTW8ySDNidXROVmZkVFV0WXdZV1lRNzVqVEdueW5YUEZNcBIAGAMiCQoHCBgSAxiHCBIkCAASIG3ccXHqENKuo3uJxviytjqMwcKepU0bgwdB3bH3onePGkDMkz29kwPRfdreIjjTfhNA7W+6O5xHSGZoLqv5vzsAiR0p/kdGkcZcFTGXWE7hVbtXJnqpiJG/2vpIv1kTUMsIIiIKIL2l0GXG7A3dPufrA7Itl2K0NgSz3D57Zf0FFUNiEqgd",
+      "peer_id": "12D3KooWP8iKhDf3iCMo2H3butNVfdTUtYwYWYQ75jTGnynXPFMp",
+      "trusted_keys": [
+        "4fd099ccd47d7893dfe9ec24414ecb0d9b5420232aad30d91c465be33cbe65c4"
+      ],
+      "valid": false,
+      "reason": "appended block",
+      "has_router_role": false
+    },
+    {
+      "name": "garbage is refused",
+      "biscuit": "bm90IGEgYmlzY3VpdA==",
+      "peer_id": "12D3KooWA4Xop1JaT3MHxwYMkCepYsv4iPVopMXwCz5iHYdBfeSB",
+      "trusted_keys": [
+        "4fd099ccd47d7893dfe9ec24414ecb0d9b5420232aad30d91c465be33cbe65c4"
+      ],
+      "valid": false,
+      "reason": "malformed",
+      "has_router_role": false
+    }
+  ]
+}

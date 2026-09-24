@@ -120,7 +120,7 @@ func (d *Discovery) observe(msg *pubsub.Message) {
 		logger.Warnf("[Discovery] dropping announce with peer_id %q not matching signer %s", ann.GetPeerId(), msg.GetFrom())
 		return
 	}
-	ts := time.Unix(ann.GetTimestamp(), 0)
+	ts := ann.GetAnnounceTime().AsTime()
 	if age := time.Since(ts); age > maxAnnounceSkew || age < -maxAnnounceSkew {
 		logger.Debugf("[Discovery] dropping stale/future announce from %s (age %v)", msg.GetFrom(), time.Since(ts))
 		return

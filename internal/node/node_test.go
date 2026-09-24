@@ -39,6 +39,7 @@ import (
 	"github.com/libp2p/go-msgio"
 	"github.com/multiformats/go-multiaddr"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestAnnounceFilter(t *testing.T) {
@@ -134,7 +135,7 @@ func TestHandleBannedEvent(t *testing.T) {
 		node.handleBannedEvent(&api.MeshEvent{
 			Type:      api.MeshEvent_BANNED,
 			PeerId:    spelling,
-			Timestamp: time.Now().UnixMilli(),
+			EventTime: timestamppb.Now(),
 		})
 
 		if !node.revokedPeers.Contains(banned.String()) {
@@ -172,7 +173,7 @@ func TestBannedPeerCanonicalisation(t *testing.T) {
 	node.handleBannedEvent(&api.MeshEvent{
 		Type:      api.MeshEvent_BANNED,
 		PeerId:    cidv1ID,
-		Timestamp: ts,
+		EventTime: timestamppb.New(time.UnixMilli(ts)),
 	})
 
 	if !node.revokedPeers.Contains(canonicalID) {
@@ -194,7 +195,7 @@ func TestHandleKeyRotationEvent(t *testing.T) {
 	event := &api.MeshEvent{
 		Type:         api.MeshEvent_KEY_ROTATION,
 		NewPublicKey: pub,
-		Timestamp:    time.Now().UnixMilli(),
+		EventTime:    timestamppb.Now(),
 	}
 
 	node.handleKeyRotationEvent(event)
@@ -224,13 +225,13 @@ func TestKeyRotationEventSurvivesRestart(t *testing.T) {
 	node.handleKeyRotationEvent(&api.MeshEvent{
 		Type:         api.MeshEvent_KEY_ROTATION,
 		NewPublicKey: rotatedKey,
-		Timestamp:    time.Now().UnixMilli(),
+		EventTime:    timestamppb.Now(),
 	})
 	// Duplicate event must not grow the persisted set
 	node.handleKeyRotationEvent(&api.MeshEvent{
 		Type:         api.MeshEvent_KEY_ROTATION,
 		NewPublicKey: rotatedKey,
-		Timestamp:    time.Now().UnixMilli(),
+		EventTime:    timestamppb.Now(),
 	})
 
 	// "Restart": a fresh node built from the same store must trust the rotated key

@@ -124,8 +124,8 @@ func TestIdentityEvidenceReturnsVerifiableClosedResponse(t *testing.T) {
 	if response.PeerId != node.Host.ID().String() || len(response.Biscuit) == 0 {
 		t.Fatalf("unexpected identity response: peer=%q biscuit=%d", response.PeerId, len(response.Biscuit))
 	}
-	if response.BiscuitExpiresAt != expiresAt.Unix() || len(response.TrustedControlPlaneKeys) != 1 {
-		t.Fatalf("unexpected expiry or key set: expiry=%d keys=%d", response.BiscuitExpiresAt, len(response.TrustedControlPlaneKeys))
+	if response.GetBiscuitExpireTime().AsTime().Unix() != expiresAt.Unix() || len(response.TrustedControlPlaneKeys) != 1 {
+		t.Fatalf("unexpected expiry or key set: expiry=%v keys=%d", response.GetBiscuitExpireTime().AsTime(), len(response.TrustedControlPlaneKeys))
 	}
 	parsedKey, err := x509.ParsePKIXPublicKey(response.TrustedControlPlaneKeys[0])
 	if err != nil {
@@ -135,8 +135,8 @@ func TestIdentityEvidenceReturnsVerifiableClosedResponse(t *testing.T) {
 	if !ok || !publicKey.Equal(node.trustedKeys[0].Key) {
 		t.Fatalf("trusted control-plane key is not the enrolled key")
 	}
-	if response.CheckedAt <= 0 || response.CheckedAt > response.BiscuitExpiresAt {
-		t.Fatalf("invalid checked/expiry timestamps: checked=%d expiry=%d", response.CheckedAt, response.BiscuitExpiresAt)
+	if response.CheckTime == nil || response.CheckTime.AsTime().After(response.GetBiscuitExpireTime().AsTime()) {
+		t.Fatalf("invalid check/expiry times: check=%v expiry=%v", response.GetCheckTime().AsTime(), response.GetBiscuitExpireTime().AsTime())
 	}
 }
 
@@ -173,8 +173,8 @@ func TestBuildPeerEvidenceBindsRequestedConnectionAndBiscuitPeers(t *testing.T) 
 	if response.Labels["region"] != "us-east-1" || len(response.RevocationIds) == 0 {
 		t.Fatalf("missing attestation or revocation evidence: %+v", response)
 	}
-	if response.Expiration != expiresAt.Unix() || response.CheckedAt <= 0 || response.CheckedAt > response.Expiration {
-		t.Fatalf("invalid checked/expiry timestamps: checked=%d expiry=%d", response.CheckedAt, response.Expiration)
+	if response.GetExpireTime().AsTime().Unix() != expiresAt.Unix() || response.CheckTime == nil || response.CheckTime.AsTime().After(response.GetExpireTime().AsTime()) {
+		t.Fatalf("invalid check/expiry times: check=%v expiry=%v", response.GetCheckTime().AsTime(), response.GetExpireTime().AsTime())
 	}
 	parsedKey, err := x509.ParsePKIXPublicKey(response.VerifyingKey)
 	if err != nil {

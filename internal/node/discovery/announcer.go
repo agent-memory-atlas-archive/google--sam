@@ -24,6 +24,7 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Discovery is the node-facing handle: it announces local services
@@ -135,7 +136,7 @@ func (d *Discovery) announceOnce(ctx context.Context, anns []Announcement) {
 			Labels:         ann.Labels,
 			ActiveRequests: ann.Load.ActiveRequests,
 			LatencyEwmaMs:  ann.Load.LatencyEWMAMs,
-			Timestamp:      time.Now().Unix(),
+			AnnounceTime:   timestamppb.Now(),
 		}
 		if err := api.ValidateServiceAnnounce(msg); err != nil {
 			logger.Warnf("[Discovery] skipping invalid announcement for %q: %v", ann.Name, err)

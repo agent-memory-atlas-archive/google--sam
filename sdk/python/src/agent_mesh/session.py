@@ -1,0 +1,538 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import annotations
+
+import logging
+import random
+import time
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, AsyncIterator, Mapping, Optional, Sequence, Union
+
+import multiaddr
+import trio
+from libp2p.abc import IHost
+from libp2p.custom_types import TProtocol
+from libp2p.peer.id import ID
+from libp2p.peer.peerinfo import PeerInfo, info_from_p2p_addr
+from libp2p.pubsub.gossipsub import PROTOCOL_ID as GOSSIPSUB_V10
+from libp2p.pubsub.gossipsub import PROTOCOL_ID_V11 as GOSSIPSUB_V11
+from libp2p.pubsub.gossipsub import PROTOCOL_ID_V12 as GOSSIPSUB_V12
+from libp2p.pubsub.gossipsub import GossipSub
+from libp2p.pubsub.pubsub import Pubsub
+from libp2p.tools.anyio_service import background_trio_service
+from mcp import ClientSession
+
+from ._proto import circuit_pb2 as circuit
+from ._proto import sam_pb2 as pb
+from .auth import AUTH_PROTOCOL, MCP_PROTOCOL, auth_stream_handler, authenticate_with_peer
+from .authorizer import ProviderAuthorizerOptions
+from .biscuit import ROLE_ROUTER, VerifiedBiscuit, require_role
+from .discovery import DiscoveredProvider, ServiceType, find_providers, parse_service_target, provide, service_key
+from .host import create_mesh_host
+from .mcp_client import ToolCallResult, ToolInfo, open_mcp_session, tool_call_result
+from .relay import STOP_PROTOCOL, dial_through_relay, reserve_relay, split_circuit_address, stop_stream_handler
+from .serve import (
+    HTTP_PROTOCOL,
+    HTTPResponse,
+    ProviderOptions,
+    ServiceRegistry,
+    ServiceSpec,
+    http_ingress_handler,
+    http_request_over_stream,
+    mcp_stream_handler,
+)
+from .sync import GOSSIP_EVENTS_TOPIC, BanSet, verify_mesh_event
+
+if TYPE_CHECKING:
+    from .mesh import AgentMesh, ControlPlaneSync
+
+logger = logging.getLogger("agent_mesh")
+
+DEFAULT_REFRESH_LEAD = 60 * 60.0
+DEFAULT_REFRESH_RETRY = 30.0
+MIN_REFRESH_DELAY = 2.0
+# sam-node's --control-plane-sync-interval default.
+DEFAULT_POLICY_SYNC = 15 * 60.0
+# How often provider records are refreshed; go-libp2p-kad-dht expires them after 48h.
+DEFAULT_PROVIDE_INTERVAL = 10 * 60.0
+# sam-node's --control-plane-sync-interval default, and its 2s first pull.
+DEFAULT_CONTROL_PLANE_SYNC = 15 * 60.0
+FIRST_CONTROL_PLANE_SYNC = 2.0
+DEFAULT_CONTROL_PLANE_SYNC_JITTER = 2.0
+
+# How a caller names the peer it wants to reach: a provider `discover` returned,
+# a peer id, or a multiaddr. For a provider or a peer id the SDK dials the
+# addresses the peer advertised and then the relayed path through every router
+# that admitted this member, so the caller never assembles a `/p2p-circuit`
+# address. A multiaddr is dialed as given.
+Peer = Union[DiscoveredProvider, str, multiaddr.Multiaddr]
+
+
+class _MeshsubNoise(logging.Filter):
+    """py-libp2p's pubsub opens a meshsub stream to every new peer and the host
+    logs an error for each one that does not answer. Peers that leave during
+    that exchange and members without pubsub are ordinary on the mesh."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        return not ("Failed to open stream" in message and "/meshsub/" in message)
+
+
+_MESHSUB_NOISE = _MeshsubNoise()
+
+
+@dataclass(frozen=True)
+class AdmittedRouter:
+    peer_id: str
+    addr: multiaddr.Multiaddr
+    credential: VerifiedBiscuit
+    reservation: circuit.Reservation | None = None
+
+
+@dataclass
+class MeshSession:
+    """A member that is on the mesh: a libp2p host authenticated with at least
+    one router, answering the auth handshake for peers that dial it, and
+    keeping its credential fresh for as long as the `join` block is open."""
+
+    mesh: "AgentMesh"
+    host: IHost
+    routers: list[AdmittedRouter]
+    # Peers that passed the inbound auth handshake, with their credential's expiration.
+    authenticated_peers: dict[str, datetime] = field(default_factory=dict)
+    # Peers the control plane has banned; connections to and from them are refused.
+    banned: BanSet = field(default_factory=BanSet)
+    # The services this member publishes.
+    services: ServiceRegistry = field(default_factory=ServiceRegistry)
+    policy_sync_interval: float = DEFAULT_POLICY_SYNC
+    provide_interval: float = DEFAULT_PROVIDE_INTERVAL
+    control_plane_sync_interval: float = DEFAULT_CONTROL_PLANE_SYNC
+    control_plane_sync_jitter: float = DEFAULT_CONTROL_PLANE_SYNC_JITTER
+    _nursery: Optional[trio.Nursery] = field(default=None, repr=False)
+    _policy_rules: Optional[list[str]] = field(default=None, repr=False)
+    _serving: bool = field(default=False, repr=False)
+    _sync_lock: trio.Lock = field(default_factory=trio.Lock, repr=False)
+    _sync_trigger: trio.Event = field(default_factory=trio.Event, repr=False)
+
+    @property
+    def peer_id(self) -> str:
+        return str(self.host.get_id())
+
+    @property
+    def relay_addresses(self) -> list[str]:
+        """The `.../p2p-circuit/p2p/<self>` addresses reserved on routers."""
+        out = []
+        for r in self.routers:
+            if r.reservation is None:
+                continue
+            # A relay lists the addresses it wants advertised; go-libp2p keeps
+            # private ones out, so a router on loopback lists none and the
+            # address we reached it on is the one that works.
+            relay_addrs = [multiaddr.Multiaddr(raw) for raw in r.reservation.addrs] or [r.addr]
+            for ma in relay_addrs:
+                text = str(ma)
+                if f"/p2p/{r.peer_id}" not in text:
+                    text = f"{text}/p2p/{r.peer_id}"
+                out.append(f"{text}/p2p-circuit/p2p/{self.peer_id}")
+        return out
+
+    async def connect(self, peer: Peer) -> ID:
+        """Connects to a peer, see `Peer`, and returns its peer ID. A banned
+        peer is refused."""
+        if isinstance(peer, multiaddr.Multiaddr) or (isinstance(peer, str) and peer.startswith("/")):
+            return await self._connect_addr(multiaddr.Multiaddr(str(peer)))
+        if isinstance(peer, str):
+            target, advertised = ID.from_base58(peer), []
+        else:
+            target, advertised = ID.from_base58(peer.peer_id), [multiaddr.Multiaddr(a) for a in peer.addrs]
+        self._refuse_banned(target)
+        if target in self.host.get_connected_peers():
+            return target
+        failures: list[str] = []
+        suffix = f"/p2p/{target}"
+        direct = [multiaddr.Multiaddr(str(a).removesuffix(suffix)) for a in advertised if "/p2p-circuit" not in str(a)]
+        if direct:
+            try:
+                await self.host.connect(PeerInfo(target, direct))
+                return target
+            except Exception as err:  # noqa: BLE001 - the relayed path is tried next
+                failures.append(f"direct {[str(a) for a in direct]}: {err}")
+        for r in self.routers:
+            try:
+                await self._connect_addr(multiaddr.Multiaddr(f"{r.addr}/p2p-circuit{suffix}"))
+                return target
+            except Exception as err:  # noqa: BLE001 - the next router is tried
+                failures.append(f"via router {r.peer_id}: {err}")
+        raise ConnectionError(f"cannot reach {target}:\n  " + "\n  ".join(failures))
+
+    async def _connect_addr(self, ma: multiaddr.Multiaddr) -> ID:
+        """Dials one multiaddr, through a relay when it says `/p2p-circuit`."""
+        if "/p2p-circuit" in str(ma):
+            relay_addr, target = split_circuit_address(ma)
+            self._refuse_banned(target)
+            relay = info_from_p2p_addr(relay_addr)
+            if relay.peer_id not in self.host.get_connected_peers():
+                await self.host.connect(relay)
+            if target not in self.host.get_connected_peers():
+                await dial_through_relay(self.host, relay.peer_id, target)
+            return target
+        info = info_from_p2p_addr(ma)
+        self._refuse_banned(info.peer_id)
+        await self.host.connect(info)
+        return info.peer_id
+
+    def _refuse_banned(self, peer_id: ID) -> None:
+        if str(peer_id) in self.banned:
+            raise PermissionError(f"peer {peer_id} is banned by the control plane")
+
+    async def authenticate(self, peer: Peer) -> VerifiedBiscuit:
+        """Connects to a peer and runs the mutual auth handshake, returning the
+        peer's verified credential."""
+        peer_id = await self.connect(peer)
+        return await authenticate_with_peer(self.host, peer_id, self.mesh.auth_frame(), self.mesh.credential.control_plane_keys)
+
+    async def discover(self, service: str, name: str | None = None, limit: int = 20) -> list[DiscoveredProvider]:
+        """Looks the DHT up for peers offering a service: "mcp://calc", the same
+        string call_tool and request take, or a type alone ("mcp") for every
+        service of that type, or (type, name). The routers we are connected to
+        seed the walk."""
+        service_type, service_name = parse_service_target(service) if "://" in service else (service, name)
+        if service_type not in ("mcp", "inference", "a2a"):
+            raise ValueError(f"service type must be mcp, inference or a2a, got {service_type!r}")
+        seeds = [ID.from_base58(r.peer_id) for r in self.routers]
+        return await find_providers(self.host, service_key(service_type, service_name), seeds, limit)
+
+    def open_mcp(
+        self,
+        peer: Peer,
+        target_service: str,
+        *,
+        required_labels: Optional[Mapping[str, str]] = None,
+        agent: str = "",
+    ):  # type: ignore[no-untyped-def]
+        """Opens an MCP session with a provider for target_service
+        ("mcp://<name>", or "" for the provider's own catalog tools):
+
+            async with session.open_mcp(provider, "mcp://calc") as (mcp, verified): ...
+        """
+
+        @asynccontextmanager
+        async def opened() -> AsyncIterator[tuple[ClientSession, VerifiedBiscuit]]:
+            peer_id = await self.connect(peer)
+            frame = self.mesh.auth_frame(target_service, agent)
+            async with open_mcp_session(self.host, peer_id, frame, self.mesh.credential.control_plane_keys, required_labels=required_labels) as opened_session:
+                yield opened_session
+
+        return opened()
+
+    async def list_tools(self, peer: Peer, target_service: str, **options: Any) -> list[ToolInfo]:
+        """Lists the tools a provider serves for a service."""
+        async with self.open_mcp(peer, target_service, **options) as (mcp, _):
+            return [ToolInfo(name=t.name, description=t.description) for t in (await mcp.list_tools()).tools]
+
+    async def call_tool(
+        self, peer: Peer, target_service: str, tool: str, args: Optional[Mapping[str, Any]] = None, **options: Any
+    ) -> ToolCallResult:
+        """Calls one tool on a provider's service."""
+        async with self.open_mcp(peer, target_service, **options) as (mcp, _):
+            result = await mcp.call_tool(tool, dict(args or {}))
+            if not hasattr(result, "content"):
+                raise RuntimeError(f"tool {tool} answered with {type(result).__name__}, not a result")
+            return tool_call_result(result)  # type: ignore[arg-type]
+
+    @property
+    def policy_rules(self) -> list[str]:
+        """The mesh policy rules this member evaluates for callers, as the
+        control plane rendered them (PolicyConfigGetResponse.datalog_rules).
+        Empty until the first serve() or sync_policy()."""
+        return list(self._policy_rules or [])
+
+    async def sync_policy(self) -> None:
+        """Re-reads the mesh policy from the control plane."""
+        self._policy_rules = await trio.to_thread.run_sync(self.mesh.control_plane.policy_rules, self.mesh.credential.biscuit)
+
+    async def sync(self) -> "ControlPlaneSync":
+        """Pulls keys, bans and router addresses from the control plane now, and
+        the mesh policy when serving, then applies them: a newly banned peer is
+        disconnected and dropped from the admitted set. Concurrent calls run
+        one after the other. Errors of individual parts are in the result."""
+        async with self._sync_lock:
+            result = await trio.to_thread.run_sync(self.mesh.sync_control_plane)
+            if result.banned_peer_ids is not None:
+                newly_banned, _ = self.banned.reconcile(result.banned_peer_ids, result.fetched_at)
+                for peer_id in newly_banned:
+                    await self._evict(peer_id)
+            if self._serving:
+                try:
+                    await self.sync_policy()
+                except Exception as err:  # noqa: BLE001 - the last good policy stays in force
+                    result.errors.append(f"policy: {err}")
+            return result
+
+    def trigger_sync(self) -> None:
+        """Asks for a pull soon, after a random delay so a fleet told at once does not pull at once."""
+        self._sync_trigger.set()
+
+    async def _evict(self, peer_id: str) -> None:
+        """Drops a banned peer: its admission and its connections."""
+        self.authenticated_peers.pop(peer_id, None)
+        try:
+            await self.host.disconnect(ID.from_base58(peer_id))
+        except Exception:  # noqa: BLE001 - not connected, or already gone
+            pass
+
+    async def _sync_loop(self) -> None:
+        """Pulls once shortly after join, then every interval and whenever
+        triggered; each periodic wait is stretched by up to a tenth and each
+        trigger delayed by up to the jitter, as sam-node's loop does."""
+        delay = min(FIRST_CONTROL_PLANE_SYNC, self.control_plane_sync_interval) if self.control_plane_sync_interval > 0 else None
+        while True:
+            triggered = False
+            with trio.move_on_after(delay) if delay is not None else trio.CancelScope():
+                await self._sync_trigger.wait()
+                triggered = True
+            self._sync_trigger = trio.Event()
+            if triggered and self.control_plane_sync_jitter > 0:
+                await trio.sleep(random.uniform(0, self.control_plane_sync_jitter))  # noqa: S311 - jitter, not security
+            try:
+                result = await self.sync()
+                if result.errors:
+                    logger.warning("control plane sync: %s", "; ".join(result.errors))
+            except Exception as err:  # noqa: BLE001
+                logger.warning("control plane sync failed: %s", err)
+            if self.control_plane_sync_interval > 0:
+                delay = self.control_plane_sync_interval * random.uniform(1.0, 1.1)  # noqa: S311
+
+    async def _events_loop(self, pubsub: Pubsub) -> None:
+        """The control plane's gossip events, relayed by the routers. The topic
+        validator drops anything not signed by a trusted control plane key, so
+        a peer whose libp2p key signed the envelope still cannot get an
+        unsigned event through."""
+
+        def validate(_peer: ID, message) -> bool:  # type: ignore[no-untyped-def]
+            return verify_mesh_event(bytes(message.data), self.mesh.credential.control_plane_keys) is not None
+
+        pubsub.set_topic_validator(GOSSIP_EVENTS_TOPIC, validate, False)
+        subscription = await pubsub.subscribe(GOSSIP_EVENTS_TOPIC)
+        while True:
+            message = await subscription.get()
+            event = verify_mesh_event(bytes(message.data), self.mesh.credential.control_plane_keys)
+            if event is None:
+                continue
+            if event.type == pb.MeshEvent.BANNED:
+                # Not persisted: a restarted member picks the ban back up from /info.
+                if self.banned.add(event.peer_id, event.event_time.ToMilliseconds()):
+                    logger.info("peer %s banned by the control plane", event.peer_id)
+                    await self._evict(event.peer_id)
+            elif event.type == pb.MeshEvent.KEY_ROTATION:
+                if len(event.new_public_key) == 32:
+                    self.mesh.add_trusted_key(bytes(event.new_public_key))
+                self.trigger_sync()
+            elif event.type == pb.MeshEvent.POLICY_UPDATE:
+                self.trigger_sync()
+
+    async def request(
+        self,
+        peer: Peer,
+        target_service: str,
+        path: str,
+        *,
+        method: str = "GET",
+        headers: Optional[Mapping[str, str]] = None,
+        body: bytes | str | None = None,
+        agent: str = "",
+    ) -> HTTPResponse:
+        """Calls an inference or A2A service on a provider over /libp2p-http,
+        the way sam-node's egress proxy does for /sam/<peer>/<type>/<name>/<path>."""
+        peer_id = await self.connect(peer)
+        return await http_request_over_stream(
+            self.host, peer_id, self.mesh.credential.biscuit, target_service, path, method=method, headers=headers, body=body, agent=agent
+        )
+
+    async def serve(self, spec: ServiceSpec) -> None:
+        """Publishes a service on the mesh: registers it, announces it in the
+        DHT and reports it to the control plane's catalog. The first call
+        fetches the mesh policy and starts answering /sam/mcp/1.0.0 and
+        /libp2p-http; a policy that cannot be read fails the call, since a
+        provider without it could only authorize what callers carry in their
+        own tokens."""
+        if not self._serving:
+            await self.sync_policy()
+            options = ProviderOptions(
+                authorizer=ProviderAuthorizerOptions(
+                    trusted_keys=lambda: self.mesh.credential.control_plane_keys,
+                    own_biscuit=lambda: self.mesh.credential.biscuit,
+                    policy_rules=lambda: self._policy_rules or [],
+                ),
+                own_biscuit=lambda: self.mesh.credential.biscuit,
+                on_authorized=lambda peer, verified, _target: self.authenticated_peers.__setitem__(peer, verified.expiration),
+                is_banned=lambda peer: peer in self.banned,
+            )
+            self.host.set_stream_handler(MCP_PROTOCOL, mcp_stream_handler(self.services, options, str(MCP_PROTOCOL)))
+            self.host.set_stream_handler(HTTP_PROTOCOL, http_ingress_handler(self.services, options))
+            if self._nursery is not None:
+                self._nursery.start_soon(self._policy_loop)
+                self._nursery.start_soon(self._provide_loop)
+            self._serving = True
+        self.services.add(spec)
+        await self._provide(spec.type, spec.name)
+        try:
+            await self.report_catalog()
+        except Exception as err:  # noqa: BLE001 - the catalog is display only
+            logger.warning("catalog report failed: %s", err)
+
+    async def provide_all(self) -> None:
+        """Announces every registered service in the DHT again."""
+        for service_type, name, _ in self.services.list():
+            await self._provide(service_type, name)  # type: ignore[arg-type]
+
+    async def _provide(self, service_type: ServiceType, name: str) -> None:
+        # Once for the type and once for the name, as sam-node announces.
+        seeds = [ID.from_base58(r.peer_id) for r in self.routers]
+        addrs = [multiaddr.Multiaddr(a) for a in self.relay_addresses] + list(self.host.get_addrs())
+        for key in (service_key(service_type), service_key(service_type, name)):
+            await provide(self.host, key, seeds, addrs)
+
+    async def report_catalog(self) -> None:
+        """Reports the published services to the control plane's catalog (display only)."""
+        await trio.to_thread.run_sync(self.mesh.control_plane.report_catalog, self.mesh.credential.biscuit, self.services.list())
+
+    async def _policy_loop(self) -> None:
+        while True:
+            await trio.sleep(self.policy_sync_interval)
+            try:
+                await self.sync_policy()
+            except Exception as err:  # noqa: BLE001 - the last good policy stays in force
+                logger.warning("mesh policy sync failed: %s", err)
+
+    async def _provide_loop(self) -> None:
+        while True:
+            await trio.sleep(self.provide_interval)
+            try:
+                await self.provide_all()
+            except Exception as err:  # noqa: BLE001
+                logger.warning("dht reprovide failed: %s", err)
+
+
+async def _refresh_loop(mesh: "AgentMesh", lead: float, retry: float) -> None:
+    while True:
+        due = mesh.credential.expiration - lead - time.time()
+        await trio.sleep(max(MIN_REFRESH_DELAY, due))
+        try:
+            # The control plane client is synchronous; keep the loop free.
+            await trio.to_thread.run_sync(mesh.refresh)
+        except Exception as err:  # noqa: BLE001 - a failed refresh is retried, the session stays up
+            logger.warning("credential refresh failed, retrying in %.0fs: %s", retry, err)
+            await trio.sleep(retry)
+
+
+def _single_cause(group: BaseException) -> BaseException:
+    """trio wraps a failure inside `host.run` in one ExceptionGroup per nursery.
+    A join that failed for one reason should raise that reason."""
+    while isinstance(group, BaseExceptionGroup) and len(group.exceptions) == 1:
+        group = group.exceptions[0]
+    return group
+
+
+@asynccontextmanager
+async def join_mesh(
+    mesh: "AgentMesh",
+    *,
+    listen_addrs: Sequence[str] = (),
+    reserve: bool = True,
+    refresh_lead: float = DEFAULT_REFRESH_LEAD,
+    refresh_retry: float = DEFAULT_REFRESH_RETRY,
+    policy_sync_interval: float = DEFAULT_POLICY_SYNC,
+    provide_interval: float = DEFAULT_PROVIDE_INTERVAL,
+    control_plane_sync_interval: float = DEFAULT_CONTROL_PLANE_SYNC,
+    control_plane_sync_jitter: float = DEFAULT_CONTROL_PLANE_SYNC_JITTER,
+) -> AsyncIterator[MeshSession]:
+    """Implements AgentMesh.join(); lives here to keep mesh.py free of libp2p."""
+    router_addrs = [multiaddr.Multiaddr(a) for a in mesh.credential.router_addresses]
+    if not router_addrs:
+        raise RuntimeError("credential lists no router addresses; the control plane had no active router at enrollment")
+
+    host, listen = create_mesh_host(mesh.identity, listen_addrs)
+    authenticated: dict[str, datetime] = {}
+    banned = BanSet()
+    host.set_stream_handler(
+        AUTH_PROTOCOL,
+        auth_stream_handler(
+            own_biscuit=lambda: mesh.credential.biscuit,
+            trusted_keys=lambda: mesh.credential.control_plane_keys,
+            on_authenticated=lambda peer, verified: authenticated.__setitem__(peer, verified.expiration),
+            is_banned=lambda peer: peer in banned,
+        ),
+    )
+    host.set_stream_handler(STOP_PROTOCOL, stop_stream_handler(host))
+    # Built before any connection: Pubsub learns of peers through a notifee it
+    # registers here. StrictSign, as every Go component pins it.
+    gossipsub = GossipSub(protocols=[GOSSIPSUB_V12, GOSSIPSUB_V11, GOSSIPSUB_V10], degree=6, degree_low=4, degree_high=12)
+    pubsub = Pubsub(host, gossipsub, strict_signing=True)
+    logging.getLogger("libp2p.host.basic_host").addFilter(_MESHSUB_NOISE)
+
+    try:
+        async with host.run(listen_addrs=listen), background_trio_service(pubsub), background_trio_service(gossipsub):
+            await pubsub.wait_until_ready()
+            admitted = await _admit(host, mesh, router_addrs, reserve)
+            async with trio.open_nursery() as nursery:
+                nursery.start_soon(_refresh_loop, mesh, refresh_lead, refresh_retry)
+                session = MeshSession(
+                    mesh=mesh,
+                    host=host,
+                    routers=admitted,
+                    authenticated_peers=authenticated,
+                    banned=banned,
+                    policy_sync_interval=policy_sync_interval,
+                    provide_interval=provide_interval,
+                    control_plane_sync_interval=control_plane_sync_interval,
+                    control_plane_sync_jitter=control_plane_sync_jitter,
+                    _nursery=nursery,
+                )
+                nursery.start_soon(session._events_loop, pubsub)  # noqa: SLF001
+                nursery.start_soon(session._sync_loop)  # noqa: SLF001
+                try:
+                    yield session
+                finally:
+                    nursery.cancel_scope.cancel()
+    except BaseExceptionGroup as group:
+        cause = _single_cause(group)
+        if cause is group:
+            raise
+        raise cause from None
+
+
+async def _admit(host: IHost, mesh: "AgentMesh", router_addrs: list[multiaddr.Multiaddr], reserve: bool) -> list[AdmittedRouter]:
+    admitted: list[AdmittedRouter] = []
+    failures: list[str] = []
+    for addr in router_addrs:
+        try:
+            info = info_from_p2p_addr(addr)
+            await host.connect(info)
+            credential = await authenticate_with_peer(host, info.peer_id, mesh.auth_frame(), mesh.credential.control_plane_keys)
+            # Enforced under the key that verified the token; a relay that
+            # is not a router must not become our way onto the mesh.
+            require_role(credential, ROLE_ROUTER)
+            reservation = await reserve_relay(host, info.peer_id) if reserve else None
+            admitted.append(AdmittedRouter(peer_id=str(info.peer_id), addr=addr, credential=credential, reservation=reservation))
+            if reserve:
+                break
+        except Exception as err:  # noqa: BLE001 - every router is tried, the summary names each failure
+            failures.append(f"{addr}: {err}")
+    if not admitted:
+        raise RuntimeError("no router admitted this member:\n  " + "\n  ".join(failures))
+    return admitted

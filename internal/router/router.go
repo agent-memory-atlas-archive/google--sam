@@ -62,6 +62,7 @@ import (
 	"github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var logger = golog.Logger("sam-router")
@@ -122,10 +123,16 @@ type credential struct {
 	issuedUnder []ed25519.PublicKey
 }
 
-func newCredential(biscuit []byte, expiresAt int64, issuedUnder []ed25519.PublicKey) credential {
+// newCredential builds the router's credential; an unset expire_time is an
+// expired credential, so a control plane that sent none forces a refresh.
+func newCredential(biscuit []byte, expireTime *timestamppb.Timestamp, issuedUnder []ed25519.PublicKey) credential {
+	var expiration time.Time
+	if expireTime != nil {
+		expiration = expireTime.AsTime()
+	}
 	return credential{
 		biscuit:     biscuit,
-		expiration:  time.Unix(expiresAt, 0),
+		expiration:  expiration,
 		issuedUnder: append([]ed25519.PublicKey(nil), issuedUnder...),
 	}
 }
@@ -479,7 +486,7 @@ func (r *Router) enroll(peerID peer.ID) error {
 		PeerId:             peerID.String(),
 		PublicKey:          pubBytes,
 		RequestedRole:      r.config.RequiredRole,
-		Timestamp:          ts,
+		ChallengeUnixMs:    ts,
 		ChallengeSignature: sig,
 	}
 	data, err := proto.Marshal(req)
@@ -510,7 +517,7 @@ func (r *Router) enroll(peerID peer.ID) error {
 	}
 
 	r.keysMu.Lock()
-	r.credential = newCredential(enrollResp.BiscuitToken, enrollResp.Expiration, nil)
+	r.credential = newCredential(enrollResp.BiscuitToken, enrollResp.ExpireTime, nil)
 	r.trustedPublicKeys = []ed25519.PublicKey{enrollResp.ControlPlanePublicKey}
 	r.keysMu.Unlock()
 
@@ -539,7 +546,7 @@ func (r *Router) enrollBootstrap(peerID peer.ID) error {
 		PeerId:             peerID.String(),
 		PublicKey:          pubBytes,
 		RequestedRole:      r.config.RequiredRole,
-		Timestamp:          enrollTS,
+		ChallengeUnixMs:    enrollTS,
 		ChallengeSignature: enrollSig,
 	}
 	data, err := proto.Marshal(req)
@@ -654,7 +661,7 @@ func (r *Router) enrollBootstrap(peerID peer.ID) error {
 	}
 
 	r.keysMu.Lock()
-	r.credential = newCredential(enrollResp.BiscuitToken, enrollResp.Expiration, nil)
+	r.credential = newCredential(enrollResp.BiscuitToken, enrollResp.ExpireTime, nil)
 	r.trustedPublicKeys = []ed25519.PublicKey{enrollResp.ControlPlanePublicKey}
 	r.keysMu.Unlock()
 
@@ -809,7 +816,11 @@ func (r *Router) validateMeshEvent(_ context.Context, from peer.ID, msg *pubsub.
 		logger.Warnf("[Router Event] Potential spoofing attempt: invalid signature on event from %s", from)
 		return pubsub.ValidationReject
 	}
-	eventTime := time.UnixMilli(event.Timestamp)
+	if event.EventTime == nil {
+		logger.Warnf("[Router Event] Dropping event without event_time from %s", from)
+		return pubsub.ValidationReject
+	}
+	eventTime := event.EventTime.AsTime()
 	if time.Since(eventTime) > meshEventFreshness || time.Until(eventTime) > meshEventFreshness {
 		logger.Warnf("[Router Event] Dropping stale or future event from %s", from)
 		return pubsub.ValidationIgnore
@@ -955,7 +966,7 @@ func (r *Router) renewLease() {
 			Biscuit:            biscuit,
 			ConnectedPeers:     connectedPeers,
 			DhtSize:            dhtSize,
-			Timestamp:          ts,
+			ChallengeUnixMs:    ts,
 			ChallengeSignature: sig,
 		}
 		data, _ := proto.Marshal(req)
@@ -1004,7 +1015,7 @@ func (r *Router) renewLease() {
 			logger.Errorf("Lease renewal failed: %s", leaseResp.Error)
 			leaseRenewalsTotal.WithLabelValues(leaseRejected).Inc()
 		} else {
-			logger.Debugf("Lease renewed successfully. Expires at: %s", time.Unix(leaseResp.ExpiresAt, 0))
+			logger.Debugf("Lease renewed successfully. Expires at: %s", leaseResp.GetExpireTime().AsTime().Format(time.RFC3339))
 			leaseRenewalsTotal.WithLabelValues(leaseOK).Inc()
 		}
 		return
@@ -1397,7 +1408,7 @@ func (r *Router) RefreshEnrollment(ctx context.Context) error {
 	// opt-in server-side); it is cross-checked against the biscuit otherwise.
 	req := &api.TokenRefreshRequest{
 		ChallengeSignature: sig,
-		Timestamp:          timestamp,
+		ChallengeUnixMs:    timestamp,
 		PeerId:             peerID.String(),
 	}
 	reqData, err := proto.Marshal(req)
@@ -1462,7 +1473,7 @@ func (r *Router) RefreshEnrollment(ctx context.Context) error {
 
 	// Update local biscuit token and expiration under lock
 	r.keysMu.Lock()
-	r.credential = newCredential(refreshResp.BiscuitToken, refreshResp.ExpiresAt, r.trustedPublicKeys)
+	r.credential = newCredential(refreshResp.BiscuitToken, refreshResp.ExpireTime, r.trustedPublicKeys)
 	r.keysMu.Unlock()
 
 	logger.Infof("Router biscuit token refreshed successfully.")

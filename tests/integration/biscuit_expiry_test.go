@@ -54,7 +54,7 @@ const expiryMargin = 2 * time.Second
 // expiration check reads.
 //
 // It also pins the second half of the fix: the biscuit's lifetime is the
-// admin-configured --biscuit-ttl, and EnrollResponse.Expiration (which drives
+// admin-configured --biscuit-ttl, and EnrollResponse.expire_time (which drives
 // the node's proactive refresh) reports that same instant rather than the OIDC
 // token's own, much later, expiry.
 func TestBiscuitExpiryIsEnforcedOnEveryPath(t *testing.T) {
@@ -84,7 +84,7 @@ func TestBiscuitExpiryIsEnforcedOnEveryPath(t *testing.T) {
 	// The grants mirror the shape this test always ran with (the no-policy
 	// mint fallback): unrestricted, because the subject here is expiry.
 	policyFile := filepath.Join(tmpDir, "policies.yaml")
-	policyYAML := "roles:\n  - name: sam:role:node\n    allowed_services: [\"*\"]\n    allowed_targets: []\n    custom_datalog: [\"target_unrestricted();\"]\nbindings:\n  - role: sam:role:node\n    members: [\"user:expiry-user\"]\n"
+	policyYAML := "roles:\n  - name: sam:role:node\n    allowed_services: [\"*\"]\n    allowed_targets: []\n    custom_datalog: [\"target_unrestricted(true);\"]\nbindings:\n  - role: sam:role:node\n    members: [\"user:expiry-user\"]\n"
 	if err := os.WriteFile(policyFile, []byte(policyYAML), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -110,9 +110,9 @@ func TestBiscuitExpiryIsEnforcedOnEveryPath(t *testing.T) {
 	cpPubKey := ed25519.PublicKey(enrollResp.ControlPlanePublicKey)
 
 	// The advertised expiration is the biscuit's, not the OIDC token's (1h).
-	reported := time.Unix(enrollResp.Expiration, 0)
+	reported := enrollResp.GetExpireTime().AsTime()
 	if skew := reported.Sub(mintedAt.Add(testBiscuitTTL)); skew < -2*time.Second || skew > 2*time.Second {
-		t.Errorf("EnrollResponse.Expiration is %v, want ~%v (--biscuit-ttl %v after minting)",
+		t.Errorf("EnrollResponse.expire_time is %v, want ~%v (--biscuit-ttl %v after minting)",
 			reported, mintedAt.Add(testBiscuitTTL), testBiscuitTTL)
 	}
 
@@ -170,7 +170,7 @@ func registerOnControlPlane(t *testing.T, cpPort int, clientID peer.ID, privKey 
 		PeerId:             clientID.String(),
 		PublicKey:          pubBytes,
 		RequestedRole:      api.RoleNode,
-		Timestamp:          ts,
+		ChallengeUnixMs:    ts,
 		ChallengeSignature: sig,
 	})
 	if err != nil {

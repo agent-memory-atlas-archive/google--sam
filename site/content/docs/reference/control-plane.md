@@ -40,9 +40,12 @@ sam-control-plane admin unban --peer <id>     lift a ban
 
 ## HTTP API
 
-Two encodings are in use. Routes that mesh components call use protobuf
-(`application/x-protobuf`), with messages defined in `api/sam.proto`. Routes
-for operators and the console use JSON. `POST /policies` accepts either.
+Every request and response is a message in `api/sam.proto`, in one of two
+encodings. Routes that mesh components call use binary protobuf
+(`application/x-protobuf`). Routes for operators and the console use
+protojson of the same messages, with proto field names; unknown fields are
+rejected. `POST /policies` accepts either and answers in the encoding of the
+request.
 
 Responses that carry credentials are sent with `Cache-Control: no-store`.
 
@@ -58,10 +61,12 @@ Responses that carry credentials are sent with `Cache-Control: no-store`.
 
 ### Enrollment and refresh
 
-Every request below carries a `timestamp` and a `challenge_signature`. The
-enrollee signs `sam:<endpoint>:<peer_id>:<unix-millis>` with its key, and the
-control plane accepts the signature within five minutes. This proves that the
-caller holds the key behind the peer ID it names.
+Every request below carries a `challenge_unix_ms` and a `challenge_signature`.
+The enrollee signs `sam:<endpoint>:<peer_id>:<challenge_unix_ms>` with its
+key, and the control plane accepts the signature within five minutes of that
+instant. This proves that the caller holds the key behind the peer ID it
+names. Every instant in a response (`expire_time` and the like) is a
+`google.protobuf.Timestamp`, an RFC 3339 string in JSON.
 
 | Route | Body | Purpose |
 |---|---|---|
@@ -70,7 +75,7 @@ caller holds the key behind the peer ID it names.
 | `GET /enroll/status?peer_id=` | headers `X-Sam-Challenge-Ts`, `X-Sam-Challenge-Sig` | Poll a pending enrollment. Any authentication failure answers `401`, so the credential is released only to the enrollee. |
 | `POST /refresh` | `TokenRefreshRequest`, current credential as `Authorization: Bearer <base64>` | Exchange a credential for a new one. Refuses a replayed (superseded) credential, a banned node, an expired session, and a credential signed by a retired key unless the node has `autonomous_recovery`. |
 | `POST /routers/lease` | `RouterLeaseRequest` (credential, addresses, telemetry) | Register or renew a router lease. Requires `role("sam:role:router")`. Announced addresses must end in the router's own peer ID. |
-| `GET /policies` | credential as `Authorization: Bearer <base64>` | The mesh policy as `PolicyConfigGetResponse`. Also accepts the admin token. |
+| `GET /policies` | credential as `Authorization: Bearer <base64>` | The mesh policy as `PolicyConfigGetResponse`: the Datalog rules a member adds to its authorizer, one per entry. Operators read the document at `GET /admin/policy`. |
 | `POST /nodes/catalog` | `NodeCatalogReport`, credential as bearer | A node's report of the services it publishes, for the console. Display only. Never used for authorization. |
 
 ### Admin
@@ -80,7 +85,8 @@ All routes require `Authorization: Bearer <admin-token>` and use JSON.
 | Route | Purpose |
 |---|---|
 | `GET /admin/status` | Everything the console shows: routers, nodes, enrollment requests, tokens, users, and the policy as JSON. |
-| `POST /policies`, `PUT /policies` | Replace the mesh policy. The JSON body is protojson of `PolicyConfigUpdateRequest`. Unknown fields are rejected, so a misspelt grant fails instead of being dropped. |
+| `GET /admin/policy` | The mesh policy as protojson of `PolicyConfig`, the same document `POST /policies` takes. |
+| `POST /policies`, `PUT /policies` | Replace the mesh policy. The JSON body is protojson of `PolicyConfig`. Unknown fields are rejected, so a misspelt grant fails instead of being dropped. |
 | `POST /admin/bootstrap-tokens` | Mint a token. Body: `role` (required), `ttl_hours` (default 24), `max_usages` (default 1), `description`, `autonomous_recovery` (default false). Returns `201` with `id`, `token` (shown once), `role`, `expires_at`. |
 | `DELETE /admin/bootstrap-tokens/{id}` | Revoke a token. Can be repeated. The token stays in the list, marked as revoked. |
 | `GET /admin/enrollments` | Pending bootstrap enrollment requests. |

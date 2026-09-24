@@ -156,17 +156,31 @@ test:
 	CGO_ENABLED=1 go test -v -race -count 1 $(if $(WHAT),-run $(WHAT)) ./...
 	CGO_ENABLED=1 go -C cmd/nano-init test -race -count 1 $(if $(WHAT),-run $(WHAT)) ./...
 
-.PHONY: test-python test-python-e2e
-test-python:
-	python3 -m venv sam-mcp-python/.venv
-	./sam-mcp-python/.venv/bin/pip install -e ./sam-mcp-python[test]
-	./sam-mcp-python/.venv/bin/pytest sam-mcp-python/tests/unit
-
-test-python-e2e: build docker-build
-	bats --verbose-run tests/e2e/python_sdk_test.bats
-
 e2e-test: build docker-build
 	bats -j 10 --verbose-run $(if $(WHAT),--filter "$(WHAT)") tests/e2e/
+
+# Native SDKs under sdk/. sdk-js and sdk-python run each SDK's own unit
+# tests and leave it installed, which is what TestNativeSDKs needs to run
+# both against a real control plane instead of skipping. sdk-js also
+# compiles the example programs the docs embed; TestNativeSDKExamples runs
+# them.
+.PHONY: sdk-js sdk-python sdk-proto sdk-docs sdk-test
+sdk-js:
+	cd sdk/js && npm ci --no-fund --no-audit && npm test && npm run build && npm run examples
+
+sdk-python:
+	python3 -m venv sdk/python/.venv
+	./sdk/python/.venv/bin/pip install -q -e './sdk/python[test]'
+	./sdk/python/.venv/bin/python -m pytest -q sdk/python/tests
+
+sdk-proto:
+	./hack/gen-sdk-proto.sh
+
+sdk-docs:
+	go run ./hack/gen-sdk-docs sdk site/content/docs
+
+sdk-test: sdk-js sdk-python
+	go test ./tests/integration -run TestNativeSDK -count=1 -v
 
 .PHONY: ui-test
 ui-test: build

@@ -32,6 +32,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestNodeRevocationIntegration(t *testing.T) {
@@ -198,7 +199,7 @@ roles:
 	event := &api.MeshEvent{
 		Type:      api.MeshEvent_BANNED,
 		PeerId:    node2PeerID,
-		Timestamp: time.Now().UnixMilli(),
+		EventTime: timestamppb.Now(),
 	}
 	eventData, err := proto.Marshal(event)
 	if err != nil {

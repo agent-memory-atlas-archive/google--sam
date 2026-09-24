@@ -49,9 +49,16 @@ import (
 //    - target_unrestricted: Fact injected in the token by the control plane indicating that
 //      the client has unrestricted network access and bypasses target constraints.
 //    - Target Check: Verified using the check:
-//      `check if allow_network_target($fact, $val) or target_unrestricted()`
+//      `check if allow_network_target($fact, $val) or target_unrestricted(true)`
 //      If target_unrestricted is present, target checking succeeds immediately.
 //      Otherwise, it requires a matching allow_network_target rule to succeed.
+//
+// 3. Marker Facts:
+//    Facts that only signal presence (target_unrestricted, granted_service_all_types,
+//    agent_authorized, ...) carry the single term `true`, see MarkerFact. The Biscuit
+//    grammar requires at least one term per predicate; biscuit-go accepts an empty term
+//    list but the Rust, Python and JavaScript implementations reject it, and the SDKs
+//    evaluate this same Datalog.
 //
 // ============================================================================
 
@@ -129,8 +136,8 @@ const (
 	FactEmail = "email"
 
 	// FactGrantedServiceAllTypes allows access to all service types (e.g., mcp, inference) and all targets.
-	// Contains: (no terms)
-	// Example Datalog: allow if granted_service_all_types()
+	// Contains: biscuit.Bool(true) (marker fact)
+	// Example Datalog: allow if granted_service_all_types(true)
 	FactGrantedServiceAllTypes = "granted_service_all_types"
 
 	// FactGrantedServiceAll allows access to all targets under a specific service type.
@@ -159,7 +166,7 @@ const (
 	FactGrantedServiceSet = "granted_service_set"
 
 	// FactGrantedTargetAllTypes allows target access to all network targets (unrestricted).
-	// Contains: (no terms)
+	// Contains: biscuit.Bool(true) (marker fact)
 	FactGrantedTargetAllTypes = "granted_target_all_types"
 
 	// FactGrantedTargetAll allows target access to all values of a specific fact.
@@ -180,7 +187,7 @@ const (
 	FactGrantedTargetExact = "granted_target_exact"
 
 	// FactGrantedTargetAllFacts allows target access to any fact name and value combination.
-	// Contains: (no terms)
+	// Contains: biscuit.Bool(true) (marker fact)
 	FactGrantedTargetAllFacts = "granted_target_all_facts"
 
 	// FactGrantedTargetSet allows target access to a Set of exact values for a specific fact name.
@@ -217,12 +224,12 @@ const (
 	FactGrantedAgentSuffix = "granted_agent_suffix"
 
 	// FactGrantedAgentAll allows the holder to act for any agent at all.
-	// Contains: (no terms)
+	// Contains: biscuit.Bool(true) (marker fact)
 	FactGrantedAgentAll = "granted_agent_all"
 
 	// FactAgentAuthorized is derived when an agent claim falls inside one of the
 	// holder's granted_agent_* namespaces.
-	// Contains: (no terms)
+	// Contains: biscuit.Bool(true) (marker fact)
 	FactAgentAuthorized = "agent_authorized"
 
 	// FactConnectionPeerID defines the actual PeerID of the remote peer making the connection.
@@ -241,12 +248,12 @@ const (
 	FactAllowNetworkTarget = "allow_network_target"
 
 	// FactTargetUnrestricted indicates that target authorization checks are bypassed.
-	// Contains: (no terms)
-	// Example Datalog: check if allow_network_target($fact, $val) or target_unrestricted()
+	// Contains: biscuit.Bool(true) (marker fact)
+	// Example Datalog: check if allow_network_target($fact, $val) or target_unrestricted(true)
 	FactTargetUnrestricted = "target_unrestricted"
 
 	// FactTargetRestricted indicates that target authorization checks must be enforced.
-	// Contains: (no terms)
+	// Contains: biscuit.Bool(true) (marker fact)
 	FactTargetRestricted = "target_restricted"
 
 	// FactService represents the service target that a node is requesting access to.
@@ -271,6 +278,17 @@ const (
 	// Example Datalog: check if time($time)
 	FactTime = "time"
 )
+
+// MarkerTerm is the single term every marker fact carries, written `true` in
+// Datalog text. See MarkerFact.
+var MarkerTerm biscuit.Term = biscuit.Bool(true)
+
+// MarkerFact returns the presence-only fact name(true). The Biscuit grammar
+// requires at least one term per predicate, so a fact whose only meaning is
+// "this grant exists" carries MarkerTerm and is matched as name(true).
+func MarkerFact(name string) biscuit.Fact {
+	return biscuit.Fact{Predicate: biscuit.Predicate{Name: name, IDs: []biscuit.Term{MarkerTerm}}}
+}
 
 var oidcClaimToFact = map[string]string{
 	"sub":    FactUser,
@@ -343,11 +361,39 @@ var (
 
 	// AllowIfTruePolicy is the static policy "allow if true" used during token verification.
 	AllowIfTruePolicy biscuit.Policy
+
+	// BaselineSources is the Datalog text every variable above is parsed from.
+	// The SDKs embed this text (see hack/gen-sdk-datalog) so that a provider
+	// written in another language evaluates the same authorizer as sam-node.
+	BaselineSources DatalogSources
 )
+
+// DatalogSources is the source text of the baseline Datalog, one string per
+// item, in the form every Biscuit implementation parses.
+type DatalogSources struct {
+	// Policies are the service allow policies (BaselinePolicies).
+	Policies []string `json:"policies"`
+	// Rules derive allow_network_target from target grants (BaselineRules).
+	Rules []string `json:"rules"`
+	// AgentRules derive agent_authorized from agent grants (BaselineAgentRules).
+	AgentRules []string `json:"agent_rules"`
+	// TargetFactRules map identity facts to target_fact (TargetFactRules).
+	TargetFactRules []string `json:"target_fact_rules"`
+	// ReplayCheck is BaselineReplayCheck.
+	ReplayCheck string `json:"replay_check"`
+	// TargetCheck is BaselineTargetCheck.
+	TargetCheck string `json:"target_check"`
+	// AgentCheck is BaselineAgentCheck.
+	AgentCheck string `json:"agent_check"`
+	// TimeCheck is ControlPlaneStaticTimeCheck.
+	TimeCheck string `json:"time_check"`
+	// AllowIfTrue is AllowIfTruePolicy.
+	AllowIfTrue string `json:"allow_if_true"`
+}
 
 func init() {
 	// 1. Service Allow Policies
-	policyStrs := []string{
+	BaselineSources.Policies = []string{
 		// Exact Match: Allows access if the token possesses a granted_service_exact fact
 		// that perfectly matches both the protocol type (e.g. "mcp") and the service name (e.g. "calculator").
 		fmt.Sprintf(`allow if %s($type, $name), %s($type, $name)`, FactService, FactGrantedServiceExact),
@@ -370,10 +416,10 @@ func init() {
 
 		// Global Wildcard: Allows access if the token possesses a granted_service_all_types fact,
 		// granting access to literally any service in any namespace (equivalent to '*').
-		fmt.Sprintf(`allow if %s($type, $name), %s()`, FactService, FactGrantedServiceAllTypes),
+		fmt.Sprintf(`allow if %s($type, $name), %s(true)`, FactService, FactGrantedServiceAllTypes),
 	}
 
-	for i, pStr := range policyStrs {
+	for i, pStr := range BaselineSources.Policies {
 		p, err := parser.FromStringPolicy(pStr)
 		if err != nil {
 			panic(fmt.Sprintf("failed to parse baseline policy %d: %v", i, err))
@@ -383,7 +429,7 @@ func init() {
 
 	// 2. Target Evaluation Rules
 	// These rules satisfy the check if allow_network_target($fact, $val) injected by the control plane.
-	ruleStrs := []string{
+	BaselineSources.Rules = []string{
 		// Exact Match: Derives allow_network_target if the token has a granted_target_exact fact matching a target_fact exactly.
 		fmt.Sprintf(`%s($fact, $val) <- %s($fact, $val), %s($fact, $val)`, FactAllowNetworkTarget, FactTargetFact, FactGrantedTargetExact),
 
@@ -401,10 +447,10 @@ func init() {
 		fmt.Sprintf(`%s($fact, $val) <- %s($fact, $val), %s($fact)`, FactAllowNetworkTarget, FactTargetFact, FactGrantedTargetAll),
 
 		// Global Wildcard Match: Derives allow_network_target if the token has a granted_target_all_facts fact, unconditionally allowing any target_fact.
-		fmt.Sprintf(`%s($fact, $val) <- %s($fact, $val), %s()`, FactAllowNetworkTarget, FactTargetFact, FactGrantedTargetAllFacts),
+		fmt.Sprintf(`%s($fact, $val) <- %s($fact, $val), %s(true)`, FactAllowNetworkTarget, FactTargetFact, FactGrantedTargetAllFacts),
 	}
 
-	for i, rStr := range ruleStrs {
+	for i, rStr := range BaselineSources.Rules {
 		r, err := parser.FromStringRule(rStr)
 		if err != nil {
 			panic(fmt.Sprintf("failed to parse baseline rule %d: %v", i, err))
@@ -416,14 +462,16 @@ func init() {
 
 	// BaselineReplayCheck prevents token theft/replay by ensuring the client_peer_id fact (embedded by the control plane during issuance)
 	// perfectly matches the connection_peer_id fact (provided by the local node verifying the incoming libp2p connection).
-	BaselineReplayCheck, err = parser.FromStringCheck(fmt.Sprintf(`check if %s($id), %s($id)`, FactClientPeerID, FactConnectionPeerID))
+	BaselineSources.ReplayCheck = fmt.Sprintf(`check if %s($id), %s($id)`, FactClientPeerID, FactConnectionPeerID)
+	BaselineReplayCheck, err = parser.FromStringCheck(BaselineSources.ReplayCheck)
 	if err != nil {
 		panic(fmt.Sprintf("failed to parse replay check: %v", err))
 	}
 
 	// BaselineTargetCheck enforces network target restrictions. The token must either have an unrestricted target,
 	// or one of the Target Evaluation Rules must have successfully derived an allow_network_target fact.
-	BaselineTargetCheck, err = parser.FromStringCheck(fmt.Sprintf(`check if %s($fact, $val) or %s()`, FactAllowNetworkTarget, FactTargetUnrestricted))
+	BaselineSources.TargetCheck = fmt.Sprintf(`check if %s($fact, $val) or %s(true)`, FactAllowNetworkTarget, FactTargetUnrestricted)
+	BaselineTargetCheck, err = parser.FromStringCheck(BaselineSources.TargetCheck)
 	if err != nil {
 		panic(fmt.Sprintf("failed to parse target check: %v", err))
 	}
@@ -432,14 +480,14 @@ func init() {
 	// An agent claim is the calling node's word, so it is only worth what the
 	// control plane attested about that node. These derive agent_authorized when
 	// the claim falls inside a namespace the caller's own token grants.
-	agentRuleStrs := []string{
-		fmt.Sprintf(`%s() <- %s($a), %s($a)`, FactAgentAuthorized, FactAgent, FactGrantedAgentExact),
-		fmt.Sprintf(`%s() <- %s($a), %s($set), $set.contains($a)`, FactAgentAuthorized, FactAgent, FactGrantedAgentSet),
-		fmt.Sprintf(`%s() <- %s($a), %s($prefix), $a.starts_with($prefix)`, FactAgentAuthorized, FactAgent, FactGrantedAgentPrefix),
-		fmt.Sprintf(`%s() <- %s($a), %s($suffix), $a.ends_with($suffix)`, FactAgentAuthorized, FactAgent, FactGrantedAgentSuffix),
-		fmt.Sprintf(`%s() <- %s($a), %s()`, FactAgentAuthorized, FactAgent, FactGrantedAgentAll),
+	BaselineSources.AgentRules = []string{
+		fmt.Sprintf(`%s(true) <- %s($a), %s($a)`, FactAgentAuthorized, FactAgent, FactGrantedAgentExact),
+		fmt.Sprintf(`%s(true) <- %s($a), %s($set), $set.contains($a)`, FactAgentAuthorized, FactAgent, FactGrantedAgentSet),
+		fmt.Sprintf(`%s(true) <- %s($a), %s($prefix), $a.starts_with($prefix)`, FactAgentAuthorized, FactAgent, FactGrantedAgentPrefix),
+		fmt.Sprintf(`%s(true) <- %s($a), %s($suffix), $a.ends_with($suffix)`, FactAgentAuthorized, FactAgent, FactGrantedAgentSuffix),
+		fmt.Sprintf(`%s(true) <- %s($a), %s(true)`, FactAgentAuthorized, FactAgent, FactGrantedAgentAll),
 	}
-	for i, rStr := range agentRuleStrs {
+	for i, rStr := range BaselineSources.AgentRules {
 		r, err := parser.FromStringRule(rStr)
 		if err != nil {
 			panic(fmt.Sprintf("failed to parse baseline agent rule %d: %v", i, err))
@@ -449,15 +497,19 @@ func init() {
 
 	// A token carrying no granted_agent_* fact derives nothing, so this fails
 	// closed: naming an agent you were never granted denies the request.
-	BaselineAgentCheck, err = parser.FromStringCheck(fmt.Sprintf(`check if %s()`, FactAgentAuthorized))
+	BaselineSources.AgentCheck = fmt.Sprintf(`check if %s(true)`, FactAgentAuthorized)
+	BaselineAgentCheck, err = parser.FromStringCheck(BaselineSources.AgentCheck)
 	if err != nil {
 		panic(fmt.Sprintf("failed to parse agent check: %v", err))
 	}
 
 	// OIDC Claims to Target Facts: Maps dynamically generated OIDC facts (like `user("alice")`)
 	// into standard `target_fact("user", "alice")` facts for unified evaluation against network target policies.
-	for _, val := range OIDCClaimToFact() {
-		ruleStr := fmt.Sprintf(`%s(%q, $val) <- %s($val)`, FactTargetFact, val, val)
+	// Node PeerID Target Fact: Ensures the target node's PeerID is also evaluated as a standard target_fact.
+	for _, name := range TargetFactNames() {
+		BaselineSources.TargetFactRules = append(BaselineSources.TargetFactRules, fmt.Sprintf(`%s(%q, $val) <- %s($val)`, FactTargetFact, name, name))
+	}
+	for _, ruleStr := range BaselineSources.TargetFactRules {
 		r, err := parser.FromStringRule(ruleStr)
 		if err != nil {
 			panic(fmt.Sprintf("failed to parse target fact rule: %v", err))
@@ -465,15 +517,9 @@ func init() {
 		TargetFactRules = append(TargetFactRules, r)
 	}
 
-	// Node PeerID Target Fact: Ensures the target node's PeerID is also evaluated as a standard target_fact.
-	r, err := parser.FromStringRule(fmt.Sprintf(`%s(%q, $val) <- %s($val)`, FactTargetFact, FactNode, FactNode))
-	if err != nil {
-		panic(fmt.Sprintf("failed to parse node fact rule: %v", err))
-	}
-	TargetFactRules = append(TargetFactRules, r)
-
 	// ControlPlaneStaticTimeCheck ensures the token is not expired at the time of evaluation.
-	ControlPlaneStaticTimeCheck, err = parser.FromStringCheck(fmt.Sprintf(`check if %s($time), %s($exp), $time <= $exp`, FactTime, FactExpiration))
+	BaselineSources.TimeCheck = fmt.Sprintf(`check if %s($time), %s($exp), $time <= $exp`, FactTime, FactExpiration)
+	ControlPlaneStaticTimeCheck, err = parser.FromStringCheck(BaselineSources.TimeCheck)
 	if err != nil {
 		panic(fmt.Sprintf("failed to parse static time check: %v", err))
 	}
@@ -482,7 +528,8 @@ func init() {
 	// Note that this does NOT mean all requests are automatically allowed. Biscuit requires at least one policy
 	// to evaluate to true AND all checks to pass. This simply satisfies the policy requirement, effectively
 	// deferring entirely to the control plane's checks and granted facts without imposing extra local restrictions.
-	AllowIfTruePolicy, err = parser.FromStringPolicy("allow if true")
+	BaselineSources.AllowIfTrue = "allow if true"
+	AllowIfTruePolicy, err = parser.FromStringPolicy(BaselineSources.AllowIfTrue)
 	if err != nil {
 		panic(fmt.Sprintf("failed to parse static allow policy: %v", err))
 	}
@@ -492,10 +539,7 @@ func init() {
 func BuildServiceDatalogFact(serviceStr string) biscuit.Fact {
 	svcType, svcName := ParseServiceTarget(serviceStr)
 	if svcType == "*" && svcName == "*" {
-		return biscuit.Fact{Predicate: biscuit.Predicate{
-			Name: FactGrantedServiceAllTypes,
-			IDs:  []biscuit.Term{},
-		}}
+		return MarkerFact(FactGrantedServiceAllTypes)
 	} else if svcName == "*" {
 		return biscuit.Fact{Predicate: biscuit.Predicate{
 			Name: FactGrantedServiceAll,
@@ -525,10 +569,7 @@ func BuildTargetDatalogFact(targetStr string) biscuit.Fact {
 		tFact = FactNode
 	}
 	if tFact == "*" && tVal == "*" {
-		return biscuit.Fact{Predicate: biscuit.Predicate{
-			Name: FactGrantedTargetAllFacts,
-			IDs:  []biscuit.Term{},
-		}}
+		return MarkerFact(FactGrantedTargetAllFacts)
 	} else if tVal == "*" {
 		return biscuit.Fact{Predicate: biscuit.Predicate{
 			Name: FactGrantedTargetAll,
@@ -696,7 +737,7 @@ func BuildAgentDatalogFact(pattern string) biscuit.Fact {
 	pattern = strings.TrimPrefix(pattern, FactAgent+":")
 	switch {
 	case pattern == "*":
-		return biscuit.Fact{Predicate: biscuit.Predicate{Name: FactGrantedAgentAll}}
+		return MarkerFact(FactGrantedAgentAll)
 	case strings.HasPrefix(pattern, "*."):
 		return biscuit.Fact{Predicate: biscuit.Predicate{
 			Name: FactGrantedAgentSuffix,

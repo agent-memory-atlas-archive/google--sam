@@ -121,7 +121,7 @@ func TestControlPlanePubSubEventIntegration(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// 4. Trigger POST /policies on Control Plane
-	policyReq := &api.PolicyConfigUpdateRequest{
+	policyReq := &api.PolicyConfig{
 		Roles: []*api.PolicyRole{
 			{
 				Name:            "developer",

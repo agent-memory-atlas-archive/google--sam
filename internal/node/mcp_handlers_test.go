@@ -43,7 +43,7 @@ import (
 func buildAndSaveBiscuit(node *SamNode, rootPriv ed25519.PrivateKey) error {
 	callerID := node.Host.ID().String()
 	builder := biscuit.NewBuilder(rootPriv)
-	_ = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{Name: "target_unrestricted"}})
+	_ = builder.AddAuthorityFact(api.MarkerFact(api.FactTargetUnrestricted))
 	if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
 		Name: "node",
 		IDs:  []biscuit.Term{biscuit.String(callerID)},
@@ -62,10 +62,7 @@ func buildAndSaveBiscuit(node *SamNode, rootPriv ed25519.PrivateKey) error {
 	}}); err != nil {
 		return err
 	}
-	if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
-		Name: "granted_service_all_types",
-		IDs:  []biscuit.Term{},
-	}}); err != nil {
+	if err := builder.AddAuthorityFact(api.MarkerFact(api.FactGrantedServiceAllTypes)); err != nil {
 		return err
 	}
 	if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
@@ -440,7 +437,7 @@ func TestHandleFindRemoteTools_PartialFailure(t *testing.T) {
 func buildAndSaveCustomBiscuit(node *SamNode, rootPriv ed25519.PrivateKey, allowedServices []string) error {
 	callerID := node.Host.ID().String()
 	builder := biscuit.NewBuilder(rootPriv)
-	err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{Name: "target_unrestricted"}})
+	err := builder.AddAuthorityFact(api.MarkerFact(api.FactTargetUnrestricted))
 	if err != nil {
 		return err
 	}

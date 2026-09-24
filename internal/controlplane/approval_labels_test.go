@@ -107,7 +107,7 @@ func TestApprovalRefusesLabelsTheRoleDoesNotGrant(t *testing.T) {
 			PublicKey:          pubBytes,
 			RequestedRole:      api.RoleNode,
 			Labels:             labels,
-			Timestamp:          enrollTS,
+			ChallengeUnixMs:    enrollTS,
 			ChallengeSignature: enrollSig,
 		})
 		if err != nil {

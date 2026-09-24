@@ -93,7 +93,7 @@ func registerNode(t *testing.T, cpURL, jwtToken string) (crypto.PrivKey, peer.ID
 		PeerId:             peerID.String(),
 		PublicKey:          pubBytes,
 		RequestedRole:      api.RoleNode,
-		Timestamp:          ts,
+		ChallengeUnixMs:    ts,
 		ChallengeSignature: sig,
 	})
 	if err != nil {
@@ -174,7 +174,7 @@ func postRefresh(t *testing.T, cpURL string, priv crypto.PrivKey, currentBiscuit
 		t.Fatal(err)
 	}
 	reqData, err := proto.Marshal(&api.TokenRefreshRequest{
-		Timestamp:          timestamp,
+		ChallengeUnixMs:    timestamp,
 		ChallengeSignature: sig,
 		PeerId:             peerID,
 	})
@@ -249,7 +249,7 @@ func TestBiscuitExpiryIsCappedByItsVoucher(t *testing.T) {
 		cpPubKey := ed25519.PublicKey(resp.ControlPlanePublicKey)
 
 		assertNear(t, "biscuit expiration()", biscuitExpiration(t, resp.BiscuitToken, cpPubKey, srv.config.BiscuitTimeout), oidcExpiry)
-		assertNear(t, "EnrollResponse.Expiration", time.Unix(resp.Expiration, 0), oidcExpiry)
+		assertNear(t, "EnrollResponse.expire_time", resp.GetExpireTime().AsTime(), oidcExpiry)
 	})
 
 	t.Run("register uses the configured TTL when it expires first", func(t *testing.T) {
@@ -260,7 +260,7 @@ func TestBiscuitExpiryIsCappedByItsVoucher(t *testing.T) {
 		cpPubKey := ed25519.PublicKey(resp.ControlPlanePublicKey)
 
 		assertNear(t, "biscuit expiration()", biscuitExpiration(t, resp.BiscuitToken, cpPubKey, srv.config.BiscuitTimeout), want)
-		assertNear(t, "EnrollResponse.Expiration", time.Unix(resp.Expiration, 0), want)
+		assertNear(t, "EnrollResponse.expire_time", resp.GetExpireTime().AsTime(), want)
 	})
 
 	t.Run("refresh clamps to the end of the OIDC session", func(t *testing.T) {
@@ -281,7 +281,7 @@ func TestBiscuitExpiryIsCappedByItsVoucher(t *testing.T) {
 
 		refreshed := refreshNode(t, cpURL, priv, resp.BiscuitToken)
 		assertNear(t, "refreshed biscuit expiration()", biscuitExpiration(t, refreshed.BiscuitToken, cpPubKey, srv.config.BiscuitTimeout), sessionEnd)
-		assertNear(t, "TokenRefreshResponse.ExpiresAt", time.Unix(refreshed.ExpiresAt, 0), sessionEnd)
+		assertNear(t, "TokenRefreshResponse.expire_time", refreshed.GetExpireTime().AsTime(), sessionEnd)
 	})
 
 	t.Run("refresh uses the configured TTL when the session never expires", func(t *testing.T) {

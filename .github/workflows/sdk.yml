@@ -1,0 +1,90 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Native SDKs (sdk/): unit tests per language, then both SDKs on a mesh with
+# a real control plane, router and sam-node through tests/integration, and
+# the example programs the docs embed run the same way. api/sam.proto is a
+# trigger because the SDKs ship bindings generated from it; the docs are
+# because they embed the examples.
+name: SDK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sdk/**'
+      - 'api/sam.proto'
+      - 'hack/gen-sdk-proto.sh'
+      - 'hack/gen-sdk-docs/**'
+      - 'hack/verify-sdk-generated.sh'
+      - 'site/content/docs/guides/native-sdks.md'
+      - 'tests/integration/sdk_*_test.go'
+      - '.github/workflows/sdk.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'sdk/**'
+      - 'api/sam.proto'
+      - 'hack/gen-sdk-proto.sh'
+      - 'hack/gen-sdk-docs/**'
+      - 'hack/verify-sdk-generated.sh'
+      - 'site/content/docs/guides/native-sdks.md'
+      - 'tests/integration/sdk_*_test.go'
+      - '.github/workflows/sdk.yml'
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26"
+
+jobs:
+  sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: sdk/js/package-lock.json
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install protoc and py-libp2p build dependencies
+        # fastecdsa (a py-libp2p dependency) ships as a source distribution
+        # and builds against GMP.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libgmp-dev
+
+      - name: JavaScript SDK
+        run: make sdk-js
+
+      - name: Python SDK
+        run: make sdk-python
+
+      - name: Generated bindings, embedded examples and lockfile are current
+        run: ./hack/verify-sdk-generated.sh
+
+      - name: Both SDKs and the documented examples on a mesh with a real control plane, router and sam-node
+        run: go test ./tests/integration -run TestNativeSDK -count=1 -v

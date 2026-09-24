@@ -1,0 +1,205 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// A mesh in one process: a fake control plane behind fetch, a fake router
+// (js-libp2p with a relay server and the auth handshake) and a peer that
+// reaches the member through the router. The real router and control
+// plane are exercised by tests/integration/sdk_join_test.go.
+
+import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import { timestampFromMs } from "@bufbuild/protobuf/wkt";
+import { yamux } from "@chainsafe/libp2p-yamux";
+import { circuitRelayServer, circuitRelayTransport } from "@libp2p/circuit-relay-v2";
+import { privateKeyFromProtobuf } from "@libp2p/crypto/keys";
+import { identify } from "@libp2p/identify";
+import type { Libp2p } from "@libp2p/interface";
+import { tcp } from "@libp2p/tcp";
+import { tls } from "@libp2p/tls";
+import { multiaddr } from "@multiformats/multiaddr";
+import { createLibp2p } from "libp2p";
+import assert from "node:assert/strict";
+import { after, before, test } from "node:test";
+import { AUTH_PROTOCOL, AuthRejectedError, authenticateWithPeer, authStreamHandler } from "./auth.ts";
+import { ROLE_ROUTER, loadBiscuit, verifyPeerBiscuit } from "./biscuit.ts";
+import { ROLE_NODE } from "./controlplane.ts";
+import { BootstrapEnrollRequestSchema, BootstrapEnrollResponseSchema, EnrollmentStatus, KeysResponseSchema, AuthFrameSchema } from "./gen/sam_pb.ts";
+import { Identity } from "./identity.ts";
+import { AgentMesh } from "./mesh.ts";
+
+type Wasm = Awaited<ReturnType<typeof loadBiscuit>>;
+
+let wasm: Wasm;
+let cpKeyPair: InstanceType<Wasm["KeyPair"]>;
+let cpKey: Uint8Array;
+let router: Libp2p;
+let routerAddr: string;
+let routerBiscuit: Uint8Array;
+
+function mint(peerId: string, role: string, expiration = "2035-01-01T00:00:00Z"): Uint8Array {
+  const b = wasm.Biscuit.builder();
+  b.addFact(wasm.Fact.fromString(`node(${JSON.stringify(peerId)})`));
+  b.addFact(wasm.Fact.fromString(`expiration(${expiration})`));
+  b.addFact(wasm.Fact.fromString(`role(${JSON.stringify(role)})`));
+  return b.build(cpKeyPair.getPrivateKey()).toBytes();
+}
+
+function proto(bytes: Uint8Array): Response {
+  return new Response(Buffer.from(bytes), { status: 200, headers: { "Content-Type": "application/x-protobuf" } });
+}
+
+/** Approves every enrollment with a biscuit bound to the requesting peer. */
+function fakeControlPlane(routerAddresses: string[]): typeof fetch {
+  return (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const req = new Request(input, init);
+    const path = new URL(req.url).pathname;
+    if (req.method === "POST" && path === "/enroll") {
+      const enroll = fromBinary(BootstrapEnrollRequestSchema, new Uint8Array(await req.arrayBuffer()));
+      return proto(
+        toBinary(
+          BootstrapEnrollResponseSchema,
+          create(BootstrapEnrollResponseSchema, {
+            status: EnrollmentStatus.APPROVED,
+            biscuitToken: mint(enroll.peerId, ROLE_NODE),
+            controlPlanePublicKey: cpKey,
+            routerAddresses,
+            expireTime: timestampFromMs(Date.now() + 3600_000),
+          }),
+        ),
+      );
+    }
+    if (req.method === "GET" && path === "/keys") {
+      // Unsigned: the client keeps the enrollment key when /keys cannot be verified.
+      return proto(toBinary(KeysResponseSchema, create(KeysResponseSchema, { publicKeys: [cpKey], signTime: timestampFromMs(Date.now()) })));
+    }
+    return new Response(`no route for ${req.method} ${path}`, { status: 404 });
+  }) as typeof fetch;
+}
+
+before(async () => {
+  wasm = await loadBiscuit();
+  cpKeyPair = new wasm.KeyPair(wasm.SignatureAlgorithm.Ed25519);
+  cpKey = new Uint8Array(Buffer.from(cpKeyPair.getPublicKey().toString().replace(/^ed25519\//, ""), "hex"));
+
+  router = await createLibp2p({
+    addresses: { listen: ["/ip4/127.0.0.1/tcp/0"] },
+    transports: [tcp()],
+    connectionEncrypters: [tls()],
+    streamMuxers: [yamux()],
+    services: { identify: identify(), relay: circuitRelayServer() },
+  });
+  routerBiscuit = mint(router.peerId.toString(), ROLE_ROUTER);
+  await router.handle(
+    AUTH_PROTOCOL,
+    authStreamHandler({ ownBiscuit: () => routerBiscuit, trustedKeys: () => [cpKey] }),
+  );
+  routerAddr = `${(router.getMultiaddrs()[0] as ReturnType<typeof multiaddr>).toString()}`;
+  assert.match(routerAddr, /\/p2p\/12D3Koo/);
+});
+
+after(async () => {
+  await router.stop();
+});
+
+test("join authenticates with the router, reserves a relay slot and answers peers", async () => {
+  const mesh = await AgentMesh.enroll({ controlPlaneUrl: "http://127.0.0.1:1", bootstrapToken: "sbt", fetch: fakeControlPlane([routerAddr]) });
+  const session = await mesh.join({ refreshLeadMs: 0 });
+  try {
+    assert.equal(session.routers.length, 1);
+    assert.equal(session.routers[0]?.peerId, router.peerId.toString());
+    assert.ok(session.routers[0]?.credential.roles.includes(ROLE_ROUTER));
+    assert.ok(session.relayAddresses.length > 0, "no relayed address after the reservation");
+    const relayed = session.relayAddresses.find((ma) => ma.toString().startsWith(routerAddr));
+    assert.ok(relayed, `relayed address ${session.relayAddresses.map(String).join(",")} does not go through ${routerAddr}`);
+
+    // A peer reaches the member through the router and both sides verify each other.
+    const peerIdentity = Identity.generate();
+    const peerBiscuit = mint(peerIdentity.peerId, ROLE_NODE);
+    const peer = await createLibp2p({
+      privateKey: privateKeyFromProtobuf(peerIdentity.toLibp2pPrivateKey()),
+      transports: [tcp(), circuitRelayTransport()],
+      connectionEncrypters: [tls()],
+      streamMuxers: [yamux()],
+      services: { identify: identify() },
+    });
+    try {
+      const conn = await peer.dial(relayed);
+      assert.equal(conn.remotePeer.toString(), mesh.peerId);
+      const frame = toBinary(AuthFrameSchema, create(AuthFrameSchema, { biscuit: peerBiscuit }));
+      const memberCredential = await authenticateWithPeer(conn, frame, [cpKey]);
+      assert.equal(memberCredential.peerId, mesh.peerId);
+      assert.deepEqual(memberCredential.roles, [ROLE_NODE]);
+      assert.equal(session.authenticatedPeers.get(peerIdentity.peerId)?.toISOString(), "2035-01-01T00:00:00.000Z");
+
+      // A forged credential gets no answer, only a closed stream.
+      const forged = new wasm.KeyPair(wasm.SignatureAlgorithm.Ed25519);
+      const fb = wasm.Biscuit.builder();
+      fb.addFact(wasm.Fact.fromString(`node(${JSON.stringify(peerIdentity.peerId)})`));
+      fb.addFact(wasm.Fact.fromString("expiration(2035-01-01T00:00:00Z)"));
+      const forgedFrame = toBinary(AuthFrameSchema, create(AuthFrameSchema, { biscuit: fb.build(forged.getPrivateKey()).toBytes() }));
+      await assert.rejects(authenticateWithPeer(conn, forgedFrame, [cpKey]));
+    } finally {
+      await peer.stop();
+    }
+  } finally {
+    await session.close();
+  }
+});
+
+test("join fails closed when the router is not a router", async () => {
+  // A relay whose credential lacks the router role must not admit us to the mesh.
+  const impostor = await createLibp2p({
+    addresses: { listen: ["/ip4/127.0.0.1/tcp/0"] },
+    transports: [tcp()],
+    connectionEncrypters: [tls()],
+    streamMuxers: [yamux()],
+    services: { identify: identify(), relay: circuitRelayServer() },
+  });
+  try {
+    const impostorBiscuit = mint(impostor.peerId.toString(), ROLE_NODE);
+    await impostor.handle(AUTH_PROTOCOL, authStreamHandler({ ownBiscuit: () => impostorBiscuit, trustedKeys: () => [cpKey] }));
+    const addr = (impostor.getMultiaddrs()[0] as ReturnType<typeof multiaddr>).toString();
+    const mesh = await AgentMesh.enroll({ controlPlaneUrl: "http://127.0.0.1:1", bootstrapToken: "sbt", fetch: fakeControlPlane([addr]) });
+    await assert.rejects(mesh.join(), /lacks expected role "sam:role:router"/);
+  } finally {
+    await impostor.stop();
+  }
+});
+
+test("join reports a router that refuses the handshake", async () => {
+  const strict = await createLibp2p({
+    addresses: { listen: ["/ip4/127.0.0.1/tcp/0"] },
+    transports: [tcp()],
+    connectionEncrypters: [tls()],
+    streamMuxers: [yamux()],
+    services: { identify: identify() },
+  });
+  try {
+    // Trusts a different control plane, so our credential never verifies.
+    const otherKey = new wasm.KeyPair(wasm.SignatureAlgorithm.Ed25519);
+    const other = new Uint8Array(Buffer.from(otherKey.getPublicKey().toString().replace(/^ed25519\//, ""), "hex"));
+    await strict.handle(AUTH_PROTOCOL, authStreamHandler({ ownBiscuit: () => routerBiscuit, trustedKeys: () => [other] }));
+    const addr = (strict.getMultiaddrs()[0] as ReturnType<typeof multiaddr>).toString();
+    const mesh = await AgentMesh.enroll({ controlPlaneUrl: "http://127.0.0.1:1", bootstrapToken: "sbt", fetch: fakeControlPlane([addr]) });
+    await assert.rejects(mesh.join(), /no router admitted this member/);
+  } finally {
+    await strict.stop();
+  }
+});
+
+test("an explicit rejection is reported with its reason", async () => {
+  const reason = new AuthRejectedError("12D3KooWtest", "peer is revoked");
+  assert.match(reason.message, /12D3KooWtest.*peer is revoked/);
+  // The verifier does not depend on libp2p; a token for another peer is refused before any network I/O.
+  await assert.rejects(verifyPeerBiscuit(routerBiscuit, "12D3KooWA4Xop1JaT3MHxwYMkCepYsv4iPVopMXwCz5iHYdBfeSB", [cpKey]), /not bound to peer/);
+});

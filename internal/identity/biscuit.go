@@ -258,10 +258,7 @@ func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []stri
 			}}); err != nil {
 				errs = append(errs, fmt.Errorf("failed to add relay right: %w", err))
 			}
-			if err := addFact(biscuit.Fact{Predicate: biscuit.Predicate{
-				Name: api.FactTargetUnrestricted,
-				IDs:  []biscuit.Term{},
-			}}); err != nil {
+			if err := addFact(api.MarkerFact(api.FactTargetUnrestricted)); err != nil {
 				errs = append(errs, fmt.Errorf("failed to add target unrestricted: %w", err))
 			}
 			continue

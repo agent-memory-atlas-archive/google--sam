@@ -292,7 +292,7 @@ round trip and no central state.
 **Policy is written over namespaces.** The same machinery that compiles
 `allowed_services` wildcards compiles `allowed_agents` into
 `granted_agent_prefix`, `_suffix`, `_set` and `_exact`, and the destination
-derives `agent_authorized()` from them. "Foo yes, bar no" is a namespace, a
+derives `agent_authorized(true)` from them. "Foo yes, bar no" is a namespace, a
 set or a prefix, never a list of a billion names.
 
 **Revocation has three levels.**

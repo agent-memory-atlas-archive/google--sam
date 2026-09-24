@@ -38,6 +38,7 @@ updates:
   - package-ecosystem: "npm"
     directories:
       - "/tests/ui"
+      - "/sdk/js"
     schedule:
       interval: "weekly"
     cooldown:
@@ -45,7 +46,7 @@ updates:
 
   - package-ecosystem: "pip"
     directories:
-      - "/sam-mcp-python"
+      - "/sdk/python"
       - "/cmd/chaos-agent"
       - "/tests/e2e/docker/*"
       - "/development/examples/*"

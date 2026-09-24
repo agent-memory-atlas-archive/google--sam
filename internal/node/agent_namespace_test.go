@@ -41,7 +41,7 @@ func TestAuthorizeBoundsTheAgentClaimToTheGrantedNamespace(t *testing.T) {
 		t.Helper()
 		builder := biscuit.NewBuilder(priv)
 		facts := []biscuit.Fact{
-			{Predicate: biscuit.Predicate{Name: api.FactTargetUnrestricted}},
+			api.MarkerFact(api.FactTargetUnrestricted),
 			{Predicate: biscuit.Predicate{Name: api.FactNode, IDs: []biscuit.Term{biscuit.String(callerPeer.String())}}},
 			{Predicate: biscuit.Predicate{Name: api.FactClientPeerID, IDs: []biscuit.Term{biscuit.String(callerPeer.String())}}},
 			{Predicate: biscuit.Predicate{Name: api.FactGrantedServiceExact, IDs: []biscuit.Term{biscuit.String(api.SystemNamespace), biscuit.String("/test/proto")}}},

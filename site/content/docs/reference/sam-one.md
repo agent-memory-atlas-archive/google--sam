@@ -38,7 +38,7 @@ downloaded tunnel connector.
 | `--token-path` | | File containing the standing join token. Can also be set with `SAM_TOKEN`. Generated and saved to the data directory when neither is set. |
 | `--no-join-token` | `false` | Run without a standing join token. Devices can then enroll only with minted tokens or OIDC. |
 | `--admin-token-path` | | File containing the admin token. Can also be set with `SAM_ADMIN_TOKEN`. Generated and saved to the data directory when neither is set. |
-| `--policy-file` | | Protojson `PolicyConfigUpdateRequest` that seeds the mesh policy on first boot. Ignored once the database has a policy. Without it, first boot seeds an open development policy and logs a warning. |
+| `--policy-file` | | Protojson `PolicyConfig` that seeds the mesh policy on first boot. Ignored once the database has a policy. Without it, first boot seeds an open development policy and logs a warning. |
 | `--issuer` | | External OIDC issuer(s), comma-separated. Optional. Without an issuer, enrollment works by token only. |
 | `--oidc-client-id` | first audience | Client ID advertised on `/info`. |
 | `--allowed-audiences` | `sam-mesh-audience` | Accepted OIDC audiences. |

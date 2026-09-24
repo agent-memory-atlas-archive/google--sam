@@ -93,16 +93,17 @@ becomes `granted_service_exact("mcp", "calculator")`, `mcp://*` becomes
 `granted_service_suffix("mcp", ".internal")`. Wildcards keep their dot, so
 `*.acme.example` matches `svc.acme.example` but not `evil-acme.example`.
 
-Nodes also fetch the policy themselves, every `--control-plane-sync-interval`
-(15 minutes by default, sooner when a policy update event reaches them), and
-compile it into rules such as
+The control plane also renders the policy as Datalog rules such as
 `role("developer") <- group("eng")` and
-`granted_service_exact("mcp", "calculator") <- role("developer")`. When a
-node verifies a credential, these rules run against the identity facts in it.
-A grant added to the policy therefore reaches every node within the sync
-interval, with no need to reissue credentials. Removing a grant takes effect
-through the credential instead: the facts already in a token stay valid until
-the token is refreshed, which happens within its TTL (24 hours by default).
+`granted_service_exact("mcp", "calculator") <- role("developer")`. Nodes
+fetch this text every `--control-plane-sync-interval` (15 minutes by default,
+sooner when a policy update event reaches them) and add it to their
+authorizer as it arrives. When a node verifies a credential, these rules run
+against the identity facts in it. A grant added to the policy therefore
+reaches every node within the sync interval, with no need to reissue
+credentials. Removing a grant takes effect through the credential instead:
+the facts already in a token stay valid until the token is refreshed, which
+happens within its TTL (24 hours by default).
 
 ## What the hosting node checks
 
@@ -127,7 +128,7 @@ Biscuit authorizer and adds the following, in this order:
 5. **The baseline policies**: `allow if service($t,$n), granted_service_exact($t,$n)`
    and the equivalent policies for sets, prefixes, suffixes, per-type and
    global wildcards, plus the target check
-   `allow_network_target(...) or target_unrestricted()`.
+   `allow_network_target(...) or target_unrestricted(true)`.
 6. **The synced mesh policy rules** described above.
 
 Biscuit evaluates every `check` and requires all of them to pass. It then

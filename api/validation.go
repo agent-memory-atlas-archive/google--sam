@@ -59,8 +59,8 @@ func ValidateServiceAnnounce(a *ServiceAnnounce) error {
 			return fmt.Errorf("invalid label %q", k)
 		}
 	}
-	if a.GetTimestamp() <= 0 {
-		return fmt.Errorf("missing timestamp")
+	if a.GetAnnounceTime() == nil {
+		return fmt.Errorf("missing announce_time")
 	}
 	return nil
 }

@@ -283,6 +283,84 @@ func TestSyncControlPlane(t *testing.T) {
 	}
 }
 
+// datalog_rules is the only source of mesh policy rules: the node evaluates
+// the text as it arrives and never derives rules from roles and bindings, so
+// a control plane that still sends those is reported instead of tolerated.
+func TestSyncMeshPolicyUsesDatalogRules(t *testing.T) {
+	// What a control plane from before the contract sends: roles and bindings
+	// in the field numbers PolicyConfigGetResponse now reserves.
+	oldPolicy := &api.PolicyConfigGetResponse{}
+	oldWire, err := proto.Marshal(&api.PolicyConfig{
+		Roles:    []*api.PolicyRole{{Name: "dev", AllowedServices: []string{"mcp://git"}}},
+		Bindings: []*api.PolicyBinding{{Role: "dev", Members: []string{"group:developers"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPolicy.ProtoReflect().SetUnknown(oldWire)
+
+	tests := []struct {
+		name      string
+		resp      *api.PolicyConfigGetResponse
+		wantRules int
+		wantErr   string
+	}{
+		{
+			name:      "text rules are adopted as sent",
+			resp:      &api.PolicyConfigGetResponse{DatalogRules: []string{`role("dev") <- group("developers")`}},
+			wantRules: 1,
+		},
+		{
+			name:    "roles and bindings name an old control plane",
+			resp:    oldPolicy,
+			wantErr: "predates datalog_rules",
+		},
+		{
+			name:    "one unparseable rule rejects the whole set",
+			resp:    &api.PolicyConfigGetResponse{DatalogRules: []string{`role("dev") <- group("developers")`, `broken(`}},
+			wantErr: "unparseable rule",
+		},
+		{
+			name:      "empty policy is empty",
+			resp:      &api.PolicyConfigGetResponse{},
+			wantRules: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/policies", protoHandler(t, tt.resp))
+			srv := httptest.NewServer(mux)
+			defer srv.Close()
+
+			store, err := NewStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = store.Close() }()
+			if err := store.SaveControlPlaneURL(srv.URL); err != nil {
+				t.Fatal(err)
+			}
+			n := &SamNode{Store: store}
+			n.SetIdentityCache([]byte("identity"))
+
+			err = n.syncMeshPolicy(context.Background())
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("syncMeshPolicy error = %v, want one containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("syncMeshPolicy: %v", err)
+			}
+			if got := len(n.MeshPolicyRules); got != tt.wantRules {
+				t.Fatalf("adopted %d rules, want %d", got, tt.wantRules)
+			}
+		})
+	}
+}
+
 // The loop is what turns a missed gossip event into a delay rather than a
 // permanent split: a running node picks the successor key up on its own, and
 // a trigger brings the next pull forward.

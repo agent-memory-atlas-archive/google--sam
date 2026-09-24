@@ -20,6 +20,7 @@ import (
 	"encoding/base64"
 	"io"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -70,7 +71,7 @@ func TestPoliciesRequiresAnAdmissibleNode(t *testing.T) {
 		PeerId:             nodePeer.String(),
 		PublicKey:          nodePubKeyBytes,
 		RequestedRole:      api.RoleNode,
-		Timestamp:          ts,
+		ChallengeUnixMs:    ts,
 		ChallengeSignature: sig,
 	}
 	reqData, err := proto.Marshal(enrollReq)
@@ -104,7 +105,21 @@ func TestPoliciesRequiresAnAdmissibleNode(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET /policies failed: %v", err)
 		}
+		body, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			// What a member receives is the policy as Datalog text and nothing else.
+			var policy api.PolicyConfigGetResponse
+			if err := proto.Unmarshal(body, &policy); err != nil {
+				t.Fatalf("decoding PolicyConfigGetResponse: %v", err)
+			}
+			if want := `role("sam:role:node") <- group("users")`; !slices.Contains(policy.DatalogRules, want) {
+				t.Errorf("datalog_rules = %q, want it to contain %q", policy.DatalogRules, want)
+			}
+			if len(policy.ProtoReflect().GetUnknown()) > 0 {
+				t.Errorf("policy response carries fields outside the contract: %x", policy.ProtoReflect().GetUnknown())
+			}
+		}
 		return resp.StatusCode
 	}
 

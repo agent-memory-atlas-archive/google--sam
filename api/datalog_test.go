@@ -112,7 +112,7 @@ func TestBaselinePolicies(t *testing.T) {
 		{
 			name: "Global wildcard allows everything",
 			tokenFacts: []biscuit.Fact{
-				{Predicate: biscuit.Predicate{Name: FactGrantedServiceAllTypes, IDs: []biscuit.Term{}}},
+				MarkerFact(FactGrantedServiceAllTypes),
 			},
 			requestTarget: "mcp://calculator",
 			expectAllow:   true,
@@ -233,7 +233,7 @@ func TestBaselineTargetCheck(t *testing.T) {
 		{
 			name: "Exact target matching allows",
 			tokenFacts: []biscuit.Fact{
-				{Predicate: biscuit.Predicate{Name: FactTargetRestricted}},
+				MarkerFact(FactTargetRestricted),
 				{Predicate: biscuit.Predicate{Name: FactGrantedTargetExact, IDs: []biscuit.Term{biscuit.String("group"), biscuit.String("backend")}}},
 			},
 			targetFact:  "group",
@@ -243,7 +243,7 @@ func TestBaselineTargetCheck(t *testing.T) {
 		{
 			name: "Mismatched target denied when restricted",
 			tokenFacts: []biscuit.Fact{
-				{Predicate: biscuit.Predicate{Name: FactTargetRestricted}},
+				MarkerFact(FactTargetRestricted),
 				{Predicate: biscuit.Predicate{Name: FactGrantedTargetExact, IDs: []biscuit.Term{biscuit.String("group"), biscuit.String("backend")}}},
 			},
 			targetFact:  "group",
@@ -253,7 +253,7 @@ func TestBaselineTargetCheck(t *testing.T) {
 		{
 			name: "Any target allowed when target_unrestricted",
 			tokenFacts: []biscuit.Fact{
-				{Predicate: biscuit.Predicate{Name: FactTargetUnrestricted}},
+				MarkerFact(FactTargetUnrestricted),
 			},
 			targetFact:  "group",
 			targetVal:   "any-group",
@@ -393,7 +393,7 @@ func TestBuildServiceDatalogFact(t *testing.T) {
 	}{
 		{
 			input:    "*",
-			expected: biscuit.Fact{Predicate: biscuit.Predicate{Name: FactGrantedServiceAllTypes, IDs: []biscuit.Term{}}},
+			expected: MarkerFact(FactGrantedServiceAllTypes),
 		},
 		{
 			input:    "mcp://*",
@@ -428,7 +428,7 @@ func TestBuildTargetDatalogFact(t *testing.T) {
 	}{
 		{
 			input:    "*",
-			expected: biscuit.Fact{Predicate: biscuit.Predicate{Name: FactGrantedTargetAllFacts, IDs: []biscuit.Term{}}},
+			expected: MarkerFact(FactGrantedTargetAllFacts),
 		},
 		{
 			input:    "user:*",

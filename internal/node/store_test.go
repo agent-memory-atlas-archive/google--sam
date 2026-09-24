@@ -17,12 +17,18 @@ package node
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/google/sam/api"
+	"go.etcd.io/bbolt"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestStore_NewStore_And_Close(t *testing.T) {
@@ -283,7 +289,7 @@ func TestStore_MeshConfig(t *testing.T) {
 		t.Errorf("Expected empty mesh config, got pubKey=%v, addrs=%v", pubKey, addrs)
 	}
 
-	controlPlanePubKey := []byte("control-plane-public-key-bytes")
+	controlPlanePubKey := bytes.Repeat([]byte{7}, ed25519.PublicKeySize)
 	routerAddrs := []string{"/ip4/127.0.0.1/tcp/5001", "/dns4/cp.example.com/tcp/5001"}
 
 	if err := store.SaveMeshConfig(controlPlanePubKey, routerAddrs); err != nil {
@@ -300,6 +306,147 @@ func TestStore_MeshConfig(t *testing.T) {
 	}
 	if !reflect.DeepEqual(loadedAddrs, routerAddrs) {
 		t.Errorf("Expected loaded router addrs %v, got %v", routerAddrs, loadedAddrs)
+	}
+
+	// Enrollment's key is trusted and is what the identity was issued under.
+	trusted, err := store.LoadTrustedKeys()
+	if err != nil || len(trusted) != 1 || !bytes.Equal(trusted[0].Key, controlPlanePubKey) {
+		t.Fatalf("trusted keys after enrollment = %v, %v; want the enrollment key", trusted, err)
+	}
+	issuance, err := store.LoadIdentityKeySet()
+	if err != nil || len(issuance) != 1 || !bytes.Equal(issuance[0], controlPlanePubKey) {
+		t.Fatalf("identity key set after enrollment = %v, %v; want the enrollment key", issuance, err)
+	}
+}
+
+// TestStore_MigratesLegacyLayout opens a database written by a build that
+// kept one entry per field and finds the same state as one MemberCredential.
+func TestStore_MigratesLegacyLayout(t *testing.T) {
+	dir := t.TempDir()
+	enrollmentKey := bytes.Repeat([]byte{1}, ed25519.PublicKeySize)
+	rotatedKey := bytes.Repeat([]byte{2}, ed25519.PublicKeySize)
+	received := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	trustedJSON, _ := json.Marshal([]TrustedKey{{Key: rotatedKey, ReceivedAt: received}})
+	addrsJSON, _ := json.Marshal([]string{"/dns4/router.example/tcp/4001/p2p/12D3KooWP8iKhDf3iCMo2H3butNVfdTUtYwYWYQ75jTGnynXPFMp"})
+	db, err := bbolt.Open(filepath.Join(dir, StoreFile), 0600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Update(func(tx *bbolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte(bucketIdentity))
+		if err != nil {
+			return err
+		}
+		for k, v := range map[string][]byte{
+			keyPrivKey:                 []byte("private-key-bytes"),
+			"identity_biscuit":         []byte("biscuit-bytes"),
+			"identity_expiration":      []byte("1790000000"),
+			"refresh_token":            []byte("refresh-secret"),
+			"oidc_issuer":              []byte("https://issuer.example"),
+			"oidc_client_id":           []byte("client"),
+			"oidc_audience":            []byte("aud"),
+			"trusted_keys":             trustedJSON,
+			"control_plane_public_key": enrollmentKey,
+			"router_addresses":         addrsJSON,
+			"control_plane_url":        []byte("https://cp.example"),
+		} {
+			if err := b.Put([]byte(k), v); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore on a legacy database: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	if key, _ := store.LoadKey(); string(key) != "private-key-bytes" {
+		t.Errorf("private key = %q, want it untouched", key)
+	}
+	if biscuit, err := store.LoadIdentity(); err != nil || string(biscuit) != "biscuit-bytes" {
+		t.Errorf("biscuit = %q, %v", biscuit, err)
+	}
+	if exp, err := store.LoadIdentityExpiration(); err != nil || exp != 1790000000 {
+		t.Errorf("expiration = %d, %v", exp, err)
+	}
+	if tok, err := store.LoadRefreshToken(); err != nil || tok != "refresh-secret" {
+		t.Errorf("refresh token = %q, %v", tok, err)
+	}
+	if iss, cid, aud, err := store.LoadOIDCConfig(); err != nil || iss != "https://issuer.example" || cid != "client" || aud != "aud" {
+		t.Errorf("oidc = %q %q %q, %v", iss, cid, aud, err)
+	}
+	if url, _ := store.LoadControlPlaneURL(); url != "https://cp.example" {
+		t.Errorf("control plane url = %q", url)
+	}
+	pubKey, addrs, _ := store.LoadMeshConfig()
+	if len(addrs) != 1 || !bytes.Equal(pubKey, rotatedKey) {
+		t.Errorf("mesh config = %x, %v; want the first trusted key and one router", pubKey, addrs)
+	}
+	// The rotated key keeps its timestamp; the enrollment key joins the
+	// trusted set and, since the old build recorded no issuance set, stands
+	// for it.
+	trusted, _ := store.LoadTrustedKeys()
+	if len(trusted) != 2 || !bytes.Equal(trusted[0].Key, rotatedKey) || !trusted[0].ReceivedAt.Equal(received) || !bytes.Equal(trusted[1].Key, enrollmentKey) {
+		t.Errorf("trusted keys = %+v", trusted)
+	}
+	if issuance, _ := store.LoadIdentityKeySet(); len(issuance) != 1 || !bytes.Equal(issuance[0], enrollmentKey) {
+		t.Errorf("identity key set = %x, want the enrollment key", issuance)
+	}
+
+	// The legacy entries are gone; only the key and the credential remain.
+	if err := store.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(bucketIdentity))
+		for _, k := range legacyKeys {
+			if b.Get([]byte(k)) != nil {
+				t.Errorf("legacy entry %q survived the migration", k)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestStore_CredentialRoundTrip is what `sam-node state export | import`
+// relies on: the message out is the message in.
+func TestStore_CredentialRoundTrip(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	want := &api.MemberCredential{
+		ControlPlaneUrl: "https://cp.example",
+		Biscuit:         []byte("biscuit"),
+		ExpireTime:      timestamppb.New(time.Unix(1790000000, 0)),
+		TrustedKeys:     []*api.TrustedSigningKey{{PublicKey: bytes.Repeat([]byte{3}, ed25519.PublicKeySize), ReceiveTime: timestamppb.New(time.Unix(1780000000, 0))}},
+		IssuedUnderKeys: [][]byte{bytes.Repeat([]byte{3}, ed25519.PublicKeySize)},
+		RouterAddresses: []string{"/dns4/router.example/tcp/4001/p2p/12D3KooWP8iKhDf3iCMo2H3butNVfdTUtYwYWYQ75jTGnynXPFMp"},
+	}
+	if err := store.SetCredential(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Credential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(want, got) {
+		t.Fatalf("credential round trip:\n got %v\nwant %v", got, want)
+	}
+	if err := store.ResetMeshIdentity(); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.Credential(); !proto.Equal(got, &api.MemberCredential{}) {
+		t.Fatalf("credential after reset = %v, want empty", got)
 	}
 }
 

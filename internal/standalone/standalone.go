@@ -102,7 +102,7 @@ type Options struct {
 	// DataDir when empty.
 	AdminToken string
 	// PolicyFile optionally seeds the mesh policy on first boot from a
-	// protojson PolicyConfigUpdateRequest payload.
+	// protojson PolicyConfig payload.
 	PolicyFile string
 	// OIDCIssuer optionally enables full OIDC enrollment.
 	OIDCIssuer       string
@@ -457,14 +457,14 @@ func (s *Server) seedPolicyOnFirstBoot(ctx context.Context) error {
 		return nil
 	}
 
-	var seed api.PolicyConfigUpdateRequest
+	var seed api.PolicyConfig
 	if s.opts.PolicyFile != "" {
 		data, err := os.ReadFile(s.opts.PolicyFile)
 		if err != nil {
 			return fmt.Errorf("failed to read policy file: %w", err)
 		}
 		if err := protojson.Unmarshal(data, &seed); err != nil {
-			return fmt.Errorf("failed to parse policy file %s (expects protojson PolicyConfigUpdateRequest): %w", s.opts.PolicyFile, err)
+			return fmt.Errorf("failed to parse policy file %s (expects protojson PolicyConfig): %w", s.opts.PolicyFile, err)
 		}
 		logger.Infof("Seeding mesh policy from %s", s.opts.PolicyFile)
 	} else {

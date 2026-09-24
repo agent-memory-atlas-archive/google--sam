@@ -329,7 +329,7 @@ func startMockRouterWithControlPlaneKey(t *testing.T) (peer.ID, string, ed25519.
 
 func createMockBiscuitToken(t *testing.T, peerID string, priv ed25519.PrivateKey, role string, labels map[string]string) []byte {
 	builder := biscuit.NewBuilder(priv)
-	err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{Name: "target_unrestricted"}})
+	err := builder.AddAuthorityFact(api.MarkerFact(api.FactTargetUnrestricted))
 	if err != nil {
 		t.Fatalf("failed to add target_unrestricted: %v", err)
 	}
@@ -384,9 +384,7 @@ func createMockBiscuitToken(t *testing.T, peerID string, priv ed25519.PrivateKey
 		t.Fatalf("failed to add client_peer_id fact: %v", err)
 	}
 
-	err = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
-		Name: "granted_service_all_types",
-	}})
+	err = builder.AddAuthorityFact(api.MarkerFact(api.FactGrantedServiceAllTypes))
 	if err != nil {
 		t.Fatalf("failed to add granted_service_all_types fact: %v", err)
 	}

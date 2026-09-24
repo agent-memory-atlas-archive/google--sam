@@ -28,6 +28,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	mocknet "github.com/libp2p/go-libp2p/p2p/net/mock"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // newPair builds two connected in-memory hosts with gossipsub and Discovery.
@@ -181,11 +182,11 @@ func TestObserveRejectsForgedAndStale(t *testing.T) {
 	other := testPeerID(t)
 
 	valid := &api.ServiceAnnounce{
-		PeerId:      signer.String(),
-		Type:        api.ServiceType_SERVICE_TYPE_INFERENCE,
-		ServiceName: "llm",
-		Keys:        []string{"m1"},
-		Timestamp:   time.Now().Unix(),
+		PeerId:       signer.String(),
+		Type:         api.ServiceType_SERVICE_TYPE_INFERENCE,
+		ServiceName:  "llm",
+		Keys:         []string{"m1"},
+		AnnounceTime: timestamppb.Now(),
 	}
 
 	tests := []struct {
@@ -198,12 +199,12 @@ func TestObserveRejectsForgedAndStale(t *testing.T) {
 		{"stale timestamp dropped", rawMessage(t, signer, &api.ServiceAnnounce{
 			PeerId: signer.String(), Type: api.ServiceType_SERVICE_TYPE_INFERENCE,
 			ServiceName: "llm", Keys: []string{"m1"},
-			Timestamp: time.Now().Add(-10 * time.Minute).Unix(),
+			AnnounceTime: timestamppb.New(time.Now().Add(-10 * time.Minute)),
 		}), 0},
 		{"future timestamp dropped", rawMessage(t, signer, &api.ServiceAnnounce{
 			PeerId: signer.String(), Type: api.ServiceType_SERVICE_TYPE_INFERENCE,
 			ServiceName: "llm", Keys: []string{"m1"},
-			Timestamp: time.Now().Add(10 * time.Minute).Unix(),
+			AnnounceTime: timestamppb.New(time.Now().Add(10 * time.Minute)),
 		}), 0},
 		{"invalid payload dropped", &pubsub.Message{
 			Message: &pubsub_pb.Message{From: []byte(signer), Data: []byte("junk")},
@@ -227,7 +228,7 @@ func TestProviderTableIsBounded(t *testing.T) {
 		d.observe(rawMessage(t, signer, &api.ServiceAnnounce{
 			PeerId: signer.String(), Type: api.ServiceType_SERVICE_TYPE_INFERENCE,
 			ServiceName: "llm", Keys: []string{"m1"},
-			Timestamp: time.Now().Unix(),
+			AnnounceTime: timestamppb.Now(),
 		}))
 	}
 	if got := len(d.providers); got != 2 {
@@ -244,7 +245,7 @@ func TestProviderTableCapsEntriesPerSigner(t *testing.T) {
 	d.observe(rawMessage(t, honest, &api.ServiceAnnounce{
 		PeerId: honest.String(), Type: api.ServiceType_SERVICE_TYPE_INFERENCE,
 		ServiceName: "llm", Keys: []string{"m1"},
-		Timestamp: time.Now().Unix(),
+		AnnounceTime: timestamppb.Now(),
 	}))
 
 	loud := testPeerID(t)
@@ -252,7 +253,7 @@ func TestProviderTableCapsEntriesPerSigner(t *testing.T) {
 		d.observe(rawMessage(t, loud, &api.ServiceAnnounce{
 			PeerId: loud.String(), Type: api.ServiceType_SERVICE_TYPE_INFERENCE,
 			ServiceName: "svc-" + string(rune('a'+i%26)) + string(rune('a'+i/26)), Keys: []string{"m1"},
-			Timestamp: time.Now().Unix(),
+			AnnounceTime: timestamppb.Now(),
 		}))
 	}
 
@@ -273,8 +274,8 @@ func TestPeerLabels(t *testing.T) {
 	d.observe(rawMessage(t, signer, &api.ServiceAnnounce{
 		PeerId: signer.String(), Type: api.ServiceType_SERVICE_TYPE_MCP,
 		ServiceName: "reviewer", Keys: []string{"review_pr"},
-		Labels:    map[string]string{"region": "eu"},
-		Timestamp: time.Now().Unix(),
+		Labels:       map[string]string{"region": "eu"},
+		AnnounceTime: timestamppb.Now(),
 	}))
 
 	if got := d.PeerLabels(signer.String()); got["region"] != "eu" {
@@ -289,7 +290,7 @@ func TestValidateServiceAnnounceCaps(t *testing.T) {
 	base := func() *api.ServiceAnnounce {
 		return &api.ServiceAnnounce{
 			PeerId: "12D3KooWTest", Type: api.ServiceType_SERVICE_TYPE_INFERENCE,
-			ServiceName: "llm", Keys: []string{"m1"}, Timestamp: 1,
+			ServiceName: "llm", Keys: []string{"m1"}, AnnounceTime: timestamppb.Now(),
 		}
 	}
 	tooMany := make([]string, api.MaxAnnounceKeys+1)
@@ -307,7 +308,7 @@ func TestValidateServiceAnnounceCaps(t *testing.T) {
 		{"too many keys", func(a *api.ServiceAnnounce) { a.Keys = tooMany }, true},
 		{"empty peer", func(a *api.ServiceAnnounce) { a.PeerId = "" }, true},
 		{"unspecified type", func(a *api.ServiceAnnounce) { a.Type = api.ServiceType_SERVICE_TYPE_UNSPECIFIED }, true},
-		{"no timestamp", func(a *api.ServiceAnnounce) { a.Timestamp = 0 }, true},
+		{"no announce time", func(a *api.ServiceAnnounce) { a.AnnounceTime = nil }, true},
 		{"oversized label", func(a *api.ServiceAnnounce) {
 			a.Labels = map[string]string{"k": string(make([]byte, api.MaxAnnounceStringLen+1))}
 		}, true},
@@ -347,8 +348,8 @@ func TestObserveKeysOnTheCanonicalPeerID(t *testing.T) {
 		d.observe(rawMessage(t, signer, &api.ServiceAnnounce{
 			PeerId: spelling, Type: api.ServiceType_SERVICE_TYPE_INFERENCE,
 			ServiceName: "llm", Keys: []string{"m1"},
-			Labels:    map[string]string{"region": "eu"},
-			Timestamp: time.Now().Unix(),
+			Labels:       map[string]string{"region": "eu"},
+			AnnounceTime: timestamppb.Now(),
 		}))
 	}
 
