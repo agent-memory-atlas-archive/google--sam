@@ -410,9 +410,12 @@ holds against the control plane's records.
 - Publishing: `.github/workflows/release.yml` stamps the release tag's
   version on both packages (`hack/sdk-version.sh`) and publishes
   `@sam-mesh/sdk` to npm and `sam-mesh` to PyPI through trusted
-  publishing. The job runs only when the repository variable
-  `PUBLISH_SDKS` is `true`, so a release before the registries are set up
-  stays green. One-time setup by a package owner: on npmjs.com, create the
+  publishing. A prerelease tag (`v0.1.0-rc.4`) publishes under the npm
+  dist-tag `next`, a stable tag under `latest`; PyPI needs no tag, `pip`
+  skips prereleases on its own. When `publish-sdks` fails after the
+  GitHub release exists, run the workflow by hand from the Actions tab
+  with the tag as input; it checks out that tag and publishes only the
+  SDKs. One-time setup by a package owner: on npmjs.com, create the
   `sam-mesh` organization, publish `@sam-mesh/sdk` 0.1.0 once by hand
   (`cd sdk/js && npm publish --access public`; the trusted-publisher
   settings live on the package page, which exists only after that), then
@@ -420,8 +423,7 @@ holds against the control plane's records.
   Settings, Trusted publishing; on pypi.org, add a pending publisher for
   project `sam-mesh` with the same repository and workflow (environment
   left empty), which reserves the name and lets the first tag create the
-  project. Then set `PUBLISH_SDKS`. No publishing token is stored in the
-  repository.
+  project. No publishing token is stored in the repository.
 - Docs: `site/content/docs/guides/native-sdks.md`.
 - Tests. Unit: a fake control plane rotates its key and bans a peer; each
   SDK learns both from a pull, refreshes under the new key and only under

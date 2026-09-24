@@ -5,12 +5,21 @@ on:
     # run only against release tags
     tags:
       - "v*"
+  # Publish the SDKs of a tag whose release already exists (a failed
+  # publish-sdks run). goreleaser does not run again.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag, e.g. v0.1.0-rc.4"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   goreleaser:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -39,15 +48,17 @@ jobs:
   publish-sdks:
     runs-on: ubuntu-latest
     needs: goreleaser
+    if: always() && (github.event_name == 'workflow_dispatch' || needs.goreleaser.result == 'success')
     permissions:
       contents: read
       id-token: write
     env:
-      SDK_VERSION: ${{ github.ref_name }}
+      SDK_VERSION: ${{ inputs.tag || github.ref_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
@@ -62,12 +73,18 @@ jobs:
         run: ./hack/sdk-version.sh "${SDK_VERSION#v}"
       - name: Build and publish @sam-mesh/sdk
         # npm's trusted publishing needs npm 11.5 or later; Node 22 ships 10.
+        # npm 11 refuses to publish a prerelease without an explicit dist-tag,
+        # and "latest" must stay on stable versions.
         working-directory: sdk/js
         run: |
           npm install -g npm@latest
           npm ci
           npm run build
-          npm publish --provenance --access public
+          case "${SDK_VERSION#v}" in
+            *-*) tag=next ;;
+            *)   tag=latest ;;
+          esac
+          npm publish --provenance --access public --tag "$tag"
       - name: Build sam-mesh
         working-directory: sdk/python
         run: |
