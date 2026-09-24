@@ -29,7 +29,7 @@ downloaded tunnel connector.
 | `--port` | `0` | TCP port. `0` picks a free one and prints it in the banner. |
 | `--external-url` | | Public URL on which nodes reach this instance, for a reverse proxy or a hosted platform. Can also be set with `SAM_EXTERNAL_URL`. When omitted behind an HTTPS proxy (Cloud Run, Fly.io), `/info` infers the advertised `wss` address from the incoming `Host` / `X-Forwarded-Proto` headers automatically. |
 | `--tunnel` | | Publish the port through a tunnel provider and use the resulting URL as the external URL. The provider is `cloudflare` (defaults to a free quick tunnel on `*.trycloudflare.com`, no account needed). |
-| `--tunnel-token-path` | | File containing a Cloudflare Named Tunnel token (can also be set with `CLOUDFLARE_TUNNEL_TOKEN`). Use together with `--tunnel cloudflare --external-url https://mesh.example.com` for a permanent custom domain. |
+| `--tunnel-token-path` | | File containing the tunnel provider authentication token (can also be set with `SAM_TUNNEL_TOKEN`). Use together with `--tunnel <provider> --external-url https://mesh.example.com` for a permanent custom domain. |
 | `--tunnel-install` | `false` | Download the pinned, digest-verified `cloudflared` into `<data-dir>/bin` without asking. Implies acceptance of its license. |
 | `--cloudflared-path` | `PATH`, then `<data-dir>/bin` | Explicit connector binary. |
 | `--p2p-listen` | none | Extra native libp2p listen addresses, in addition to the WebSocket transport on the main port. |

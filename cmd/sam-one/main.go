@@ -99,7 +99,7 @@ func main() {
 			if err != nil {
 				logger.Fatalf("Invalid --admin-token-path: %v", err)
 			}
-			tunnelToken, err := secretFromPathOrEnv(tunnelTokenPath, "CLOUDFLARE_TUNNEL_TOKEN")
+			tunnelToken, err := secretFromPathOrEnv(tunnelTokenPath, "SAM_TUNNEL_TOKEN")
 			if err != nil {
 				logger.Fatalf("Invalid --tunnel-token-path: %v", err)
 			}
@@ -120,10 +120,10 @@ func main() {
 			var tun tunnel.Tunnel
 			if tunnelProvider != "" {
 				if tunnelToken == "" && externalURL != "" {
-					logger.Fatal("--tunnel and --external-url are mutually exclusive unless --tunnel-token-path / CLOUDFLARE_TUNNEL_TOKEN is set")
+					logger.Fatal("--tunnel and --external-url are mutually exclusive unless --tunnel-token-path / SAM_TUNNEL_TOKEN is set")
 				}
 				if tunnelToken != "" && externalURL == "" {
-					logger.Fatal("--tunnel-token-path / CLOUDFLARE_TUNNEL_TOKEN requires --external-url (the public https:// hostname routed to the named tunnel)")
+					logger.Fatal("--tunnel-token-path / SAM_TUNNEL_TOKEN requires --external-url (the public https:// hostname routed to the tunnel)")
 				}
 				if port == 0 {
 					var err error
@@ -212,7 +212,7 @@ func main() {
 	rootCmd.Flags().StringVar(&allowedAudiencesFlag, "allowed-audiences", api.DefaultAudience, "Comma-separated list of allowed OIDC audiences")
 	rootCmd.Flags().StringVar(&logLevel, "log-level", "", "Log level: debug, info, warn, error")
 	rootCmd.Flags().StringVar(&tunnelProvider, "tunnel", "", "Publish the listener on a public URL through a tunnel provider ("+strings.Join(tunnel.Names(), ", ")+"); sets the external URL")
-	rootCmd.Flags().StringVar(&tunnelTokenPath, "tunnel-token-path", "", "File containing a Cloudflare Named Tunnel token (or env CLOUDFLARE_TUNNEL_TOKEN); use with --tunnel cloudflare --external-url https://...")
+	rootCmd.Flags().StringVar(&tunnelTokenPath, "tunnel-token-path", "", "File containing the tunnel provider token (or env SAM_TUNNEL_TOKEN); use with --tunnel <provider> --external-url https://...")
 	rootCmd.Flags().BoolVar(&tunnelInstall, "tunnel-install", false, "Download the pinned connector binary (cloudflared "+tunnel.CloudflaredVersion+", digest-verified) into <data-dir>/bin without asking; implies accepting its license")
 	rootCmd.Flags().StringVar(&cloudflaredPath, "cloudflared-path", "", "Explicit cloudflared executable for --tunnel cloudflare (default: PATH, then <data-dir>/bin)")
 	rootCmd.Flags().BoolVar(&enrollQR, "enroll-qr", stdoutIsTerminal(), "Print a device enrollment QR code at startup (default: when stdout is a terminal)")

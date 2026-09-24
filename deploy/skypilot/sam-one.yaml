@@ -1,10 +1,10 @@
 # SkyPilot recipe for deploying a standalone SAM control plane + router (sam-one)
 # on any cloud provider (GCP, AWS, Azure, OCI, or Kubernetes).
 #
-# Production deployment with a permanent custom domain (Cloudflare Named Tunnel):
+# Production deployment with a permanent custom domain:
 #   sky launch -y -c sam-hub deploy/skypilot/sam-one.yaml --detach-run \
 #     --env SAM_EXTERNAL_URL=https://mesh.example.com \
-#     --secret CLOUDFLARE_TUNNEL_TOKEN
+#     --secret SAM_TUNNEL_TOKEN
 #
 # Quick deployment with an automatic HTTPS tunnel:
 #   sky launch -y -c sam-hub deploy/skypilot/sam-one.yaml --detach-run
@@ -28,7 +28,7 @@ envs:
   SAM_EXTERNAL_URL: ""
 
 secrets:
-  CLOUDFLARE_TUNNEL_TOKEN: ""
+  SAM_TUNNEL_TOKEN: ""
 
 setup: |
   set -euo pipefail

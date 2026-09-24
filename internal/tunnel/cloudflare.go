@@ -71,8 +71,8 @@ type Cloudflare struct {
 	// the zone's authoritative nameserver (see authoritativeLookup). Tests
 	// stub it.
 	LookupHost func(ctx context.Context, host string) ([]string, error)
-	// Token is an optional Cloudflare Named Tunnel token (from
-	// --tunnel-token-path or CLOUDFLARE_TUNNEL_TOKEN). When set, Open runs
+	// Token is an optional named tunnel token (from --tunnel-token-path
+	// or SAM_TUNNEL_TOKEN). When set, Open runs
 	// `cloudflared tunnel --no-autoupdate run --url <target>` with
 	// TUNNEL_TOKEN in the child environment instead of a random
 	// trycloudflare.com quick tunnel, and publishes ExternalURL.

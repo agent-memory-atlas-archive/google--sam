@@ -19,18 +19,18 @@ tiers such as GCP `e2-micro` or AWS `t4g.micro` for testing.)*
 
 ## 1. Deploy `sam-one` with SkyPilot
 
-### Production deployment (custom domain via Cloudflare Named Tunnel)
+### Production deployment (custom domain)
 
-If you have a Cloudflare Named Tunnel token bound to a custom hostname (such as
+If you have a tunnel authentication token bound to a custom hostname (such as
 `https://mesh.example.com`), launch the cluster with `SAM_EXTERNAL_URL` and
-`CLOUDFLARE_TUNNEL_TOKEN`:
+`SAM_TUNNEL_TOKEN`:
 
 ```bash
-export CLOUDFLARE_TUNNEL_TOKEN="eyJhIjoi..."
+export SAM_TUNNEL_TOKEN="eyJhIjoi..."
 
 sky launch -y -c sam-hub deploy/skypilot/sam-one.yaml --detach-run \
   --env SAM_EXTERNAL_URL=https://mesh.example.com \
-  --secret CLOUDFLARE_TUNNEL_TOKEN
+  --secret SAM_TUNNEL_TOKEN
 ```
 
 ### Quick deployment (automatic HTTPS tunnel)
