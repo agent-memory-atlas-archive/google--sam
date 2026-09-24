@@ -1,3 +1,4 @@
+from google.protobuf import timestamp_pb2 as _timestamp_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
@@ -305,6 +306,24 @@ class KeysResponse(_message.Message):
     timestamp: int
     def __init__(self, public_keys: _Optional[_Iterable[bytes]] = ..., timestamp: _Optional[int] = ..., signatures: _Optional[_Iterable[bytes]] = ...) -> None: ...
 
+class MemberCredential(_message.Message):
+    __slots__ = ["biscuit", "control_plane_url", "expire_time", "issued_under_keys", "oidc_session", "router_addresses", "trusted_keys"]
+    BISCUIT_FIELD_NUMBER: _ClassVar[int]
+    CONTROL_PLANE_URL_FIELD_NUMBER: _ClassVar[int]
+    EXPIRE_TIME_FIELD_NUMBER: _ClassVar[int]
+    ISSUED_UNDER_KEYS_FIELD_NUMBER: _ClassVar[int]
+    OIDC_SESSION_FIELD_NUMBER: _ClassVar[int]
+    ROUTER_ADDRESSES_FIELD_NUMBER: _ClassVar[int]
+    TRUSTED_KEYS_FIELD_NUMBER: _ClassVar[int]
+    biscuit: bytes
+    control_plane_url: str
+    expire_time: _timestamp_pb2.Timestamp
+    issued_under_keys: _containers.RepeatedScalarFieldContainer[bytes]
+    oidc_session: OIDCSession
+    router_addresses: _containers.RepeatedScalarFieldContainer[str]
+    trusted_keys: _containers.RepeatedCompositeFieldContainer[TrustedSigningKey]
+    def __init__(self, control_plane_url: _Optional[str] = ..., biscuit: _Optional[bytes] = ..., expire_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ..., trusted_keys: _Optional[_Iterable[_Union[TrustedSigningKey, _Mapping]]] = ..., issued_under_keys: _Optional[_Iterable[bytes]] = ..., router_addresses: _Optional[_Iterable[str]] = ..., oidc_session: _Optional[_Union[OIDCSession, _Mapping]] = ...) -> None: ...
+
 class MeshEvent(_message.Message):
     __slots__ = ["new_public_key", "peer_id", "signature", "timestamp", "type"]
     class Type(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
@@ -329,6 +348,18 @@ class NodeCatalogReport(_message.Message):
     SERVICES_FIELD_NUMBER: _ClassVar[int]
     services: _containers.RepeatedCompositeFieldContainer[ServiceInfo]
     def __init__(self, services: _Optional[_Iterable[_Union[ServiceInfo, _Mapping]]] = ...) -> None: ...
+
+class OIDCSession(_message.Message):
+    __slots__ = ["audience", "client_id", "issuer", "refresh_token"]
+    AUDIENCE_FIELD_NUMBER: _ClassVar[int]
+    CLIENT_ID_FIELD_NUMBER: _ClassVar[int]
+    ISSUER_FIELD_NUMBER: _ClassVar[int]
+    REFRESH_TOKEN_FIELD_NUMBER: _ClassVar[int]
+    audience: str
+    client_id: str
+    issuer: str
+    refresh_token: str
+    def __init__(self, issuer: _Optional[str] = ..., client_id: _Optional[str] = ..., audience: _Optional[str] = ..., refresh_token: _Optional[str] = ...) -> None: ...
 
 class PeerEvidenceResponse(_message.Message):
     __slots__ = ["biscuit", "checked_at", "expiration", "labels", "peer_id", "revocation_ids", "roles", "verifying_key"]
@@ -515,6 +546,14 @@ class TokenRevokeResponse(_message.Message):
     error: str
     success: bool
     def __init__(self, success: bool = ..., error: _Optional[str] = ...) -> None: ...
+
+class TrustedSigningKey(_message.Message):
+    __slots__ = ["public_key", "receive_time"]
+    PUBLIC_KEY_FIELD_NUMBER: _ClassVar[int]
+    RECEIVE_TIME_FIELD_NUMBER: _ClassVar[int]
+    public_key: bytes
+    receive_time: _timestamp_pb2.Timestamp
+    def __init__(self, public_key: _Optional[bytes] = ..., receive_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class EnrollmentStatus(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = []

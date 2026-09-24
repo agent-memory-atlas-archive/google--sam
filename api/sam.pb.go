@@ -23,6 +23,7 @@ package api
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -3023,11 +3024,237 @@ func (x *PeerEvidenceResponse) GetCheckedAt() int64 {
 	return 0
 }
 
+type MemberCredential struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Base URL of the control plane that minted the biscuit.
+	ControlPlaneUrl string `protobuf:"bytes,1,opt,name=control_plane_url,json=controlPlaneUrl,proto3" json:"control_plane_url,omitempty"`
+	// The member's biscuit.
+	Biscuit []byte `protobuf:"bytes,2,opt,name=biscuit,proto3" json:"biscuit,omitempty"`
+	// When the biscuit expires.
+	ExpireTime *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=expire_time,json=expireTime,proto3" json:"expire_time,omitempty"`
+	// Control plane signing keys trusted now; a rotation keeps several valid.
+	TrustedKeys []*TrustedSigningKey `protobuf:"bytes,4,rep,name=trusted_keys,json=trustedKeys,proto3" json:"trusted_keys,omitempty"`
+	// The keys trusted when the biscuit was issued. A key trusted now that is
+	// absent here means a rotation happened since: the biscuit is signed by a
+	// retiring key and must be refreshed before that key leaves its grace
+	// period.
+	IssuedUnderKeys [][]byte `protobuf:"bytes,5,rep,name=issued_under_keys,json=issuedUnderKeys,proto3" json:"issued_under_keys,omitempty"`
+	// Router multiaddrs, `/p2p/<peer id>` suffixed.
+	RouterAddresses []string `protobuf:"bytes,6,rep,name=router_addresses,json=routerAddresses,proto3" json:"router_addresses,omitempty"`
+	// The session that renews an identity enrolled through the mesh's
+	// identity provider. Unset for a member enrolled with a bootstrap token.
+	OidcSession   *OIDCSession `protobuf:"bytes,7,opt,name=oidc_session,json=oidcSession,proto3" json:"oidc_session,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MemberCredential) Reset() {
+	*x = MemberCredential{}
+	mi := &file_api_sam_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MemberCredential) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MemberCredential) ProtoMessage() {}
+
+func (x *MemberCredential) ProtoReflect() protoreflect.Message {
+	mi := &file_api_sam_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MemberCredential.ProtoReflect.Descriptor instead.
+func (*MemberCredential) Descriptor() ([]byte, []int) {
+	return file_api_sam_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *MemberCredential) GetControlPlaneUrl() string {
+	if x != nil {
+		return x.ControlPlaneUrl
+	}
+	return ""
+}
+
+func (x *MemberCredential) GetBiscuit() []byte {
+	if x != nil {
+		return x.Biscuit
+	}
+	return nil
+}
+
+func (x *MemberCredential) GetExpireTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpireTime
+	}
+	return nil
+}
+
+func (x *MemberCredential) GetTrustedKeys() []*TrustedSigningKey {
+	if x != nil {
+		return x.TrustedKeys
+	}
+	return nil
+}
+
+func (x *MemberCredential) GetIssuedUnderKeys() [][]byte {
+	if x != nil {
+		return x.IssuedUnderKeys
+	}
+	return nil
+}
+
+func (x *MemberCredential) GetRouterAddresses() []string {
+	if x != nil {
+		return x.RouterAddresses
+	}
+	return nil
+}
+
+func (x *MemberCredential) GetOidcSession() *OIDCSession {
+	if x != nil {
+		return x.OidcSession
+	}
+	return nil
+}
+
+type TrustedSigningKey struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Raw ed25519 public key.
+	PublicKey []byte `protobuf:"bytes,1,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
+	// When the member first learned the key. A key rotated out is dropped a
+	// grace period after this; unset means unknown and is read as now.
+	ReceiveTime   *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=receive_time,json=receiveTime,proto3" json:"receive_time,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TrustedSigningKey) Reset() {
+	*x = TrustedSigningKey{}
+	mi := &file_api_sam_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TrustedSigningKey) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TrustedSigningKey) ProtoMessage() {}
+
+func (x *TrustedSigningKey) ProtoReflect() protoreflect.Message {
+	mi := &file_api_sam_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TrustedSigningKey.ProtoReflect.Descriptor instead.
+func (*TrustedSigningKey) Descriptor() ([]byte, []int) {
+	return file_api_sam_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *TrustedSigningKey) GetPublicKey() []byte {
+	if x != nil {
+		return x.PublicKey
+	}
+	return nil
+}
+
+func (x *TrustedSigningKey) GetReceiveTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ReceiveTime
+	}
+	return nil
+}
+
+type OIDCSession struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Issuer        string                 `protobuf:"bytes,1,opt,name=issuer,proto3" json:"issuer,omitempty"`
+	ClientId      string                 `protobuf:"bytes,2,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	Audience      string                 `protobuf:"bytes,3,opt,name=audience,proto3" json:"audience,omitempty"`
+	RefreshToken  string                 `protobuf:"bytes,4,opt,name=refresh_token,json=refreshToken,proto3" json:"refresh_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OIDCSession) Reset() {
+	*x = OIDCSession{}
+	mi := &file_api_sam_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OIDCSession) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OIDCSession) ProtoMessage() {}
+
+func (x *OIDCSession) ProtoReflect() protoreflect.Message {
+	mi := &file_api_sam_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OIDCSession.ProtoReflect.Descriptor instead.
+func (*OIDCSession) Descriptor() ([]byte, []int) {
+	return file_api_sam_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *OIDCSession) GetIssuer() string {
+	if x != nil {
+		return x.Issuer
+	}
+	return ""
+}
+
+func (x *OIDCSession) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *OIDCSession) GetAudience() string {
+	if x != nil {
+		return x.Audience
+	}
+	return ""
+}
+
+func (x *OIDCSession) GetRefreshToken() string {
+	if x != nil {
+		return x.RefreshToken
+	}
+	return ""
+}
+
 var File_api_sam_proto protoreflect.FileDescriptor
 
 const file_api_sam_proto_rawDesc = "" +
 	"\n" +
-	"\rapi/sam.proto\x12\x06sam.v1\"b\n" +
+	"\rapi/sam.proto\x12\x06sam.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"b\n" +
 	"\tAuthFrame\x12\x18\n" +
 	"\abiscuit\x18\x01 \x01(\fR\abiscuit\x12%\n" +
 	"\x0etarget_service\x18\x02 \x01(\tR\rtargetService\x12\x14\n" +
@@ -3259,7 +3486,25 @@ const file_api_sam_proto_rawDesc = "" +
 	"checked_at\x18\b \x01(\x03R\tcheckedAt\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*\x94\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe2\x02\n" +
+	"\x10MemberCredential\x12*\n" +
+	"\x11control_plane_url\x18\x01 \x01(\tR\x0fcontrolPlaneUrl\x12\x18\n" +
+	"\abiscuit\x18\x02 \x01(\fR\abiscuit\x12;\n" +
+	"\vexpire_time\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"expireTime\x12<\n" +
+	"\ftrusted_keys\x18\x04 \x03(\v2\x19.sam.v1.TrustedSigningKeyR\vtrustedKeys\x12*\n" +
+	"\x11issued_under_keys\x18\x05 \x03(\fR\x0fissuedUnderKeys\x12)\n" +
+	"\x10router_addresses\x18\x06 \x03(\tR\x0frouterAddresses\x126\n" +
+	"\foidc_session\x18\a \x01(\v2\x13.sam.v1.OIDCSessionR\voidcSession\"q\n" +
+	"\x11TrustedSigningKey\x12\x1d\n" +
+	"\n" +
+	"public_key\x18\x01 \x01(\fR\tpublicKey\x12=\n" +
+	"\freceive_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\vreceiveTime\"\x83\x01\n" +
+	"\vOIDCSession\x12\x16\n" +
+	"\x06issuer\x18\x01 \x01(\tR\x06issuer\x12\x1b\n" +
+	"\tclient_id\x18\x02 \x01(\tR\bclientId\x12\x1a\n" +
+	"\baudience\x18\x03 \x01(\tR\baudience\x12#\n" +
+	"\rrefresh_token\x18\x04 \x01(\tR\frefreshToken*\x94\x01\n" +
 	"\x10EnrollmentStatus\x12!\n" +
 	"\x1dENROLLMENT_STATUS_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19ENROLLMENT_STATUS_PENDING\x10\x01\x12\x1e\n" +
@@ -3284,7 +3529,7 @@ func file_api_sam_proto_rawDescGZIP() []byte {
 }
 
 var file_api_sam_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_api_sam_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
+var file_api_sam_proto_msgTypes = make([]protoimpl.MessageInfo, 50)
 var file_api_sam_proto_goTypes = []any{
 	(EnrollmentStatus)(0),              // 0: sam.v1.EnrollmentStatus
 	(ServiceType)(0),                   // 1: sam.v1.ServiceType
@@ -3331,23 +3576,27 @@ var file_api_sam_proto_goTypes = []any{
 	(*AgentStatusResponse)(nil),        // 42: sam.v1.AgentStatusResponse
 	(*IdentityEvidenceResponse)(nil),   // 43: sam.v1.IdentityEvidenceResponse
 	(*PeerEvidenceResponse)(nil),       // 44: sam.v1.PeerEvidenceResponse
-	nil,                                // 45: sam.v1.EnrollRequest.LabelsEntry
-	nil,                                // 46: sam.v1.BootstrapEnrollRequest.LabelsEntry
-	nil,                                // 47: sam.v1.CommandBackend.EnvEntry
-	nil,                                // 48: sam.v1.ServiceAnnounce.LabelsEntry
-	nil,                                // 49: sam.v1.PeerEvidenceResponse.LabelsEntry
+	(*MemberCredential)(nil),           // 45: sam.v1.MemberCredential
+	(*TrustedSigningKey)(nil),          // 46: sam.v1.TrustedSigningKey
+	(*OIDCSession)(nil),                // 47: sam.v1.OIDCSession
+	nil,                                // 48: sam.v1.EnrollRequest.LabelsEntry
+	nil,                                // 49: sam.v1.BootstrapEnrollRequest.LabelsEntry
+	nil,                                // 50: sam.v1.CommandBackend.EnvEntry
+	nil,                                // 51: sam.v1.ServiceAnnounce.LabelsEntry
+	nil,                                // 52: sam.v1.PeerEvidenceResponse.LabelsEntry
+	(*timestamppb.Timestamp)(nil),      // 53: google.protobuf.Timestamp
 }
 var file_api_sam_proto_depIdxs = []int32{
 	2,  // 0: sam.v1.MeshEvent.type:type_name -> sam.v1.MeshEvent.Type
-	45, // 1: sam.v1.EnrollRequest.labels:type_name -> sam.v1.EnrollRequest.LabelsEntry
-	46, // 2: sam.v1.BootstrapEnrollRequest.labels:type_name -> sam.v1.BootstrapEnrollRequest.LabelsEntry
+	48, // 1: sam.v1.EnrollRequest.labels:type_name -> sam.v1.EnrollRequest.LabelsEntry
+	49, // 2: sam.v1.BootstrapEnrollRequest.labels:type_name -> sam.v1.BootstrapEnrollRequest.LabelsEntry
 	0,  // 3: sam.v1.BootstrapEnrollResponse.status:type_name -> sam.v1.EnrollmentStatus
 	1,  // 4: sam.v1.ServiceInfo.type:type_name -> sam.v1.ServiceType
-	47, // 5: sam.v1.CommandBackend.env:type_name -> sam.v1.CommandBackend.EnvEntry
+	50, // 5: sam.v1.CommandBackend.env:type_name -> sam.v1.CommandBackend.EnvEntry
 	10, // 6: sam.v1.RegisterServiceRequest.service:type_name -> sam.v1.ServiceInfo
 	11, // 7: sam.v1.RegisterServiceRequest.command:type_name -> sam.v1.CommandBackend
 	1,  // 8: sam.v1.ServiceAnnounce.type:type_name -> sam.v1.ServiceType
-	48, // 9: sam.v1.ServiceAnnounce.labels:type_name -> sam.v1.ServiceAnnounce.LabelsEntry
+	51, // 9: sam.v1.ServiceAnnounce.labels:type_name -> sam.v1.ServiceAnnounce.LabelsEntry
 	18, // 10: sam.v1.PolicyConfig.roles:type_name -> sam.v1.PolicyRole
 	19, // 11: sam.v1.PolicyConfig.bindings:type_name -> sam.v1.PolicyBinding
 	10, // 12: sam.v1.NodeCatalogReport.services:type_name -> sam.v1.ServiceInfo
@@ -3358,12 +3607,16 @@ var file_api_sam_proto_depIdxs = []int32{
 	33, // 17: sam.v1.AgentAttachRequest.bundle:type_name -> sam.v1.AgentBundle
 	32, // 18: sam.v1.AgentStatus.ingress:type_name -> sam.v1.AgentIngress
 	41, // 19: sam.v1.AgentStatusResponse.agents:type_name -> sam.v1.AgentStatus
-	49, // 20: sam.v1.PeerEvidenceResponse.labels:type_name -> sam.v1.PeerEvidenceResponse.LabelsEntry
-	21, // [21:21] is the sub-list for method output_type
-	21, // [21:21] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	52, // 20: sam.v1.PeerEvidenceResponse.labels:type_name -> sam.v1.PeerEvidenceResponse.LabelsEntry
+	53, // 21: sam.v1.MemberCredential.expire_time:type_name -> google.protobuf.Timestamp
+	46, // 22: sam.v1.MemberCredential.trusted_keys:type_name -> sam.v1.TrustedSigningKey
+	47, // 23: sam.v1.MemberCredential.oidc_session:type_name -> sam.v1.OIDCSession
+	53, // 24: sam.v1.TrustedSigningKey.receive_time:type_name -> google.protobuf.Timestamp
+	25, // [25:25] is the sub-list for method output_type
+	25, // [25:25] is the sub-list for method input_type
+	25, // [25:25] is the sub-list for extension type_name
+	25, // [25:25] is the sub-list for extension extendee
+	0,  // [0:25] is the sub-list for field type_name
 }
 
 func init() { file_api_sam_proto_init() }
@@ -3381,7 +3634,7 @@ func file_api_sam_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_sam_proto_rawDesc), len(file_api_sam_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   47,
+			NumMessages:   50,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

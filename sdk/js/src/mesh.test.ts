@@ -105,8 +105,11 @@ test("enroll persists identity and credential, load resumes them, refresh rotate
 
     await resumed.refresh();
     assert.deepEqual(resumed.credential.biscuit, text("biscuit-2"));
-    const onDisk = JSON.parse(await readFile(join(dir, "state", "credential.json"), "utf8")) as { biscuit: string };
-    assert.equal(Buffer.from(onDisk.biscuit, "base64").toString(), "biscuit-2");
+    const onDisk = JSON.parse(await readFile(join(dir, "state", "credential.json"), "utf8")) as Record<string, unknown>;
+    assert.equal(Buffer.from(onDisk.biscuit as string, "base64").toString(), "biscuit-2");
+    // The file is api.MemberCredential as protojson: proto field names, RFC 3339 instants.
+    assert.deepEqual(Object.keys(onDisk).sort(), ["biscuit", "control_plane_url", "expire_time", "issued_under_keys", "router_addresses", "trusted_keys"]);
+    assert.match(onDisk.expire_time as string, /^\d{4}-\d{2}-\d{2}T.*Z$/);
 
     // Enrolling again from the same directory resumes the saved credential
     // without a token; another control plane or an expiring credential
@@ -121,10 +124,10 @@ test("enroll persists identity and credential, load resumes them, refresh rotate
     const elsewhere = await AgentMesh.enroll({ controlPlaneUrl: "http://127.0.0.2:1", stateDir: join(dir, "state"), bootstrapToken: "sbt_secret", fetch: cp.fetch });
     assert.equal(elsewhere.peerId, mesh.peerId);
     assert.equal(cp.issued, issuedBefore + 1);
-    assert.equal(elsewhere.credential.controlPlaneUrl, "http://127.0.0.2:1/");
+    assert.equal(elsewhere.credential.controlPlaneUrl, "http://127.0.0.2:1");
 
-    const expiring = JSON.parse(await readFile(join(dir, "state", "credential.json"), "utf8")) as { expiration: number };
-    expiring.expiration = Math.floor(Date.now() / 1000) + 60;
+    const expiring = JSON.parse(await readFile(join(dir, "state", "credential.json"), "utf8")) as { expire_time: string };
+    expiring.expire_time = new Date(Date.now() + 60_000).toISOString();
     await writeFile(join(dir, "state", "credential.json"), JSON.stringify(expiring));
     await AgentMesh.enroll({ controlPlaneUrl: "http://127.0.0.2:1", stateDir: join(dir, "state"), bootstrapToken: "sbt_secret", fetch: cp.fetch });
     assert.equal(cp.issued, issuedBefore + 2);

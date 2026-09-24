@@ -912,6 +912,7 @@ func main() {
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(joinCmd)
 	rootCmd.AddCommand(resetCmd)
+	rootCmd.AddCommand(newStateCmd())
 	rootCmd.AddCommand(newSkillCmd())
 	rootCmd.AddCommand(newDebugCmd())
 

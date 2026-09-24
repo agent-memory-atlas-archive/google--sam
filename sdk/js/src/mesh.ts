@@ -113,7 +113,7 @@ export class AgentMesh {
     const controlPlane = newClient(options);
     if (options.stateDir !== undefined && saved !== undefined && saved.peerId === identity.peerId) {
       const credential = await loadCredential(options.stateDir);
-      if (credential !== undefined && credential.controlPlaneUrl === controlPlane.url.toString() && credentialTimeToLiveSeconds(credential) > REUSE_MIN_TTL_SECONDS) {
+      if (credential !== undefined && sameBaseUrl(credential.controlPlaneUrl, controlPlane.url) && credentialTimeToLiveSeconds(credential) > REUSE_MIN_TTL_SECONDS) {
         return new AgentMesh(identity, controlPlane, credential, options.stateDir);
       }
     }
@@ -153,7 +153,7 @@ export class AgentMesh {
       identity,
       controlPlane,
       {
-        controlPlaneUrl: controlPlane.url.toString(),
+        controlPlaneUrl: baseUrl(controlPlane.url),
         biscuit: enrollment.biscuit,
         expiration: enrollment.expiration,
         controlPlaneKeys,
@@ -333,6 +333,15 @@ async function loadCredential(stateDir: string): Promise<MeshCredential | undefi
     }
     throw err;
   }
+}
+
+/** The form every implementation persists: scheme, host, port, path, no trailing slash. */
+function baseUrl(url: URL | string): string {
+  return String(url).replace(/\/+$/, "");
+}
+
+function sameBaseUrl(a: URL | string, b: URL | string): boolean {
+  return baseUrl(a) === baseUrl(b);
 }
 
 async function writeAtomic(path: string, data: Uint8Array | string, mode: number): Promise<void> {

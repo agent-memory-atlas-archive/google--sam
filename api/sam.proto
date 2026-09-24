@@ -16,6 +16,8 @@ syntax = "proto3";
 package sam.v1;
 option go_package = "github.com/google/sam/api";
 
+import "google/protobuf/timestamp.proto";
+
 
 
 message AuthFrame {
@@ -459,6 +461,55 @@ message PeerEvidenceResponse {
   int64 expiration = 6;
   repeated string revocation_ids = 7; // hex
   int64 checked_at = 8;
+}
+
+// ============================================================================
+// Member state
+// ============================================================================
+//
+// What a member keeps between runs besides its private key, in one message
+// every implementation persists. The private key is the libp2p crypto.proto
+// PrivateKey encoding. The SDKs keep both in a state directory as
+// `identity.key` and `credential.json` (protojson of MemberCredential with
+// proto field names, unknown fields rejected); sam-node keeps both in its
+// database. `sam-node state export` and `sam-node state import` move a
+// member between the two, so an identity enrolled by one implementation
+// runs under another.
+
+message MemberCredential {
+  // Base URL of the control plane that minted the biscuit.
+  string control_plane_url = 1;
+  // The member's biscuit.
+  bytes biscuit = 2;
+  // When the biscuit expires.
+  google.protobuf.Timestamp expire_time = 3;
+  // Control plane signing keys trusted now; a rotation keeps several valid.
+  repeated TrustedSigningKey trusted_keys = 4;
+  // The keys trusted when the biscuit was issued. A key trusted now that is
+  // absent here means a rotation happened since: the biscuit is signed by a
+  // retiring key and must be refreshed before that key leaves its grace
+  // period.
+  repeated bytes issued_under_keys = 5;
+  // Router multiaddrs, `/p2p/<peer id>` suffixed.
+  repeated string router_addresses = 6;
+  // The session that renews an identity enrolled through the mesh's
+  // identity provider. Unset for a member enrolled with a bootstrap token.
+  OIDCSession oidc_session = 7;
+}
+
+message TrustedSigningKey {
+  // Raw ed25519 public key.
+  bytes public_key = 1;
+  // When the member first learned the key. A key rotated out is dropped a
+  // grace period after this; unset means unknown and is read as now.
+  google.protobuf.Timestamp receive_time = 2;
+}
+
+message OIDCSession {
+  string issuer = 1;
+  string client_id = 2;
+  string audience = 3;
+  string refresh_token = 4;
 }
 
 

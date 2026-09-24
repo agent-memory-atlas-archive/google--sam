@@ -14,10 +14,12 @@
 
 from __future__ import annotations
 
-import base64
-import json
 import time
 from dataclasses import dataclass, field
+from typing import Optional
+
+from google.protobuf import json_format
+from google.protobuf.timestamp_pb2 import Timestamp
 
 from ._proto import sam_pb2 as pb
 
@@ -40,6 +42,11 @@ class MeshCredential:
     issued_under_keys: list[bytes] = field(default_factory=list)
     # Router multiaddrs, `/p2p/<peer id>` suffixed, as handed out at enrollment.
     router_addresses: list[str] = field(default_factory=list)
+    # What other implementations persist in the same file and this SDK does
+    # not use: when each key was learned (by key bytes) and sam-node's OIDC
+    # session. Carried through so a state directory survives a round trip.
+    receive_times: dict[bytes, Timestamp] = field(default_factory=dict, compare=False)
+    oidc_session: Optional[pb.OIDCSession] = field(default=None, compare=False)
 
     def time_to_live_seconds(self, now: float | None = None) -> int:
         """Seconds of validity left on the biscuit; negative once expired."""
@@ -51,34 +58,55 @@ class MeshCredential:
         return any(bytes(k) not in issued for k in self.control_plane_keys)
 
     def to_json(self) -> str:
-        return json.dumps(
-            {
-                "control_plane_url": self.control_plane_url,
-                "biscuit": base64.b64encode(self.biscuit).decode(),
-                "expiration": self.expiration,
-                "control_plane_keys": [base64.b64encode(k).decode() for k in self.control_plane_keys],
-                "issued_under_keys": [base64.b64encode(k).decode() for k in self.issued_under_keys],
-                "router_addresses": list(self.router_addresses),
-            },
-            indent=2,
-        ) + "\n"
+        """credential.json: the api.MemberCredential message as protojson with
+        proto field names, the layout `sam-node state export` writes and every
+        SDK reads."""
+        message = pb.MemberCredential(
+            control_plane_url=self.control_plane_url,
+            biscuit=self.biscuit,
+            issued_under_keys=[bytes(k) for k in self.issued_under_keys],
+            router_addresses=list(self.router_addresses),
+        )
+        message.expire_time.FromSeconds(self.expiration)
+        for k in self.control_plane_keys:
+            entry = message.trusted_keys.add(public_key=bytes(k))
+            if (received := self.receive_times.get(bytes(k))) is not None:
+                entry.receive_time.CopyFrom(received)
+        if self.oidc_session is not None:
+            message.oidc_session.CopyFrom(self.oidc_session)
+        return json_format.MessageToJson(message, preserving_proto_field_name=True, indent=2) + "\n"
 
     @classmethod
     def from_json(cls, text: str) -> "MeshCredential":
-        raw = json.loads(text)
+        """Reads credential.json. An unknown field is an error, as on every SAM surface."""
         try:
-            control_plane_keys = [base64.b64decode(k) for k in raw.get("control_plane_keys", [])]
-            return cls(
-                control_plane_url=str(raw["control_plane_url"]),
-                biscuit=base64.b64decode(raw["biscuit"]),
-                expiration=int(raw["expiration"]),
-                control_plane_keys=control_plane_keys,
-                # A file from before this field: the set known then is the best answer.
-                issued_under_keys=[base64.b64decode(k) for k in raw["issued_under_keys"]] if "issued_under_keys" in raw else control_plane_keys,
-                router_addresses=[str(a) for a in raw.get("router_addresses", [])],
-            )
-        except (KeyError, TypeError, ValueError) as err:
-            raise ValueError("malformed credential file") from err
+            message = json_format.Parse(text, pb.MemberCredential())
+        except json_format.ParseError as err:
+            raise ValueError(f"malformed credential file: {err}") from err
+        if not message.control_plane_url or not message.biscuit or not message.HasField("expire_time"):
+            raise ValueError("malformed credential file: control_plane_url, biscuit and expire_time are required")
+        control_plane_keys = [bytes(k.public_key) for k in message.trusted_keys]
+        receive_times: dict[bytes, Timestamp] = {}
+        for k in message.trusted_keys:
+            if k.HasField("receive_time"):
+                received = Timestamp()
+                received.CopyFrom(k.receive_time)
+                receive_times[bytes(k.public_key)] = received
+        oidc_session = None
+        if message.HasField("oidc_session"):
+            oidc_session = pb.OIDCSession()
+            oidc_session.CopyFrom(message.oidc_session)
+        return cls(
+            control_plane_url=message.control_plane_url,
+            biscuit=bytes(message.biscuit),
+            expiration=message.expire_time.ToSeconds(),
+            control_plane_keys=control_plane_keys,
+            # A file that recorded no issuance set: the keys trusted then are the best answer.
+            issued_under_keys=[bytes(k) for k in message.issued_under_keys] or list(control_plane_keys),
+            router_addresses=list(message.router_addresses),
+            receive_times=receive_times,
+            oidc_session=oidc_session,
+        )
 
 
 def encode_auth_frame(biscuit: bytes, target_service: str = "", agent: str = "") -> bytes:

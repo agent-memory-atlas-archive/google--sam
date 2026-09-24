@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
-import { AuthFrameSchema, AuthResponseSchema, type AuthResponse } from "./gen/sam_pb.ts";
+import { create, fromBinary, fromJson, toBinary, toJson } from "@bufbuild/protobuf";
+import { timestampDate, timestampFromDate, type Timestamp } from "@bufbuild/protobuf/wkt";
+import { AuthFrameSchema, AuthResponseSchema, MemberCredentialSchema, type AuthResponse, type OIDCSession } from "./gen/sam_pb.ts";
 
 /** What a member holds after enrolling: its biscuit and what it trusts. */
 export interface MeshCredential {
@@ -33,6 +34,12 @@ export interface MeshCredential {
   issuedUnderKeys: Uint8Array[];
   /** Router multiaddrs, `/p2p/<peer id>` suffixed, as handed out at enrollment. */
   routerAddresses: string[];
+  /**
+   * What other implementations persist in the same file and this SDK does
+   * not use: key receipt times and sam-node's OIDC session. Carried through
+   * so a state directory survives a round trip untouched.
+   */
+  extra?: { receiveTime: Map<string, Timestamp>; oidcSession?: OIDCSession };
 }
 
 /** Whether a key trusted now was unknown when the credential was issued. */
@@ -60,40 +67,47 @@ export function decodeAuthResponse(bytes: Uint8Array): AuthResponse {
   return fromBinary(AuthResponseSchema, bytes);
 }
 
-interface CredentialJSON {
-  control_plane_url: string;
-  biscuit: string;
-  expiration: number;
-  control_plane_keys: string[];
-  issued_under_keys?: string[];
-  router_addresses: string[];
-}
-
+/**
+ * credential.json is the api.MemberCredential message as protojson with
+ * proto field names, the layout `sam-node state export` writes and every
+ * SDK reads. An unknown field is an error, as on every SAM surface.
+ */
 export function credentialToJSON(c: MeshCredential): string {
-  const out: CredentialJSON = {
-    control_plane_url: c.controlPlaneUrl,
-    biscuit: Buffer.from(c.biscuit).toString("base64"),
-    expiration: c.expiration,
-    control_plane_keys: c.controlPlaneKeys.map((k) => Buffer.from(k).toString("base64")),
-    issued_under_keys: c.issuedUnderKeys.map((k) => Buffer.from(k).toString("base64")),
-    router_addresses: c.routerAddresses,
-  };
-  return JSON.stringify(out, null, 2) + "\n";
+  const message = create(MemberCredentialSchema, {
+    controlPlaneUrl: c.controlPlaneUrl,
+    biscuit: c.biscuit,
+    expireTime: timestampFromDate(new Date(c.expiration * 1000)),
+    trustedKeys: c.controlPlaneKeys.map((k) => {
+      const receiveTime = c.extra?.receiveTime.get(Buffer.from(k).toString("hex"));
+      return receiveTime !== undefined ? { publicKey: k, receiveTime } : { publicKey: k };
+    }),
+    issuedUnderKeys: c.issuedUnderKeys,
+    routerAddresses: c.routerAddresses,
+    ...(c.extra?.oidcSession !== undefined ? { oidcSession: c.extra.oidcSession } : {}),
+  });
+  return JSON.stringify(toJson(MemberCredentialSchema, message, { useProtoFieldName: true }), null, 2) + "\n";
 }
 
 export function credentialFromJSON(text: string): MeshCredential {
-  const raw = JSON.parse(text) as Partial<CredentialJSON>;
-  if (typeof raw.control_plane_url !== "string" || typeof raw.biscuit !== "string" || typeof raw.expiration !== "number") {
-    throw new Error("malformed credential file");
+  const message = fromJson(MemberCredentialSchema, JSON.parse(text));
+  if (message.controlPlaneUrl === "" || message.biscuit.length === 0 || message.expireTime === undefined) {
+    throw new Error("malformed credential file: control_plane_url, biscuit and expire_time are required");
   }
-  const controlPlaneKeys = (raw.control_plane_keys ?? []).map((k) => new Uint8Array(Buffer.from(k, "base64")));
+  const controlPlaneKeys = message.trustedKeys.map((k) => k.publicKey);
+  const receiveTime = new Map<string, Timestamp>();
+  for (const k of message.trustedKeys) {
+    if (k.receiveTime !== undefined) {
+      receiveTime.set(Buffer.from(k.publicKey).toString("hex"), k.receiveTime);
+    }
+  }
   return {
-    controlPlaneUrl: raw.control_plane_url,
-    biscuit: new Uint8Array(Buffer.from(raw.biscuit, "base64")),
-    expiration: raw.expiration,
+    controlPlaneUrl: message.controlPlaneUrl,
+    biscuit: message.biscuit,
+    expiration: Math.floor(timestampDate(message.expireTime).getTime() / 1000),
     controlPlaneKeys,
-    // A file from before this field: the set known then is the best answer.
-    issuedUnderKeys: raw.issued_under_keys !== undefined ? raw.issued_under_keys.map((k) => new Uint8Array(Buffer.from(k, "base64"))) : controlPlaneKeys,
-    routerAddresses: raw.router_addresses ?? [],
+    // A file that recorded no issuance set: the keys trusted then are the best answer.
+    issuedUnderKeys: message.issuedUnderKeys.length > 0 ? message.issuedUnderKeys : controlPlaneKeys,
+    routerAddresses: message.routerAddresses,
+    extra: { receiveTime, ...(message.oidcSession !== undefined ? { oidcSession: message.oidcSession } : {}) },
   };
 }

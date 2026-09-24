@@ -397,7 +397,10 @@ and received a credential: a signed token that names the member, its role
 and the routers it may use. The identity key and the credential live in the
 state directory, so the next run resumes without a token, and the SDK
 renews the credential before it expires. Delete the directory to enroll
-afresh, for instance with other labels.
+afresh, for instance with other labels. The directory has the same layout
+in both SDKs and in `sam-node`: a program in one language resumes a
+directory written by the other, and `sam-node state import` runs the same
+identity as a node (see the [sam-node reference](../../reference/sam-node/#state)).
 
 `join` connected to the routers named in the credential, proved the
 program's identity to each and verified the router's own credential, and

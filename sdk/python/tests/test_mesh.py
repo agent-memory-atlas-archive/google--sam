@@ -16,6 +16,7 @@ import json
 import stat
 import time
 import urllib.parse
+from datetime import datetime, timezone
 
 import pytest
 
@@ -84,6 +85,9 @@ def test_enroll_persists_load_resumes_refresh_rotates(tmp_path):
     assert resumed.credential.biscuit == b"biscuit-2"
     on_disk = json.loads((state / "credential.json").read_text())
     assert on_disk["biscuit"] == "YmlzY3VpdC0y"  # base64("biscuit-2")
+    # The file is api.MemberCredential as protojson: proto field names, RFC 3339 instants.
+    assert sorted(on_disk) == ["biscuit", "control_plane_url", "expire_time", "issued_under_keys", "router_addresses", "trusted_keys"]
+    assert on_disk["expire_time"].endswith("Z")
 
     # Enrolling again from the same directory resumes the saved credential
     # without a token; another control plane or an expiring credential
@@ -102,7 +106,7 @@ def test_enroll_persists_load_resumes_refresh_rotates(tmp_path):
     assert elsewhere.credential.control_plane_url == "http://127.0.0.2:1"
 
     expiring = json.loads((state / "credential.json").read_text())
-    expiring["expiration"] = int(time.time()) + 60
+    expiring["expire_time"] = datetime.fromtimestamp(time.time() + 60, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     (state / "credential.json").write_text(json.dumps(expiring))
     AgentMesh.enroll("http://127.0.0.2:1", bootstrap_token="sbt_secret", state_dir=state, transport=cp.transport)
     assert cp.issued == issued_before + 2

@@ -129,6 +129,23 @@ alters one of these, the SDKs change with it.
   `peer_id` is not derived from `public_key`
   (`internal/controlplane/server.go`, `pID.MatchesPublicKey`).
 
+### State directory
+
+What a member keeps between runs is `api.MemberCredential` plus its private
+key, and every implementation persists the same two things. The SDKs keep
+them in a directory: `identity.key` is the libp2p `PrivateKey` encoding
+above; `credential.json` is `MemberCredential` as protojson with proto field
+names (`control_plane_url`, `biscuit`, `expire_time` as RFC 3339,
+`trusted_keys[].public_key`, `issued_under_keys`, `router_addresses`,
+`oidc_session`), written with mode `0600` in a directory of mode `0700`.
+An unknown field is an error. `control_plane_url` has no trailing slash.
+`sam-node` keeps the same message in `agent.db`, and `sam-node state
+export|import <dir>` moves a member between the two
+(`internal/node/statedir.go`). `TestNativeSDKExamples` resumes each SDK's
+directory with the other SDK and with an imported `sam-node`. Fields an SDK
+does not use (`receive_time`, `oidc_session`) are carried through on save,
+so a directory survives a round trip through any implementation.
+
 ### Control plane (protobuf over HTTP)
 
 All requests and responses are `application/x-protobuf` bodies of the

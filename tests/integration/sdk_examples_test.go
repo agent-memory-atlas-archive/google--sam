@@ -205,8 +205,60 @@ func TestNativeSDKExamples(t *testing.T) {
 			if !strings.Contains(models, `"gemma3"`) || !strings.Contains(models, caller) {
 				t.Fatalf("models %q: want gemma3 owned by the caller %s", models, caller)
 			}
+
+			// The state directory is the same layout in every implementation:
+			// the other SDK's call example resumes this identity from it, and
+			// so does a sam-node after `state import`. Each proves it by
+			// reaching a greeter as the same peer.
+			for _, other := range launchers {
+				if other.name == l.name {
+					continue
+				}
+				out := runExample(t, mesh, other, withoutToken, "mcp://greeter", "greet", `{"name": "sam"}`)
+				if got := expectLine(t, out, "on the mesh as "); got != caller {
+					t.Fatalf("%s resumed %s's state directory as %s, want %s", other.name, l.name, got, caller)
+				}
+				expectLine(t, out, "hello sam")
+			}
+			importedNode := importStateIntoNode(t, mesh, stateDir)
+			if importedNode.peerID.String() != caller {
+				t.Fatalf("sam-node imported %s's state directory as %s, want %s", l.name, importedNode.peerID, caller)
+			}
+			importedAPI := importedNode.waitForAPI(t)
+			waitForPeerOnRouter(t, mesh.cpPort, mesh.adminToken, caller, 10*time.Second)
+			answer, err := callMCPAllowError(t, importedAPI, "imported-token", "call_remote_tool", map[string]any{
+				"peer_id": servers[0].peerID, "tool_name": "mcp://greeter/greet", "arguments": map[string]any{"name": "node"},
+			})
+			if err != nil || !strings.Contains(answer, "hello node") {
+				t.Fatalf("sam-node running %s's identity could not call greeter: %v\n%s", l.name, err, answer)
+			}
 		})
 	}
+}
+
+// importStateIntoNode runs `sam-node state import` on a fresh data directory
+// and starts a node from it, so the node runs as the member the directory
+// holds. The import refuses a token: the identity is already enrolled.
+func importStateIntoNode(t *testing.T, mesh *sdkMesh, stateDir string) *backgroundNode {
+	t.Helper()
+	nodeBin := buildBinary(t, "./cmd/sam-node")
+	nodeHome := filepath.Join(t.TempDir(), "imported")
+	dataDir := filepath.Join(nodeHome, "data")
+	importCmd := exec.Command(nodeBin, "state", "import", stateDir, "--data-dir", dataDir)
+	importCmd.Dir = mesh.root
+	if out, err := importCmd.CombinedOutput(); err != nil {
+		t.Fatalf("sam-node state import: %v\n%s", err, out)
+	}
+	return launchNode(t, nodeBin,
+		append(os.Environ(), "HOME="+nodeHome, "XDG_CONFIG_HOME="+filepath.Join(nodeHome, ".config")),
+		nodeHome, "run",
+		"--data-dir", dataDir,
+		"--control-plane", mesh.baseURL,
+		"--allow-loopback",
+		"--api-token-path", tokenPath(t, "imported-token"),
+		"--discovery-interval", "100ms",
+		"--log-level", "debug",
+	)
 }
 
 // startExampleServer starts a configured serve example and waits for its

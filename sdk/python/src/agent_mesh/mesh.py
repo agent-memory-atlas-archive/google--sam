@@ -98,7 +98,7 @@ class AgentMesh:
         control_plane = ControlPlaneClient(control_plane_url, allow_insecure=allow_insecure, transport=transport)
         if state is not None and saved is not None and saved.peer_id == identity.peer_id:
             credential = _load_credential(state)
-            if credential is not None and credential.control_plane_url == control_plane.url and credential.time_to_live_seconds() > _REUSE_MIN_TTL_SECONDS:
+            if credential is not None and credential.control_plane_url.rstrip("/") == control_plane.url.rstrip("/") and credential.time_to_live_seconds() > _REUSE_MIN_TTL_SECONDS:
                 return cls(identity, control_plane, credential, state)
         given = sum(v is not None for v in (bootstrap_token, bootstrap_token_path, jwt))
         if given != 1:
