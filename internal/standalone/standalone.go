@@ -29,7 +29,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -673,6 +672,31 @@ func ensureRouterKey(keyPath, adminToken string) error {
 	return os.WriteFile(keyPath, data, 0o600)
 }
 
+type responseRecorder struct {
+	header http.Header
+	body   bytes.Buffer
+	code   int
+}
+
+func newResponseRecorder() *responseRecorder {
+	return &responseRecorder{
+		header: make(http.Header),
+		code:   http.StatusOK,
+	}
+}
+
+func (r *responseRecorder) Header() http.Header {
+	return r.header
+}
+
+func (r *responseRecorder) Write(b []byte) (int, error) {
+	return r.body.Write(b)
+}
+
+func (r *responseRecorder) WriteHeader(statusCode int) {
+	r.code = statusCode
+}
+
 // wrapPublicHTTPHandler augments control-plane endpoints that return
 // RouterAddresses (/info, /enroll, /enroll/status, /enroll/oidc, /refresh) on
 // the public listener when no explicit --external-url was configured: it
@@ -691,25 +715,26 @@ func (s *Server) wrapPublicHTTPHandler(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		rec := httptest.NewRecorder()
+		rec := newResponseRecorder()
 		next.ServeHTTP(rec, r)
 		for k, vals := range rec.Header() {
 			for _, v := range vals {
 				w.Header().Add(k, v)
 			}
 		}
-		if rec.Code != http.StatusOK {
-			w.WriteHeader(rec.Code)
-			_, _ = w.Write(rec.Body.Bytes())
+		if rec.code != http.StatusOK {
+			w.WriteHeader(rec.code)
+			_, _ = w.Write(rec.body.Bytes())
 			return
 		}
-		out, ok := prependInferredRouterAddr(r.URL.Path, rec.Body.Bytes(), inferredAddr)
+		out, ok := prependInferredRouterAddr(r.URL.Path, rec.body.Bytes(), inferredAddr)
 		if !ok {
-			w.WriteHeader(rec.Code)
-			_, _ = w.Write(rec.Body.Bytes())
+			w.WriteHeader(rec.code)
+			_, _ = w.Write(rec.body.Bytes())
 			return
 		}
 		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.Header().Del("Content-Length")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(out)
 	})

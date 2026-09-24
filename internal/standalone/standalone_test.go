@@ -184,3 +184,22 @@ func TestPrependInferredRouterAddr(t *testing.T) {
 		t.Fatalf("BootstrapEnrollResponse.RouterAddresses = %v, want [%s %s]", enrollOut.RouterAddresses, inferred, local)
 	}
 }
+
+func TestResponseRecorder(t *testing.T) {
+	rec := newResponseRecorder()
+	rec.Header().Set("Content-Length", "12")
+	rec.WriteHeader(http.StatusCreated)
+	if _, err := rec.Write([]byte("hello world!")); err != nil {
+		t.Fatalf("rec.Write: %v", err)
+	}
+	if rec.code != http.StatusCreated {
+		t.Fatalf("rec.code = %d, want %d", rec.code, http.StatusCreated)
+	}
+	if got := rec.body.String(); got != "hello world!" {
+		t.Fatalf("rec.body = %q, want %q", got, "hello world!")
+	}
+	if got := rec.Header().Get("Content-Length"); got != "12" {
+		t.Fatalf("rec.Header(Content-Length) = %q, want 12", got)
+	}
+}
+

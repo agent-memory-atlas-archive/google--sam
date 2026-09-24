@@ -16,10 +16,13 @@
 name: sam-hub
 
 resources:
-  cpus: 2+
-  memory: 4+
   disk_size: 20
   use_spot: false
+  any_of:
+    - infra: gcp
+      instance_type: e2-standard-2
+    - cpus: 2+
+      memory: 4+
 
 envs:
   SAM_EXTERNAL_URL: ""
