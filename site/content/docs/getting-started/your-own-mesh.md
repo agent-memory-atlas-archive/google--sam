@@ -6,26 +6,23 @@ aliases:
   - /docs/user/device-enrollment/
 ---
 
-The quick start joined a mesh that someone else runs. This page runs one for
-you: a control plane, a router and a web console on your laptop, in one
-process, with two nodes talking through it. One node publishes a model that
-runs on your machine, the other calls it. `sam-one` runs the same code as a
-Kubernetes deployment, so what you learn here applies there too.
+This page gets a mesh of your own running in a few minutes: a control plane,
+a router and a web console on your laptop, in one process called `sam-one`.
+You then put a member on it, open the console, and see a model that runs on
+your machine answer a request from another member. `sam-one` runs the same
+code as a Kubernetes deployment, so what you learn here applies there too.
 
 You need the `sam-one` and `sam-node` binaries. The
-[install script](../quickstart/#1-install) provides both. The model is served
-by [Ollama](https://ollama.com); any OpenAI-compatible server works in its
-place.
+[install script](../quickstart/#1-install) provides both.
 
-## 1. Start the control plane
+## 1. Start the mesh
 
 ```bash
 sam-one --data-dir ~/sam-one
 ```
 
 `--data-dir` holds the database, the router's key and the generated tokens.
-If you delete it, you get a new mesh. After a moment `sam-one` prints a
-banner:
+Delete it and you get a new mesh. After a moment `sam-one` prints a banner:
 
 ```text
 ══════════════════════════════════════════════════════════════════
@@ -42,30 +39,66 @@ To enroll a node:
 ══════════════════════════════════════════════════════════════════
 ```
 
-`sam-one` picked a free port. Pass `--port 8080` for a fixed one. The **join
-token** is a standing bootstrap token that lets nodes enroll without an
-identity provider. The **admin token** authenticates the console and the
-admin API. Both are also written to files in the data directory, and the rest
-of this page reads them from there.
+Two things in the banner matter for the rest of this page:
 
-On first boot, `sam-one` seeds an open development policy and logs a warning
-about it: any enrolled node may register any service and call any service.
-This is a reasonable default for a laptop and a bad one for anything shared.
-The last section explains how to replace it.
+- The **API URL** is the address of the mesh. `sam-one` picked a free port;
+  pass `--port 8080` for a fixed one.
+- The **join token** admits new members. It is also written to
+  `~/sam-one/join-token`, and the steps below read it from there. The
+  **admin token** opens the console and the admin API; it is in
+  `~/sam-one/admin-token`.
 
-## 2. Publish a model from one node
+Keep this terminal open. Everything else happens in a second one, with the
+URL from your banner:
 
-A node publishes backends that speak one of three protocols, and the
-service `type` says which: `inference` for an OpenAI-compatible API, `mcp`
-for an MCP server, `a2a` for an A2A agent. The type is a contract, not a
-label. The node speaks that protocol to the backend and to nobody else: an
-`inference` backend is offered for the models it lists on `/v1/models`, an
-`mcp` server is advertised once the node has completed an MCP session with
-it, an `a2a` agent once it has served its agent card. A plain web server
-declared under any of these types is never advertised. The mesh is not a
-generic HTTP tunnel.
+```bash
+export URL=http://127.0.0.1:33775
+```
 
-Pull a small model and declare Ollama as an `inference` service. The
+On first boot `sam-one` seeds an open development policy and logs a warning:
+any enrolled member may publish any service and call any service. That is
+right for a laptop and wrong for anything shared; [step 5](#5-before-you-share-it)
+replaces it.
+
+### Reaching it from other machines
+
+Skip this if everything stays on your laptop. A member on another machine
+needs an `https` URL, because the control plane is the member's trust root
+and SAM refuses to fetch it over plaintext from a remote address.
+
+On a laptop behind NAT, the quickest way to an `https` URL is a temporary
+tunnel:
+
+```bash
+sam-one --data-dir ~/sam-one --tunnel cloudflare
+```
+
+This publishes the port on a random `trycloudflare.com` hostname, with no
+account needed, and prints that URL in the banner in place of the local one.
+If `cloudflared` is not installed, `sam-one` offers to download a pinned,
+checksum-verified release into the data directory; `--tunnel-install`
+accepts without asking. Set `URL` to the tunnel URL, copy the join token
+file to the other machine, and the commands below work there unchanged.
+
+With a real hostname and a reverse proxy in front, pass
+`--external-url https://mesh.example.com` instead. The
+[Cloud Run guide](../../guides/cloud-run/) shows a hosted variant.
+
+With `--tunnel` or any other `https` URL, `sam-one` also prints a QR code
+that enrolls a phone running the SAM Connect app, which is in
+[preview](../../preview/mobile/).
+
+<!-- TODO(screenshot): the banner with a tunnel URL and the QR code. -->
+
+## 2. Put a member on it
+
+A member is anything that holds an identity the control plane issued and
+speaks to the mesh through the router: a `sam-node` beside an application, a
+program written with a [native SDK](../../guides/native-sdks/), or a phone.
+This page uses `sam-node` because it needs no code.
+
+Pull a small model with [Ollama](https://ollama.com) (any OpenAI-compatible
+server works in its place) and declare it as an `inference` service. The
 `target_url` is the backend's root, without `/v1`; the node adds the prefix:
 
 ```bash
@@ -79,24 +112,12 @@ services:
     description: "Ollama on my laptop"
     target_url: "http://127.0.0.1:11434"
 EOF
-```
-
-Then run a node with it. Substitute the port from your banner:
-
-```bash
-URL=http://127.0.0.1:33775
 
 sam-node run --control-plane $URL \
   --bootstrap-token-path ~/sam-one/join-token \
   --config ~/node-a.yaml \
   --data-dir ~/node-a --bind-addr= --allow-loopback --listen /ip4/127.0.0.1/tcp/0
 ```
-
-Three of these flags are only needed because both nodes run on one machine.
-`--bind-addr=` (an empty value) keeps the node's local API on its Unix
-socket, so the two nodes do not compete for port 8080. `--allow-loopback`
-lets the nodes advertise and dial `127.0.0.1`. `--listen .../tcp/0` picks a
-free peer-to-peer port. On separate machines you would not pass any of them.
 
 The node enrolls with the join token, connects to the router and prints its
 peer ID:
@@ -106,16 +127,52 @@ SAM Node Online.
 PeerID: 12D3KooWSCnbUoZ8Jv3EKGv17LqEWtnTMfZ3XYJUg2WTm5Gz2hUK
 ```
 
+Three of the flags are only needed because you will run a second node on
+the same machine in the next step. `--bind-addr=` (an empty value) keeps the
+node's local API on its Unix socket so the two nodes do not compete for port
+8080, `--allow-loopback` lets them advertise and dial `127.0.0.1`, and
+`--listen .../tcp/0` picks a free peer-to-peer port. On separate machines you
+would pass none of them.
+
 Ollama is never exposed on the network. It listens on loopback, and the only
 way to it from another machine is through this node, which checks the
 caller's credential and the mesh policy on every request.
 
-## 3. Call it from another node
+The service `type` is a contract. `inference` is an OpenAI-compatible API,
+`mcp` an MCP server, `a2a` an A2A agent, and the node speaks that protocol
+to the backend and to nobody else: an `inference` backend is offered for the
+models it lists on `/v1/models`, an `mcp` server once the node has completed
+an MCP session with it, an `a2a` agent once it has served its agent card. A
+plain web server declared under any of these types is never advertised.
 
-In a second terminal, start a node with no services:
+## 3. See it in the console
+
+Open `http://127.0.0.1:33775/console` (the **Web Console** line of your
+banner) and paste the admin token from `~/sam-one/admin-token`. The console
+shows the enrolled members, the router, the services each member reports,
+the bootstrap tokens with their remaining uses, and the mesh policy, which
+you can edit in place.
+
+<!-- TODO(screenshot): the console's nodes view with node A and its laptop-llm service. -->
+
+The same operations are available from the command line. `sam-one` is also
+an admin client for a running server. It reads the admin token from the data
+directory, from `SAM_ADMIN_TOKEN` or from `--admin-token-path`, never from a
+flag value:
 
 ```bash
-URL=http://127.0.0.1:33775
+sam-one token list   --server $URL --data-dir ~/sam-one
+sam-one token create --server $URL --data-dir ~/sam-one --description "node c" --max-usages 1
+sam-one token revoke <token-id> --server $URL --data-dir ~/sam-one
+sam-one admin ban <peer-id>      --server $URL --data-dir ~/sam-one
+```
+
+## 4. Call the model from a second member
+
+In a third terminal, start a node with no services of its own:
+
+```bash
+export URL=http://127.0.0.1:33775
 
 sam-node run --control-plane $URL \
   --bootstrap-token-path ~/sam-one/join-token \
@@ -138,9 +195,9 @@ curl -s --unix-socket $SOCK http://localhost/v1/chat/completions \
 ```
 
 The model list shows `gemma3:1b` with node A's peer ID as `owned_by`. Allow
-a few seconds after A starts for B to learn about it. Nodes announce their
-services in a discovery table that the router hosts, and the announcement
-takes a moment to arrive.
+a few seconds after A starts for B to learn about it: members announce their
+services in a discovery table the router hosts, and the announcement takes
+a moment to arrive.
 
 The request went from B's socket to B, then over an authenticated connection
 to A, through A's policy check, to Ollama, and back. Both nodes verified the
@@ -154,92 +211,16 @@ SDK at the mesh instead, give node B a TCP port with
 [quick start](../quickstart/#3-run-the-node), then use
 `http://127.0.0.1:8081/v1` as `base_url` and the token as `api_key`.
 
-## 4. Look at it in the console
+<!-- TODO(video): a short recording of steps 2 to 4 in three terminals. -->
 
-Open `http://127.0.0.1:33775/console` and paste the admin token. The console
-shows the enrolled nodes, the router, the services each node reports, the
-bootstrap tokens with their remaining uses, and the mesh policy. You can edit
-the policy in place.
-
-The same operations are available from the command line. `sam-one` is also
-an admin client for a running server. It reads the admin token from the data
-directory, from `SAM_ADMIN_TOKEN`, or from `--admin-token-path`, never from a
-flag value:
-
-```bash
-sam-one token list   --server $URL --data-dir ~/sam-one
-sam-one token create --server $URL --data-dir ~/sam-one --description "node c" --max-usages 1
-sam-one token revoke <token-id> --server $URL --data-dir ~/sam-one
-sam-one admin ban <peer-id>      --server $URL --data-dir ~/sam-one
-```
-
-## MCP servers and A2A agents
-
-The other two service types are declared the same way and reached through
-the same node. An MCP server gives agents tools; the quick start
-[calls one](../quickstart/#4-call-a-tool-on-the-mesh) on the testnet through
-the node's MCP endpoint. A stdio server is declared with `command` and the
-node runs it; a Streamable HTTP server with `target_url`:
-
-```yaml
-  - type: mcp
-    name: filesystem
-    command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/srv/docs"]
-```
-
-An A2A agent is another agent, spoken to with the A2A protocol. It is
-reached at `/sam/<peer-id>/a2a/<name>/` on the caller's node, which
-regenerates the agent card so that a stock A2A client works unchanged:
-
-```yaml
-  - type: a2a
-    name: triage
-    target_url: "http://127.0.0.1:9999"
-```
-
-[Exposing services](../../guides/exposing-services/) covers all three types
-and what the policy must grant. The [A2A chat](../../use-cases/chat-a2a/)
-and [Gemini Buddy](../../use-cases/gemini-buddy/) use cases run a complete
-agent behind each of the other two types.
-
-## Reaching it from other machines
-
-Everything above used `http://127.0.0.1`. `sam-node` accepts a plain `http`
-URL only when the control plane is on the same host. A node on another
-machine needs an `https` URL, because the control plane is the node's trust
-root and SAM refuses to fetch it over plaintext from a remote address.
-
-On a laptop behind NAT, the quickest way to get an `https` URL is a temporary
-tunnel:
-
-```bash
-sam-one --data-dir ~/sam-one --tunnel cloudflare
-```
-
-This publishes the port on a random `trycloudflare.com` hostname, with no
-account needed, and prints that URL in the banner. If `cloudflared` is not
-installed, `sam-one` offers to download a pinned, checksum-verified release
-into the data directory. `--tunnel-install` accepts the download without
-asking. Nodes on any network then enroll with the same
-`sam-node run --control-plane <url> --bootstrap-token-path <file>` command,
-without the loopback flags.
-
-If you have a real hostname and a reverse proxy in front, pass
-`--external-url https://mesh.example.com` instead. The
-[Cloud Run guide](../../guides/cloud-run/) shows a hosted variant.
-
-With `--tunnel` or any other `https` URL, `sam-one` also prints a QR code
-that enrolls a phone running the SAM Connect app. That app is in
-[preview](../../preview/mobile/).
-
-## Before you rely on it
+## 5. Before you share it
 
 - **Policy**: replace the open development policy. Write a
   [mesh policy](../../reference/policy/) file and start `sam-one` with
   `--policy-file` on a fresh data directory, or edit the policy in the
   console. Once the database has a policy, the database is the source of
   truth.
-- **Enrollment**: run with `--no-join-token` so nodes can only enroll with
+- **Enrollment**: run with `--no-join-token` so members can only enroll with
   tokens you mint (`sam-one token create`, single-use by default), or give
   the mesh an identity provider with `--issuer` and let people log in.
 - **State**: keep the data directory on durable storage, or point
@@ -249,3 +230,14 @@ that enrolls a phone running the SAM Connect app. That app is in
   in non-interactive environments.
 
 The [sam-one reference](../../reference/sam-one/) lists every flag.
+
+## Where next
+
+- [Native SDKs](../../guides/native-sdks/): make a JavaScript or Python
+  program a member, publish a tool from it and call it from another.
+- [Exposing services](../../guides/exposing-services/): the three service
+  types in detail and what the policy must grant for each. The
+  [A2A chat](../../use-cases/chat-a2a/) and
+  [Gemini Buddy](../../use-cases/gemini-buddy/) use cases run a complete
+  agent behind each of the other two types.
+- [Mobile](../../preview/mobile/): a phone as a member.
