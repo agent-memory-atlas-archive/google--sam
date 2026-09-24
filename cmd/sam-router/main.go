@@ -46,6 +46,8 @@ var (
 	lowWaterMark         int
 	highWaterMark        int
 	metricsAddr          string
+	relayLimitDuration   time.Duration
+	relayLimitData       router.ByteSize
 )
 
 var logger = golog.Logger("sam-router-cli")
@@ -86,6 +88,8 @@ func main() {
 				LowWaterMark:              lowWaterMark,
 				HighWaterMark:             highWaterMark,
 				MetricsAddr:               metricsAddr,
+				RelayLimitDuration:        relayLimitDuration,
+				RelayLimitData:            int64(relayLimitData),
 			}
 
 			r, err := router.NewRouter(cmd.Context(), opts)
@@ -125,6 +129,8 @@ func main() {
 	rootCmd.Flags().IntVar(&lowWaterMark, "low-watermark", 1000, "Connection manager low watermark limit")
 	rootCmd.Flags().IntVar(&highWaterMark, "high-watermark", 4000, "Connection manager high watermark limit")
 	rootCmd.Flags().StringVar(&metricsAddr, "metrics-addr", "", "Serve Prometheus /metrics, /healthz and /readyz on this address (e.g. 0.0.0.0:9090); unauthenticated, off by default")
+	rootCmd.Flags().DurationVar(&relayLimitDuration, "relay-limit-duration", router.DefaultRelayLimitDuration, "Lifetime of each relayed connection (0 = no limit)")
+	rootCmd.Flags().Var(&relayLimitData, "relay-limit-data", "Bytes relayed per direction on each relayed connection, e.g. 512MiB (0 = no limit)")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

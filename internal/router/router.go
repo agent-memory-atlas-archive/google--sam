@@ -407,7 +407,8 @@ func (r *Router) Start() error {
 	}
 
 	// Setup Relay
-	_, err = relay.New(hostNode, relay.WithACL(&relayACL{r: r}))
+	_, err = relay.New(hostNode, relay.WithACL(&relayACL{r: r}),
+		relay.WithLimit(relayLimit(r.config.RelayLimitDuration, r.config.RelayLimitData)))
 	if err != nil {
 		_ = hostNode.Close()
 		return err

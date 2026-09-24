@@ -147,6 +147,9 @@ type RouterTunables struct {
 	// DHTProviderAddrTTL / DHTMaxRecordAge tune DHT record lifetimes.
 	DHTProviderAddrTTL time.Duration
 	DHTMaxRecordAge    time.Duration
+	// RelayLimitDuration / RelayLimitData cap each relayed connection.
+	RelayLimitDuration time.Duration
+	RelayLimitData     router.ByteSize
 	// DisallowLoopback stops advertising loopback addresses (useful on
 	// public deployments; the default keeps local development working).
 	DisallowLoopback bool
@@ -176,6 +179,9 @@ func (o *Options) Default() {
 	}
 	if o.Router.ConnsPerSourceIP == 0 {
 		o.Router.ConnsPerSourceIP = o.Router.HighWaterMark
+	}
+	if o.Router.RelayLimitDuration == 0 {
+		o.Router.RelayLimitDuration = router.DefaultRelayLimitDuration
 	}
 }
 
@@ -342,6 +348,8 @@ func (s *Server) Start(ctx context.Context) error {
 		HighWaterMark:      s.opts.Router.HighWaterMark,
 		DHTProviderAddrTTL: s.opts.Router.DHTProviderAddrTTL,
 		DHTMaxRecordAge:    s.opts.Router.DHTMaxRecordAge,
+		RelayLimitDuration: s.opts.Router.RelayLimitDuration,
+		RelayLimitData:     int64(s.opts.Router.RelayLimitData),
 		// Single-port deployments typically sit behind a TLS-terminating
 		// proxy (Cloud Run, L7 LBs) or NAT where every peer shares a few
 		// source IPs; libp2p's default 8-conns-per-IP cap would throttle
