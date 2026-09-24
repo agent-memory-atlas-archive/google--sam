@@ -18,7 +18,7 @@ import logging
 import random
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, AsyncIterator, Mapping, Optional, Sequence, Union
 
@@ -66,6 +66,9 @@ logger = logging.getLogger("agent_mesh")
 DEFAULT_REFRESH_LEAD = 60 * 60.0
 DEFAULT_REFRESH_RETRY = 30.0
 MIN_REFRESH_DELAY = 2.0
+# go-libp2p's relay grants a reservation for an hour and drops it on expiry;
+# its own clients renew two minutes before that.
+RESERVATION_RENEW_LEAD = 2 * 60.0
 # sam-node's --control-plane-sync-interval default.
 DEFAULT_POLICY_SYNC = 15 * 60.0
 # How often provider records are refreshed; go-libp2p-kad-dht expires them after 48h.
@@ -154,6 +157,8 @@ class MeshSession:
     provide_interval: float = DEFAULT_PROVIDE_INTERVAL
     control_plane_sync_interval: float = DEFAULT_CONTROL_PLANE_SYNC
     control_plane_sync_jitter: float = DEFAULT_CONTROL_PLANE_SYNC_JITTER
+    reservation_lead: float = RESERVATION_RENEW_LEAD
+    reservation_retry: float = DEFAULT_REFRESH_RETRY
     _nursery: Optional[trio.Nursery] = field(default=None, repr=False)
     _policy_rules: Optional[list[str]] = field(default=None, repr=False)
     _serving: bool = field(default=False, repr=False)
@@ -356,6 +361,31 @@ class MeshSession:
             if self.control_plane_sync_interval > 0:
                 delay = self.control_plane_sync_interval * random.uniform(1.0, 1.1)  # noqa: S311
 
+    async def _reservation_loop(self) -> None:
+        """Renews the relay reservation on each admitted router before the
+        relay lets it expire. A member whose reservation lapsed still
+        advertises the relayed address, and every dial to it fails with
+        NO_RESERVATION. A router that dropped the connection forgets the
+        admission with it, so that one is dialed and authenticated again
+        before the reservation is asked for."""
+        while True:
+            reserved = [r for r in self.routers if r.reservation is not None]
+            if not reserved:
+                return
+            due = min(r.reservation.expire for r in reserved) - self.reservation_lead - time.time()  # type: ignore[union-attr]
+            await trio.sleep(max(MIN_REFRESH_DELAY, due))
+            failed = False
+            for i, r in enumerate(self.routers):
+                if r.reservation is None or r.reservation.expire - time.time() > self.reservation_lead + MIN_REFRESH_DELAY:
+                    continue
+                try:
+                    self.routers[i] = await _reserve_again(self.host, self.mesh, r)
+                except Exception as err:  # noqa: BLE001 - retried; the relay keeps the old reservation until it expires
+                    failed = True
+                    logger.warning("relay reservation on router %s not renewed, retrying in %.0fs: %s", r.peer_id, self.reservation_retry, err)
+            if failed:
+                await trio.sleep(self.reservation_retry)
+
     async def _events_loop(self, pubsub: Pubsub) -> None:
         """The control plane's gossip events, relayed by the routers. The topic
         validator drops anything not signed by a trusted control plane key, so
@@ -495,6 +525,7 @@ async def join_mesh(
     reserve: bool = True,
     refresh_lead: float = DEFAULT_REFRESH_LEAD,
     refresh_retry: float = DEFAULT_REFRESH_RETRY,
+    reservation_lead: float = RESERVATION_RENEW_LEAD,
     policy_sync_interval: float = DEFAULT_POLICY_SYNC,
     provide_interval: float = DEFAULT_PROVIDE_INTERVAL,
     control_plane_sync_interval: float = DEFAULT_CONTROL_PLANE_SYNC,
@@ -540,10 +571,13 @@ async def join_mesh(
                     provide_interval=provide_interval,
                     control_plane_sync_interval=control_plane_sync_interval,
                     control_plane_sync_jitter=control_plane_sync_jitter,
+                    reservation_lead=reservation_lead,
+                    reservation_retry=refresh_retry,
                     _nursery=nursery,
                 )
                 nursery.start_soon(session._events_loop, pubsub)  # noqa: SLF001
                 nursery.start_soon(session._sync_loop)  # noqa: SLF001
+                nursery.start_soon(session._reservation_loop)  # noqa: SLF001
                 try:
                     yield session
                 finally:
@@ -562,10 +596,7 @@ async def _admit(host: IHost, mesh: "AgentMesh", router_addrs: list[multiaddr.Mu
         try:
             info = await peer_info(addr)
             await dial(host, info)
-            credential = await authenticate_with_peer(host, info.peer_id, mesh.auth_frame(), mesh.credential.control_plane_keys)
-            # Enforced under the key that verified the token; a relay that
-            # is not a router must not become our way onto the mesh.
-            require_role(credential, ROLE_ROUTER)
+            credential = await _authenticate_router(host, mesh, info.peer_id)
             reservation = await reserve_relay(host, info.peer_id) if reserve else None
             admitted.append(AdmittedRouter(peer_id=str(info.peer_id), addr=addr, credential=credential, reservation=reservation))
             if reserve:
@@ -575,3 +606,30 @@ async def _admit(host: IHost, mesh: "AgentMesh", router_addrs: list[multiaddr.Mu
     if not admitted:
         raise RuntimeError("no router admitted this member:\n  " + "\n  ".join(failures))
     return admitted
+
+
+async def _authenticate_router(host: IHost, mesh: "AgentMesh", peer_id: ID) -> VerifiedBiscuit:
+    credential = await authenticate_with_peer(host, peer_id, mesh.auth_frame(), mesh.credential.control_plane_keys)
+    # Enforced under the key that verified the token; a relay that
+    # is not a router must not become our way onto the mesh.
+    require_role(credential, ROLE_ROUTER)
+    return credential
+
+
+async def _reserve_again(host: IHost, mesh: "AgentMesh", router: AdmittedRouter) -> AdmittedRouter:
+    peer_id = ID.from_base58(router.peer_id)
+    credential = router.credential
+    try:
+        if peer_id not in host.get_connected_peers():
+            await dial(host, await peer_info(router.addr))
+            credential = await _authenticate_router(host, mesh, peer_id)
+        reservation = await reserve_relay(host, peer_id)
+    except Exception:
+        # A connection that failed us is not kept: it may be half-open, or up
+        # but unauthenticated. The retry then dials and authenticates again.
+        try:
+            await host.disconnect(peer_id)
+        except Exception:  # noqa: BLE001 - already gone
+            pass
+        raise
+    return replace(router, credential=credential, reservation=reservation)

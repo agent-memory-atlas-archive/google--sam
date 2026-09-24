@@ -81,6 +81,15 @@ pinned by a test:
   `<relay>/p2p-circuit`, and a router refuses that before the auth
   handshake. The JS SDK starts the listener after the handshake, through the
   transport manager, which is not on the public `Libp2p` interface.
+- go-libp2p's relay grants a reservation for one hour and drops it when
+  that passes; a member that still advertises the relayed address is then
+  unreachable (`NO_RESERVATION`). js-libp2p's listener renews on its own.
+  The Python SDK renews two minutes before the expiry the router returned,
+  and runs the auth handshake again first when the router has closed the
+  connection in between, since the router forgets the admission with it.
+  py-libp2p 0.7 cannot take this over: its relay client has the framing
+  problem above, and its `RelayDiscovery` reserves again only after the
+  expiry has passed, when the router has already dropped the slot.
 - py-libp2p's Kademlia client takes a protocol prefix but its provider
   lookups still speak `/ipfs/kad/1.0.0`, so it cannot reach the mesh DHT.
   The Python SDK does a bounded GET_PROVIDERS walk itself on

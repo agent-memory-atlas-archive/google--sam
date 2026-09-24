@@ -97,17 +97,23 @@ def libp2p_host(identity: Identity):
     )
 
 
-def hop_handler(relay_addr: str, grants: bool):
-    """Answers RESERVE like a go-libp2p relay whose ACL either admits or refuses us."""
+def hop_handler(relay_addr: str, grants, ttl: int = 3600, events=None):
+    """Answers RESERVE like a go-libp2p relay whose ACL either admits or refuses
+    us; `grants` is a bool or a callable of the RESERVE count so far."""
+    reserves = 0
 
     async def handle(stream):
+        nonlocal reserves
         req = circuit.HopMessage.FromString(await read_varint_prefixed_bytes(stream))
         assert req.type == circuit.HopMessage.RESERVE
-        if grants:
+        reserves += 1
+        if events is not None:
+            events.append(("reserve", str(stream.muxed_conn.peer_id)))
+        if grants(reserves) if callable(grants) else grants:
             resp = circuit.HopMessage(
                 type=circuit.HopMessage.STATUS,
                 status=circuit.OK,
-                reservation=circuit.Reservation(expire=int(time.time()) + 3600, addrs=[multiaddr.Multiaddr(relay_addr).to_bytes()]),
+                reservation=circuit.Reservation(expire=int(time.time()) + ttl, addrs=[multiaddr.Multiaddr(relay_addr).to_bytes()]),
             )
         else:
             resp = circuit.HopMessage(type=circuit.HopMessage.STATUS, status=circuit.PERMISSION_DENIED)
@@ -117,18 +123,24 @@ def hop_handler(relay_addr: str, grants: bool):
     return handle
 
 
-async def start_router(nursery, role=ROLE_ROUTER, trusted=(CP_KEY,), grants=True):
+async def start_router(nursery, role=ROLE_ROUTER, trusted=(CP_KEY,), grants=True, ttl=3600, events=None):
+    """events, when given, records ("auth", peer) per handshake and ("reserve", peer) per RESERVE."""
     identity = Identity.generate()
     router = libp2p_host(identity)
     router_biscuit = mint(identity.peer_id, role)
-    router.set_stream_handler(AUTH_PROTOCOL, auth_stream_handler(lambda: router_biscuit, lambda: list(trusted)))
+
+    def on_authenticated(peer, _verified):
+        if events is not None:
+            events.append(("auth", peer))
+
+    router.set_stream_handler(AUTH_PROTOCOL, auth_stream_handler(lambda: router_biscuit, lambda: list(trusted), on_authenticated=on_authenticated))
     started = trio.Event()
     addr_box = []
 
     async def run():
         async with router.run(listen_addrs=[multiaddr.Multiaddr("/ip4/127.0.0.1/tcp/0")]):
             addr = f"{router.get_addrs()[0]}"
-            router.set_stream_handler(RELAY_HOP_PROTOCOL, hop_handler(addr, grants))
+            router.set_stream_handler(RELAY_HOP_PROTOCOL, hop_handler(addr, grants, ttl, events))
             addr_box.append(addr)
             started.set()
             await trio.sleep_forever()
@@ -221,3 +233,67 @@ def test_join_fails_when_the_relay_refuses_the_reservation():
             nursery.cancel_scope.cancel()
 
     trio.run(with_timeout, 30, main)
+
+
+def test_join_renews_the_reservation_and_reauthenticates_after_a_disconnect():
+    """go-libp2p's relay drops a reservation when its TTL passes and grants one
+    only to a peer authenticated on the current connection. The member renews
+    ahead of the TTL; once the router has closed the connection, the renewal
+    runs the handshake again first."""
+
+    async def wait_for(predicate):
+        while not predicate():
+            await trio.sleep(0.1)
+
+    async def main():
+        async with trio.open_nursery() as nursery:
+            events = []
+            router, addr = await start_router(nursery, ttl=4, events=events)
+            mesh = AgentMesh.enroll("http://127.0.0.1:1", bootstrap_token="sbt", transport=fake_control_plane([addr]))
+            async with mesh.join(refresh_lead=0, reservation_lead=1) as session:
+                member = session.host.get_id()
+                assert events == [("auth", mesh.peer_id), ("reserve", mesh.peer_id)]
+                first = session.routers[0].reservation.expire
+
+                # Renewed before the TTL, on the same admission.
+                await wait_for(lambda: events.count(("reserve", mesh.peer_id)) >= 2)
+                assert events.count(("auth", mesh.peer_id)) == 1
+                assert session.routers[0].reservation.expire >= first
+                assert session.relay_addresses == [f"{addr}/p2p-circuit/p2p/{mesh.peer_id}"]
+
+                # The router drops the connection and with it the admission.
+                await router.disconnect(member)
+                await wait_for(lambda: member not in router.get_connected_peers())
+                reserves = events.count(("reserve", mesh.peer_id))
+                await wait_for(lambda: events.count(("reserve", mesh.peer_id)) > reserves)
+                assert events.count(("auth", mesh.peer_id)) == 2
+                assert events.index(("auth", mesh.peer_id), 2) < len(events) - 1
+                assert member in router.get_connected_peers()
+            nursery.cancel_scope.cancel()
+
+    trio.run(with_timeout, 60, main)
+
+
+def test_a_refused_renewal_drops_the_connection_and_the_retry_authenticates_again():
+    """A router that refuses the renewal, PERMISSION_DENIED when it no longer
+    holds the admission, gets a fresh connection and handshake on the retry
+    instead of the same RESERVE on the same connection forever."""
+
+    async def wait_for(predicate):
+        while not predicate():
+            await trio.sleep(0.1)
+
+    async def main():
+        async with trio.open_nursery() as nursery:
+            events = []
+            _, addr = await start_router(nursery, grants=lambda n: n != 2, ttl=4, events=events)
+            mesh = AgentMesh.enroll("http://127.0.0.1:1", bootstrap_token="sbt", transport=fake_control_plane([addr]))
+            async with mesh.join(refresh_lead=0, refresh_retry=0.5, reservation_lead=1) as session:
+                first = session.routers[0].reservation.expire
+                await wait_for(lambda: events.count(("reserve", mesh.peer_id)) >= 3)
+                await wait_for(lambda: session.routers[0].reservation.expire > first)
+                auth, reserve = ("auth", mesh.peer_id), ("reserve", mesh.peer_id)
+                assert events[:5] == [auth, reserve, reserve, auth, reserve]
+            nursery.cancel_scope.cancel()
+
+    trio.run(with_timeout, 60, main)
