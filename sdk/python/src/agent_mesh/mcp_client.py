@@ -35,6 +35,7 @@ from mcp.shared.message import SessionMessage
 from ._proto import sam_pb2 as pb
 from .auth import AUTH_HANDSHAKE_TIMEOUT, MAX_AUTH_FRAME_BYTES, MCP_PROTOCOL, AuthRejectedError
 from .biscuit import BiscuitVerificationError, VerifiedBiscuit, verify_peer_biscuit
+from .host import open_stream
 
 logger = logging.getLogger("agent_mesh")
 
@@ -96,7 +97,7 @@ async def open_mcp_session(
     """Opens /sam/mcp/1.0.0 to a connected provider with `frame`, this member's
     AuthFrame naming the service, verifies the provider and yields an
     initialized MCP ClientSession with the provider's credential."""
-    stream = await host.new_stream(peer_id, [MCP_PROTOCOL])
+    stream = await open_stream(host, peer_id, MCP_PROTOCOL, AUTH_HANDSHAKE_TIMEOUT)
     try:
         with trio.fail_after(AUTH_HANDSHAKE_TIMEOUT):
             await stream.write(encode_varint_prefixed(frame))

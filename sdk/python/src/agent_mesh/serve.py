@@ -41,6 +41,7 @@ from .auth import AUTH_HANDSHAKE_TIMEOUT, MAX_AUTH_FRAME_BYTES
 from .authorizer import AuthorizationError, AuthorizeRequest, ProviderAuthorizerOptions, authorize_caller
 from .biscuit import VerifiedBiscuit
 from .discovery import ServiceType
+from .host import open_stream
 from .mcp_client import MAX_MCP_MESSAGE_BYTES
 
 logger = logging.getLogger("agent_mesh")
@@ -450,7 +451,7 @@ async def http_request_over_stream(
     out.append(("content-length", str(len(payload))))
 
     conn = h11.Connection(h11.CLIENT)
-    stream = await host.new_stream(peer_id, [HTTP_PROTOCOL])
+    stream = await open_stream(host, peer_id, HTTP_PROTOCOL, timeout)
     try:
         with trio.fail_after(timeout):
             data = conn.send(h11.Request(method=method, target=f"/{scheme}/{name}" + (path if path.startswith("/") else "/" + path), headers=out)) or b""

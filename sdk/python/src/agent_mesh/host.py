@@ -18,6 +18,7 @@ muxer. py-libp2p is trio-based, so everything here is trio async."""
 
 from __future__ import annotations
 
+import importlib.metadata
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Sequence
@@ -27,17 +28,71 @@ import trio
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from libp2p import new_host
-from libp2p.abc import IHost
+from libp2p.abc import IHost, INetStream
 from libp2p.crypto.ed25519 import create_new_key_pair
 from libp2p.custom_types import TProtocol
+from libp2p.peer.id import ID
 from libp2p.peer.peerinfo import PeerInfo, info_from_p2p_addr
 from libp2p.security.tls.transport import PROTOCOL_ID as TLS_PROTOCOL_ID
 from libp2p.security.tls.transport import IdentityConfig, TLSTransport
 from libp2p.stream_muxer.yamux.yamux import PROTOCOL_ID as YAMUX_PROTOCOL_ID
-from libp2p.stream_muxer.yamux.yamux import Yamux
+from libp2p.stream_muxer.yamux.yamux import Yamux, YamuxStream
 from multiaddr.resolvers import DNSResolver
 
 from .identity import Identity
+
+
+def _libp2p_version() -> tuple[int, int]:
+    major, minor = importlib.metadata.version("libp2p").split(".")[:2]
+    return int(major), int(minor)
+
+
+# py-libp2p 0.7 takes one of the 256 slots of a connection's
+# stream_backlog_semaphore for every outbound stream and gives it back only
+# when sending the SYN fails, so after 256 streams on one connection every
+# open_stream blocks forever, silently. main releases the slot when the local
+# side closes the stream (libp2p/py-libp2p#1426); until that is released,
+# Yamux.open_stream is replaced here to do the same. A subclass would not do:
+# MuxerMultistream.new_conn constructs Yamux by name, whatever muxer_opt says.
+# Delete this block and its test with the libp2p>=0.8 bump.
+LIBP2P_LEAKS_STREAM_SLOTS = _libp2p_version() < (0, 8)
+
+
+def _release_slot_on_close(open_stream):  # type: ignore[no-untyped-def]
+    async def open_stream_releasing_slot(self: Yamux) -> YamuxStream:
+        stream = await open_stream(self)
+        release = self.stream_backlog_semaphore.release
+        close, reset = stream.close, stream.reset
+        released = False
+
+        def release_once() -> None:
+            nonlocal released
+            if not released:
+                released = True
+                release()
+
+        async def close_and_release() -> None:
+            try:
+                await close()
+            finally:
+                release_once()
+
+        async def reset_and_release() -> None:
+            try:
+                await reset()
+            finally:
+                release_once()
+
+        stream.close = close_and_release  # type: ignore[method-assign]
+        stream.reset = reset_and_release  # type: ignore[method-assign]
+        return stream
+
+    open_stream_releasing_slot.releases_slot = True  # type: ignore[attr-defined]
+    return open_stream_releasing_slot
+
+
+if LIBP2P_LEAKS_STREAM_SLOTS and not getattr(Yamux.open_stream, "releases_slot", False):
+    Yamux.open_stream = _release_slot_on_close(Yamux.open_stream)  # type: ignore[method-assign]
 
 
 def _certificate_template() -> x509.CertificateBuilder:
@@ -74,6 +129,17 @@ def create_mesh_host(identity: Identity, listen_addrs: Sequence[str] = ()) -> tu
     if str(host.get_id()) != identity.peer_id:
         raise RuntimeError(f"libp2p derived peer {host.get_id()} for identity {identity.peer_id}")
     return host, [multiaddr.Multiaddr(a) for a in listen_addrs]
+
+
+async def open_stream(host: IHost, peer_id: ID, protocol: TProtocol, timeout: float) -> INetStream:
+    """host.new_stream bounded by a timeout. py-libp2p bounds the protocol
+    negotiation but not the muxer, and a muxer that cannot open a stream
+    would otherwise park the caller forever without a word."""
+    try:
+        with trio.fail_after(timeout):
+            return await host.new_stream(peer_id, [protocol])
+    except trio.TooSlowError:
+        raise ConnectionError(f"no {protocol} stream to {peer_id} within {timeout:g}s") from None
 
 
 _DNS_PROTOCOLS = frozenset({"dnsaddr", "dns", "dns4", "dns6"})

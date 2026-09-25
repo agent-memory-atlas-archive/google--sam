@@ -28,6 +28,7 @@ from libp2p.utils.varint import encode_varint_prefixed, read_varint_prefixed_byt
 
 from ._proto import sam_pb2 as pb
 from .biscuit import BiscuitVerificationError, VerifiedBiscuit, verify_peer_biscuit
+from .host import open_stream
 
 logger = logging.getLogger("agent_mesh")
 
@@ -57,7 +58,7 @@ async def _read_frame(stream: INetStream) -> bytes:
 async def authenticate_with_peer(host: IHost, peer_id: ID, frame: bytes, trusted_keys: Sequence[bytes]) -> VerifiedBiscuit:
     """Client side: presents `frame` on a new /sam/auth/1.0.0 stream to a
     connected peer and returns the peer's verified credential."""
-    stream = await host.new_stream(peer_id, [AUTH_PROTOCOL])
+    stream = await open_stream(host, peer_id, AUTH_PROTOCOL, AUTH_HANDSHAKE_TIMEOUT)
     try:
         with trio.fail_after(AUTH_HANDSHAKE_TIMEOUT):
             await stream.write(encode_varint_prefixed(frame))
