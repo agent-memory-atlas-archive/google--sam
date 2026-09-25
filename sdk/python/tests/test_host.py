@@ -14,17 +14,24 @@
 
 """What a dial must do that py-libp2p does not: resolve a /dnsaddr router
 address through its TXT records and keep the transports this host has
-(dial_addrs), and give up on an address nobody answers (dial)."""
+(dial_addrs), and give up on an address nobody answers (dial). And what a
+stream must do: come back after the 256th one on a connection (py-libp2p
+0.7 leaks its yamux backlog slots), or fail at a deadline."""
+
+import struct
 
 import multiaddr
 import pytest
 import trio
 import trio.testing
+from libp2p.custom_types import TProtocol
 from libp2p.peer.id import ID
-from libp2p.peer.peerinfo import PeerInfo
+from libp2p.peer.peerinfo import PeerInfo, info_from_p2p_addr
+from libp2p.stream_muxer.yamux.yamux import FLAG_SYN, YAMUX_HEADER_FORMAT
 from multiaddr.resolvers import DNSResolver
 
-from agent_mesh.host import dial_addrs, peer_info
+from agent_mesh.host import LIBP2P_LEAKS_STREAM_SLOTS, create_mesh_host, dial_addrs, open_stream, peer_info
+from agent_mesh.identity import Identity
 from agent_mesh.session import DIAL_TIMEOUT, dial
 
 ROUTER = "12D3KooWG1pA6goegCncqwbZLSr8pnjUZ6JMAAe6SmnHTgUNCk88"
@@ -114,3 +121,95 @@ def test_a_dial_nobody_answers_ends_at_the_timeout():
         assert trio.current_time() - started == pytest.approx(DIAL_TIMEOUT)
 
     trio.run(main, clock=trio.testing.MockClock(autojump_threshold=0))
+
+
+ECHO = TProtocol("/test/echo/1.0.0")
+
+
+def test_a_connection_outlives_the_yamux_stream_backlog():
+    """A member keeps one connection to its router for days and opens a
+    short stream on it every few minutes (DHT provide, reservation renewal).
+    py-libp2p 0.7 never returns a closed stream's slot to the connection's
+    256-slot backlog, so the 257th open_stream parks forever; ours must not."""
+
+    async def echo(stream):
+        try:
+            await stream.write(await stream.read(64))
+        finally:
+            await stream.close()
+
+    async def main():
+        server, server_listen = create_mesh_host(Identity.generate(), ["/ip4/127.0.0.1/tcp/0"])
+        client, _ = create_mesh_host(Identity.generate())
+        server.set_stream_handler(ECHO, echo)
+        async with server.run(listen_addrs=server_listen), client.run(listen_addrs=[]):
+            await client.connect(info_from_p2p_addr(multiaddr.Multiaddr(f"{server.get_addrs()[0]}")))
+            for i in range(300):
+                # Alternate the two ways a caller lets go of a stream.
+                with trio.fail_after(5):
+                    stream = await open_stream(client, server.get_id(), ECHO, 5)
+                    try:
+                        await stream.write(b"ping")
+                        assert await stream.read(4) == b"ping"
+                    finally:
+                        await (stream.close() if i % 2 else stream.reset())
+
+    trio.run(main)
+
+
+def test_a_stream_open_cut_by_its_deadline_returns_the_slot():
+    """py-libp2p 0.7 releases the backlog slot only for an Exception; a
+    trio.Cancelled from the caller's deadline, raised while the SYN waits on
+    a stalled connection, kept it. Every such timeout was one slot fewer."""
+
+    async def main():
+        server, server_listen = create_mesh_host(Identity.generate(), ["/ip4/127.0.0.1/tcp/0"])
+        client, _ = create_mesh_host(Identity.generate())
+        server.set_stream_handler(ECHO, lambda stream: stream.close())
+        async with server.run(listen_addrs=server_listen), client.run(listen_addrs=[]):
+            await client.connect(info_from_p2p_addr(multiaddr.Multiaddr(f"{server.get_addrs()[0]}")))
+            mux = client.get_network().connections[server.get_id()][0].muxed_conn
+            slots = mux.stream_backlog_semaphore.value
+            write_frame = mux._write_frame
+
+            async def syn_stalls(header):
+                # Only the SYN of a new stream; the muxer's pings and window updates pass.
+                if struct.unpack(YAMUX_HEADER_FORMAT, header[:12])[2] & FLAG_SYN:
+                    await trio.sleep_forever()
+                await write_frame(header)
+
+            mux._write_frame = syn_stalls
+            for _ in range(3):
+                with pytest.raises(ConnectionError, match="within 0.2s"):
+                    await open_stream(client, server.get_id(), ECHO, 0.2)
+            mux._write_frame = write_frame
+            assert mux.stream_backlog_semaphore.value == slots
+            with trio.fail_after(5):
+                stream = await open_stream(client, server.get_id(), ECHO, 5)
+                await stream.close()
+            assert mux.stream_backlog_semaphore.value == slots
+
+    trio.run(main)
+
+
+def test_open_stream_ends_at_its_timeout():
+    class Host:
+        async def new_stream(self, peer_id, protocols):
+            await trio.sleep_forever()
+
+    async def main():
+        started = trio.current_time()
+        with pytest.raises(ConnectionError, match="within 10s"):
+            await open_stream(Host(), ID.from_base58(ROUTER), ECHO, 10)
+        assert trio.current_time() - started == pytest.approx(10)
+
+    trio.run(main, clock=trio.testing.MockClock(autojump_threshold=0))
+
+
+def test_the_stream_slot_workaround_retires_with_libp2p_0_8():
+    """When the pin moves past 0.7, delete the Yamux.open_stream patch and
+    this flag in host.py, and the backlog test above."""
+    import importlib.metadata
+
+    major, minor = (int(p) for p in importlib.metadata.version("libp2p").split(".")[:2])
+    assert LIBP2P_LEAKS_STREAM_SLOTS == ((major, minor) < (0, 8))

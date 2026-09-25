@@ -34,6 +34,8 @@ from libp2p.peer.id import ID
 from libp2p.peer.peerinfo import PeerInfo
 from libp2p.utils.varint import encode_varint_prefixed, read_varint_prefixed_bytes
 
+from .host import open_stream
+
 logger = logging.getLogger("agent_mesh")
 
 # go-libp2p-kad-dht with dht.ProtocolPrefix("/sam").
@@ -75,7 +77,7 @@ def parse_service_target(target: str) -> tuple[str, str]:
 
 async def _get_providers(host: IHost, peer_id: ID, key: bytes) -> kad.Message | None:
     try:
-        stream = await host.new_stream(peer_id, [DHT_PROTOCOL])
+        stream = await open_stream(host, peer_id, DHT_PROTOCOL, _QUERY_TIMEOUT)
     except Exception as err:  # noqa: BLE001 - a peer that does not serve the DHT is skipped
         logger.debug("dht: %s does not answer %s: %s", peer_id, DHT_PROTOCOL, err)
         return None
@@ -148,7 +150,7 @@ async def _add_provider(host: IHost, peer_id: ID, key: bytes, addrs: Sequence[mu
     stores the record only when the sender is the provider and lists at
     least one address, and answers nothing."""
     try:
-        stream = await host.new_stream(peer_id, [DHT_PROTOCOL])
+        stream = await open_stream(host, peer_id, DHT_PROTOCOL, _QUERY_TIMEOUT)
     except Exception as err:  # noqa: BLE001 - a peer that does not serve the DHT is skipped
         logger.debug("dht: %s does not answer %s: %s", peer_id, DHT_PROTOCOL, err)
         return False

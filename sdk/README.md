@@ -90,6 +90,17 @@ pinned by a test:
   py-libp2p 0.7 cannot take this over: its relay client has the framing
   problem above, and its `RelayDiscovery` reserves again only after the
   expiry has passed, when the router has already dropped the slot.
+- py-libp2p 0.7's yamux takes one of 256 per-connection backlog slots for
+  every outbound stream and returns it only when sending the SYN fails, so
+  the 257th `open_stream` on a connection blocks forever with no error. A
+  member that keeps one connection to its router reaches that in hours (a
+  DHT provide every ten minutes, a reservation renewal every hour). `main`
+  releases the slot on close (libp2p/py-libp2p#1426); until that is
+  released, `host.py` replaces `Yamux.open_stream` with one that does the
+  same, since py-libp2p constructs `Yamux` by name whatever `muxer_opt`
+  says. Every stream the SDK opens also goes through `open_stream`, which
+  bounds `new_stream` with the caller's deadline, so a muxer that cannot
+  open a stream fails the call instead of parking it.
 - py-libp2p's Kademlia client takes a protocol prefix but its provider
   lookups still speak `/ipfs/kad/1.0.0`, so it cannot reach the mesh DHT.
   The Python SDK does a bounded GET_PROVIDERS walk itself on

@@ -34,6 +34,7 @@ from libp2p.peer.id import ID
 from libp2p.utils.varint import encode_varint_prefixed, read_varint_prefixed_bytes
 
 from ._proto import circuit_pb2 as circuit
+from .host import open_stream
 from .identity import canonical_peer_id
 
 logger = logging.getLogger("agent_mesh")
@@ -60,7 +61,7 @@ async def reserve_relay(host: IHost, relay_peer_id: ID) -> circuit.Reservation:
     """Asks a connected relay for a reservation and returns it. A router grants
     one only to a peer that passed the auth handshake, so success is also proof
     of admission."""
-    stream = await host.new_stream(relay_peer_id, [HOP_PROTOCOL])
+    stream = await open_stream(host, relay_peer_id, HOP_PROTOCOL, RELAY_MESSAGE_TIMEOUT)
     try:
         with trio.fail_after(RELAY_MESSAGE_TIMEOUT):
             req = circuit.HopMessage(type=circuit.HopMessage.RESERVE)
@@ -80,7 +81,7 @@ async def reserve_relay(host: IHost, relay_peer_id: ID) -> circuit.Reservation:
 async def dial_through_relay(host: IHost, relay_peer_id: ID, target: ID) -> INetConn:
     """Opens a connection to `target` through a relay we are connected to, and
     registers it with the host so streams can be opened on it."""
-    stream = await host.new_stream(relay_peer_id, [HOP_PROTOCOL])
+    stream = await open_stream(host, relay_peer_id, HOP_PROTOCOL, RELAY_MESSAGE_TIMEOUT)
     try:
         with trio.fail_after(RELAY_MESSAGE_TIMEOUT):
             req = circuit.HopMessage(type=circuit.HopMessage.CONNECT, peer=circuit.Peer(id=target.to_bytes()))
