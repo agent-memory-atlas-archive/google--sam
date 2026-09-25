@@ -18,6 +18,8 @@ address through its TXT records and keep the transports this host has
 stream must do: come back after the 256th one on a connection (py-libp2p
 0.7 leaks its yamux backlog slots), or fail at a deadline."""
 
+import struct
+
 import multiaddr
 import pytest
 import trio
@@ -25,6 +27,7 @@ import trio.testing
 from libp2p.custom_types import TProtocol
 from libp2p.peer.id import ID
 from libp2p.peer.peerinfo import PeerInfo, info_from_p2p_addr
+from libp2p.stream_muxer.yamux.yamux import FLAG_SYN, YAMUX_HEADER_FORMAT
 from multiaddr.resolvers import DNSResolver
 
 from agent_mesh.host import LIBP2P_LEAKS_STREAM_SLOTS, create_mesh_host, dial_addrs, open_stream, peer_info
@@ -150,6 +153,41 @@ def test_a_connection_outlives_the_yamux_stream_backlog():
                         assert await stream.read(4) == b"ping"
                     finally:
                         await (stream.close() if i % 2 else stream.reset())
+
+    trio.run(main)
+
+
+def test_a_stream_open_cut_by_its_deadline_returns_the_slot():
+    """py-libp2p 0.7 releases the backlog slot only for an Exception; a
+    trio.Cancelled from the caller's deadline, raised while the SYN waits on
+    a stalled connection, kept it. Every such timeout was one slot fewer."""
+
+    async def main():
+        server, server_listen = create_mesh_host(Identity.generate(), ["/ip4/127.0.0.1/tcp/0"])
+        client, _ = create_mesh_host(Identity.generate())
+        server.set_stream_handler(ECHO, lambda stream: stream.close())
+        async with server.run(listen_addrs=server_listen), client.run(listen_addrs=[]):
+            await client.connect(info_from_p2p_addr(multiaddr.Multiaddr(f"{server.get_addrs()[0]}")))
+            mux = client.get_network().connections[server.get_id()][0].muxed_conn
+            slots = mux.stream_backlog_semaphore.value
+            write_frame = mux._write_frame
+
+            async def syn_stalls(header):
+                # Only the SYN of a new stream; the muxer's pings and window updates pass.
+                if struct.unpack(YAMUX_HEADER_FORMAT, header[:12])[2] & FLAG_SYN:
+                    await trio.sleep_forever()
+                await write_frame(header)
+
+            mux._write_frame = syn_stalls
+            for _ in range(3):
+                with pytest.raises(ConnectionError, match="within 0.2s"):
+                    await open_stream(client, server.get_id(), ECHO, 0.2)
+            mux._write_frame = write_frame
+            assert mux.stream_backlog_semaphore.value == slots
+            with trio.fail_after(5):
+                stream = await open_stream(client, server.get_id(), ECHO, 5)
+                await stream.close()
+            assert mux.stream_backlog_semaphore.value == slots
 
     trio.run(main)
 

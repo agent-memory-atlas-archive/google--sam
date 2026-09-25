@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import importlib.metadata
 import os
+import re
+import struct
 from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
@@ -35,6 +37,8 @@ from libp2p.peer.id import ID
 from libp2p.peer.peerinfo import PeerInfo, info_from_p2p_addr
 from libp2p.security.tls.transport import PROTOCOL_ID as TLS_PROTOCOL_ID
 from libp2p.security.tls.transport import IdentityConfig, TLSTransport
+from libp2p.stream_muxer.exceptions import MuxedStreamError
+from libp2p.stream_muxer.yamux.yamux import FLAG_SYN, TYPE_WINDOW_UPDATE, YAMUX_HEADER_FORMAT
 from libp2p.stream_muxer.yamux.yamux import PROTOCOL_ID as YAMUX_PROTOCOL_ID
 from libp2p.stream_muxer.yamux.yamux import Yamux, YamuxStream
 from multiaddr.resolvers import DNSResolver
@@ -43,8 +47,10 @@ from .identity import Identity
 
 
 def _libp2p_version() -> tuple[int, int]:
-    major, minor = importlib.metadata.version("libp2p").split(".")[:2]
-    return int(major), int(minor)
+    # PEP 440 lets a pre-release follow the minor directly (0.8a1), so the
+    # string is not split on dots.
+    m = re.match(r"(\d+)\.(\d+)", importlib.metadata.version("libp2p"))
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
 
 
 # py-libp2p 0.7 takes one of the 256 slots of a connection's
@@ -52,47 +58,69 @@ def _libp2p_version() -> tuple[int, int]:
 # when sending the SYN fails, so after 256 streams on one connection every
 # open_stream blocks forever, silently. main releases the slot when the local
 # side closes the stream (libp2p/py-libp2p#1426); until that is released,
-# Yamux.open_stream is replaced here to do the same. A subclass would not do:
+# Yamux.open_stream is replaced here with the same steps plus that release,
+# and the slot is returned on any failure, a trio.Cancelled after the acquire
+# included, which 0.7 (except Exception) keeps. A subclass would not do:
 # MuxerMultistream.new_conn constructs Yamux by name, whatever muxer_opt says.
-# Delete this block and its test with the libp2p>=0.8 bump.
+# Delete this block and its tests with the libp2p>=0.8 bump.
 LIBP2P_LEAKS_STREAM_SLOTS = _libp2p_version() < (0, 8)
 
 
-def _release_slot_on_close(open_stream):  # type: ignore[no-untyped-def]
-    async def open_stream_releasing_slot(self: Yamux) -> YamuxStream:
-        stream = await open_stream(self)
-        release = self.stream_backlog_semaphore.release
-        close, reset = stream.close, stream.reset
-        released = False
+async def _open_stream_returning_slot(self: Yamux) -> YamuxStream:
+    await self.stream_backlog_semaphore.acquire()
+    released = False
 
-        def release_once() -> None:
-            nonlocal released
-            if not released:
-                released = True
-                release()
+    def release_once() -> None:
+        nonlocal released
+        if not released:
+            released = True
+            self.stream_backlog_semaphore.release()
 
-        async def close_and_release() -> None:
-            try:
-                await close()
-            finally:
-                release_once()
+    stream_id: int | None = None
+    try:
+        async with self.streams_lock:
+            if self.event_shutting_down.is_set():
+                raise MuxedStreamError("Connection is shutting down")
+            stream_id = self.next_stream_id
+            self.next_stream_id += 2
+            stream = YamuxStream(stream_id, self, True)
+            self.streams[stream_id] = stream
+            self.stream_buffers[stream_id] = bytearray()
+            self.stream_events[stream_id] = trio.Event()
+        await self._write_frame(struct.pack(YAMUX_HEADER_FORMAT, 0, TYPE_WINDOW_UPDATE, FLAG_SYN, stream_id, 0))
+    except BaseException as err:
+        release_once()
+        if stream_id is not None:
+            with trio.CancelScope(shield=True):
+                async with self.streams_lock:
+                    self.streams.pop(stream_id, None)
+                    self.stream_buffers.pop(stream_id, None)
+                    self.stream_events.pop(stream_id, None)
+        if isinstance(err, Exception) and not isinstance(err, MuxedStreamError):
+            raise MuxedStreamError(f"Failed to send SYN: {err}") from err
+        raise
 
-        async def reset_and_release() -> None:
-            try:
-                await reset()
-            finally:
-                release_once()
+    close, reset = stream.close, stream.reset
 
-        stream.close = close_and_release  # type: ignore[method-assign]
-        stream.reset = reset_and_release  # type: ignore[method-assign]
-        return stream
+    async def close_and_release() -> None:
+        try:
+            await close()
+        finally:
+            release_once()
 
-    open_stream_releasing_slot.releases_slot = True  # type: ignore[attr-defined]
-    return open_stream_releasing_slot
+    async def reset_and_release() -> None:
+        try:
+            await reset()
+        finally:
+            release_once()
+
+    stream.close = close_and_release  # type: ignore[method-assign]
+    stream.reset = reset_and_release  # type: ignore[method-assign]
+    return stream
 
 
-if LIBP2P_LEAKS_STREAM_SLOTS and not getattr(Yamux.open_stream, "releases_slot", False):
-    Yamux.open_stream = _release_slot_on_close(Yamux.open_stream)  # type: ignore[method-assign]
+if LIBP2P_LEAKS_STREAM_SLOTS:
+    Yamux.open_stream = _open_stream_returning_slot  # type: ignore[method-assign]
 
 
 def _certificate_template() -> x509.CertificateBuilder:
