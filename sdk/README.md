@@ -432,10 +432,11 @@ holds against the control plane's records.
   `@sam-mesh/sdk` to npm and `sam-mesh` to PyPI through trusted
   publishing. A prerelease tag (`v0.1.0-rc.4`) publishes under the npm
   dist-tag `next`, a stable tag under `latest`; PyPI needs no tag, `pip`
-  skips prereleases on its own. When `publish-sdks` fails after the
-  GitHub release exists, run the workflow by hand from the Actions tab
-  with the tag as input; it checks out that tag and publishes only the
-  SDKs. One-time setup by a package owner: on npmjs.com, create the
+  skips prereleases on its own. When a publish job (`publish-sdk-js`
+  or `publish-sdk-python`) fails after the GitHub release exists, re-run
+  the failed job, or run the workflow by hand from the Actions tab with
+  the tag and target SDK as input; it checks out that tag and publishes
+  the selected SDK. One-time setup by a package owner: on npmjs.com, create the
   `sam-mesh` organization, publish `@sam-mesh/sdk` 0.1.0 once by hand
   (`cd sdk/js && npm publish --access public`; the trusted-publisher
   settings live on the package page, which exists only after that), then
